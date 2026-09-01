@@ -83,6 +83,26 @@ const LADDER: readonly ColorName[] = [
   'surface-container-highest',
 ];
 
+/**
+ * The ladder's separation from itself, which is what "tonal elevation" means here.
+ *
+ * DESIGN.md's Elevation section makes a normative claim about these numbers —
+ * that one step is below the threshold at which a boundary reads as a boundary
+ * and two steps are not — and derives the whole nested-surface rule from it.
+ * That claim governs which token every container in Story 1.3 onward takes, so
+ * it is recomputed rather than trusted.
+ */
+const ADJACENT_STEPS: readonly (readonly [ColorName, ColorName])[] = LADDER.slice(0, -1).map(
+  (tone, index) => [tone, LADDER[index + 1] as ColorName] as const,
+);
+
+/** A nested surface inside a standard (level-1) tile: present, then absent. */
+const NESTED_PRESENT: readonly [ColorName, ColorName] = ['surface-container-low', 'surface-container-highest'];
+const NESTED_ABSENT: readonly [ColorName, ColorName] = ['surface-container-low', 'surface-container'];
+
+/** Below this, a tonal boundary does not read as an edge on graphite. */
+const EDGE_THRESHOLD = 1.15;
+
 // ---------------------------------------------------------------------------
 // The formula itself
 // ---------------------------------------------------------------------------
@@ -179,6 +199,48 @@ test('primary against body text is below 3:1, which is why colour alone cannot c
 });
 
 // ---------------------------------------------------------------------------
+// Tonal separation, and the nesting rule derived from it
+// ---------------------------------------------------------------------------
+
+test('no single step of the ladder reads as an edge, which is why nesting takes two', () => {
+  for (const [lower, upper] of ADJACENT_STEPS) {
+    const ratio = contrast(lower, upper);
+    assert.ok(
+      ratio < EDGE_THRESHOLD,
+      `${lower} -> ${upper} is ${quoted(ratio)} — if a single step now reads as an edge, ` +
+        'the nested-surface rule in DESIGN.md is built on a premise that no longer holds',
+    );
+  }
+});
+
+test('a nested surface at two steps clears the edge threshold its container does not', () => {
+  const [tile, card] = NESTED_PRESENT;
+  const nested = contrast(tile, card);
+  assert.ok(nested >= EDGE_THRESHOLD, `a card on ${card} inside a ${tile} tile is only ${quoted(nested)}`);
+  // And it must beat every single step, or "two steps" buys nothing.
+  const widestStep = Math.max(...ADJACENT_STEPS.map(([a, b]) => contrast(a, b)));
+  assert.ok(nested > widestStep, `two steps (${quoted(nested)}) must exceed one (${quoted(widestStep)})`);
+});
+
+test('the absent variant is deliberately below the edge threshold, not accidentally', () => {
+  const [tile, absent] = NESTED_ABSENT;
+  const ratio = contrast(tile, absent);
+  assert.ok(
+    ratio < EDGE_THRESHOLD,
+    `an absent card at ${quoted(ratio)} would attract the eye — DESIGN.md requires it to hold ` +
+      'its grid position without doing so',
+  );
+  // But it is not identical to its container: the card is still a region.
+  assert.ok(ratio > 1, `an absent card on ${absent} is indistinguishable from a ${tile} tile`);
+});
+
+test('the ladder is monotonic, so "one step up" is a meaningful instruction', () => {
+  const luminances = LADDER.map((tone) => relativeLuminance(colors[tone]));
+  const sorted = [...luminances].sort((a, b) => a - b);
+  assert.deepEqual(luminances, sorted, 'the surface-container ladder must ascend in luminance');
+});
+
+// ---------------------------------------------------------------------------
 // The numbers DESIGN.md states in prose
 // ---------------------------------------------------------------------------
 
@@ -231,9 +293,23 @@ test('the quoted set is complete: DESIGN.md states no ratio this file does not r
       quoted(contrast(s, 'surface-container-high')),
     ),
     quoted(contrast('focus-ring-on-primary', 'primary')),
+    // The tonal separations DESIGN.md's Elevation section now quotes.
+    ...ADJACENT_STEPS.map(([a, b]) => quoted(contrast(a, b))),
+    quoted(contrast(...NESTED_PRESENT)),
+    quoted(contrast(...NESTED_ABSENT)),
   ]);
 
-  const unaccounted = [...stated].filter((ratio) => !recomputed.has(ratio));
+  // A declared *threshold* is not a computed pairing: it is a constant this
+  // file owns, so rather than exempting it, pin it. If DESIGN.md and the test
+  // ever disagree about where the edge threshold sits, that is a real
+  // divergence and one of the two has to move.
+  const thresholds = new Set([quoted(EDGE_THRESHOLD)]);
+  assert.ok(
+    design.includes(quoted(EDGE_THRESHOLD)),
+    `DESIGN.md no longer states the ${quoted(EDGE_THRESHOLD)} edge threshold the nesting rule rests on`,
+  );
+
+  const unaccounted = [...stated].filter((ratio) => !recomputed.has(ratio) && !thresholds.has(ratio));
   assert.deepEqual(
     unaccounted,
     [],

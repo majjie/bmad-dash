@@ -3,7 +3,7 @@ name: bmad-dash
 description: Dark, dashboard-dense visual system for a read-only local dashboard over a BMAD project's artifacts. Material 3 token roles, tonal elevation, static tiles.
 status: final
 created: 2026-08-28
-updated: 2026-08-28
+updated: 2026-09-01
 sources:
   - ../../../specs/spec-bmad-dash/SPEC.md
   - ../../prds/prd-bmad-2026-08-28/prd.md
@@ -208,7 +208,7 @@ Where a mockup and the tokens in this file disagree, the tokens win.
 
 **`{colors.surface}`** is the page ground: graphite, deliberately not black. Pure black under near-white text produces halation, worst for readers with astigmatism.
 
-**The surface-container ladder** — `{colors.surface-container-low}` through `{colors.surface-container-highest}` — supplies every level of lift in the system. See Elevation & Depth for how the levels are used.
+**The surface-container ladder** — `{colors.surface-container-low}` through `{colors.surface-container-highest}` — supplies every level of lift in the system; there is no other. See Elevation & Depth, which distinguishes the three peer levels from the relative rule that governs a surface nested inside another.
 
 **`{colors.primary}`** carries interactive affordance, strong ordering evidence, and the focus ring. It appears sparingly by design: at most one control or heading per tile takes it, because when everything is accented the accent stops meaning anything. Repeating data columns are exempt — an evidence badge appears on every activity row by requirement, and there its accent is a value rather than emphasis. It is desaturated relative to a light-theme cyan, because a hue tuned for white ground is harsh on graphite.
 
@@ -256,7 +256,7 @@ Reading surfaces break the dashboard grid: a rendered document uses a single col
 
 ## Elevation & Depth
 
-Tonal only. Three levels are in use:
+Tonal only. Three levels are in use **for peer surfaces** — surfaces that sit side by side on the page ground:
 
 | Level | Token | Used for |
 |---|---|---|
@@ -264,7 +264,11 @@ Tonal only. Three levels are in use:
 | 1 | `{colors.surface-container-low}` | standard tile |
 | 2 | `{colors.surface-container-high}` | tile carrying primary attention, and popovers |
 
-`{colors.surface-container}` and `{colors.surface-container-highest}` exist for hover and for a future third level; they are not used at rest in v1.
+**Nested surfaces are relative to their container, not to the page ground.** A surface inside a tile cannot reuse the tile's own level — it would have no edge — so it takes the next tone that is far enough away to be seen. On graphite that is **two steps, not one**: a single step of the ladder is 1.06:1 to 1.11:1, which is below the threshold at which a tonal boundary reads as a boundary, while two steps give 1.26:1. This is why `{components.core-artifact-card}` sits on `{colors.surface-container-highest}` inside a level-1 tile, and it is a requirement of the medium rather than a preference: the rule *"a tile does not need a border — its tone is its edge"* only holds while the tone is actually distinguishable.
+
+The absent variant of a nested surface inverts the same rule deliberately. `{components.core-artifact-card}`'s `absentBackground` is `{colors.surface-container}` — one step, so almost no lift — because an absent core artifact must hold its grid position without attracting the eye. It is the one place in the system where a barely-visible boundary is the intended outcome.
+
+**Consequence: tone is spent, so hover is not tonal.** With the nested level at `{colors.surface-container-highest}` there is no tone above it, and a present core artifact card is a link. Hover and other transient states therefore change the **outline**, not the surface: `{colors.outline}` on an element that had none, or `{colors.outline-variant}` to `{colors.outline}` on one that did. This is the better mechanism regardless — at 1.07:1 per step a tonal hover would be invisible to most readers, which is a conformance problem dressed as a style choice.
 
 Borders are structural, not decorative: `{colors.outline-variant}` for dividers inside a tile, `{colors.outline}` for the edge of an interactive element that has no fill. A tile does not need a border — its tone is its edge.
 
@@ -326,4 +330,8 @@ On an element already filled with `{colors.primary}` the ring would be invisible
 
 ## Conformance record
 
-Every ratio in this file comes from the WCAG relative-luminance and contrast-ratio formulas, applied to the frontmatter hex values on 2026-08-28. Thresholds applied: 4.5:1 for text at these sizes — every type role here sits below the large-text boundary — and 3:1 for UI component boundaries, graphical objects, and focus indicators.
+Every ratio in this file comes from the WCAG relative-luminance and contrast-ratio formulas, applied to the frontmatter hex values. Thresholds applied: 4.5:1 for text at these sizes — every type role here sits below the large-text boundary — and 3:1 for UI component boundaries, graphical objects, and focus indicators. Tonal separations between two surfaces are held to a separate 1.15:1 edge threshold, which is not a WCAG figure: it is the point below which a tonal boundary stops reading as a boundary on this ground, and the nested-surface rule in Elevation & Depth is derived from it.
+
+**These numbers are enforced, not recorded.** `test/render/contrast.test.ts` implements the formulas and runs on every commit, and it checks both directions: every ratio quoted anywhere in this file must equal what the frontmatter tokens compute, and this file may state no ratio the test does not recompute. A hex edit that invalidates a sentence here fails the build rather than making the document quietly false — which is what a dated one-time audit could not do. Adding a ratio to this prose without adding its pairing to that test also fails.
+
+Amended 2026-09-01: the Elevation & Depth section previously described a flat three-level ladder and declared `{colors.surface-container}` and `{colors.surface-container-highest}` unused at rest, while `{components.core-artifact-card}` used both. The tokens were correct and the prose was wrong — a card nested inside a tile needs two steps of separation to have an edge at all — so the section now distinguishes peer levels from the relative rule that governs nesting, and hover moves off tone, which the nested level exhausts.
