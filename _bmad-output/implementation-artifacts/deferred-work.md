@@ -34,3 +34,11 @@
 - source_spec: `_bmad-output/implementation-artifacts/spec-1-1-run-the-command-and-reach-a-served-page.md`
   summary: `errorCode()` is duplicated across the adapter and the CLI, and several test helpers are re-implemented across test files.
   evidence: Roughly 80 duplicated lines with drift risk. Cleanup, not correctness; deferred so it does not compete with the correctness work in this story.
+
+## Deferred from: code review of spec-1-1-run-the-command-and-reach-a-served-page (2026-09-01)
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-1-1-run-the-command-and-reach-a-served-page.md`
+  summary: `process.cwd()` is called unguarded at `src/cli/index.ts:128`, so a deleted working directory throws ENOENT and produces a stack trace instead of a clean exit 1.
+  evidence: Found by the edge-case reviewer. Exotic — it needs the cwd to be removed between shell prompt and invocation — and unrelated to this story's subject, but it is the one place the CLI touches the process environment without a guard while every other such touch (EPIPE, signals, argv) has one.
+
+  note: Four other findings from this review were already recorded above and were not duplicated — the ungated networking modules, the missing hardening headers and socket timeouts, the `errorCode` duplication, and repository hygiene. The hygiene entries are now partly stale: `.gitignore`, `LICENSE`, and the `license` and `author` fields all exist, and a lockfile is committed. What remains absent is a README, `repository`/`keywords`, CI, lint/format config and coverage.

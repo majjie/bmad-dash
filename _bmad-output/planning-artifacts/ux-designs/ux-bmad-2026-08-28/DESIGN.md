@@ -232,7 +232,9 @@ Three families across eight roles, from one superfamily so they share metrics.
 
 **IBM Plex Serif** appears in exactly one place: `{typography.prose}`, the body of a rendered BMAD document. Documents are read rather than scanned, and the shift in family marks the shift from dashboard to reading surface. Line length is capped at `{spacing.reading-measure}`.
 
-The family was chosen for its technical heritage and because it covers all three roles without pairing across foundries.
+IBM Plex covers all three uses without pairing across foundries, and its technical heritage suits an instrument.
+
+**The fonts are not shipped.** Loading them from a CDN would make the reader's browser fetch from a third party, against NFR-11's prohibition on outbound requests, and would disclose that they are running this tool; self-hosting would add the single largest item to a startup budget NFR-7 cares about. Each role therefore names IBM Plex first and falls back to the platform's own sans, mono and serif. Two consequences, stated rather than assumed: most readers will see system faces, and the shared-metrics property above holds only where IBM Plex is already installed. The semantic rule — mono for anything filesystem-derived or naming a machine state — is unaffected, since it depends on the distinction between families rather than on which families they are.
 
 ## Layout & Spacing
 
