@@ -4,26 +4,45 @@
  * It lives here and not in the HTTP adapter because AD-2 puts document HTML in
  * `src/render/`: the adapter's job is binding, validating `Host` and choosing a
  * status code, and a page held as a constant inside it was a second job that
- * would only grow. The adapter now serves what this module produces, and every
- * later surface is added here rather than there.
+ * would only grow.
  *
- * The page is still the Story 1.1 placeholder in content — one heading and one
- * line of status. Story 1.2 gives it the token layer and nothing else: no
- * component, no chrome, no client-side JavaScript. What it does prove is that
- * the tokens reach a browser, on the graphite ground, with the type roles
- * applied.
+ * From Story 1.3 the document has a real shape: a `banner` carrying the project
+ * header, and a `main` carrying one surface. The surface is the **Dashboard** —
+ * the landing surface for a bare invocation — so that is what its single `h1`
+ * names. The tool's own name stays in `title` alone: once the banner states
+ * which project is open, a heading repeating the tool's name would spend the
+ * page's one `h1` on the thing the reader is least in doubt about.
  *
- * **No font is fetched.** There is no `<link>`, no `@import` and no
- * `@font-face` in what this module emits, because each typography token names
- * IBM Plex first and then falls back to the platform's own faces. A page that
- * fetched a font would make the reader's browser talk to a third party, which
- * the no-outbound-network rule forbids outright.
+ * The Dashboard's real tiles — recent activity, core artifacts, risk summary —
+ * arrive with the stories that can populate them. What is here now is the
+ * status line Stories 1.1 and 1.2 served as bare markup, moved into a tile, so
+ * the container has a genuine consumer on the page rather than only in tests.
+ *
+ * **No font is fetched, and no script is served.** There is no `<link>`, no
+ * `@import`, no `@font-face` and no `<script>` in what this module emits. Each
+ * typography token names IBM Plex first and falls back to the platform's own
+ * faces; refresh is a link, because a page load builds a new snapshot. A page
+ * that fetched a font would make the reader's browser talk to a third party,
+ * which the no-outbound-network rule forbids outright.
  */
 
 import { STYLESHEET } from './stylesheet.ts';
+import { projectHeader } from './chrome.ts';
+import { tileGrid } from './components.ts';
+import { escapeHtml } from './html.ts';
 
 /** The `<title>`, and the marker a test can look for to know the page is ours. */
 export const PAGE_TITLE = 'bmad-dash';
+
+/**
+ * The landing surface's name, per EXPERIENCE.md's surface table: a bare
+ * invocation opens the Dashboard. The surface is correctly named from this
+ * story on, whatever it is yet able to show.
+ */
+export const SURFACE_TITLE = 'Dashboard';
+
+/** Label for the tile carrying the status line. Label-shaped: no period. */
+export const STATUS_TILE_LABEL = 'Status';
 
 /**
  * Terse and technical, per the voice rule: state the fact, do not apologise.
@@ -50,40 +69,47 @@ function inlinable(css: string): string {
   return css;
 }
 
-/**
- * The document, built once.
- *
- * `lang` is declared so a screen reader picks a voice. `color-scheme` is on
- * `:root` in the stylesheet rather than in a meta tag, so the polarity travels
- * with the tokens. One `h1`, inside `main`: the banner and navigation landmarks
- * arrive with the global header in Story 1.3, and inventing empty ones now
- * would be chrome this story is told not to build.
- */
-const DOCUMENT = `<!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>${PAGE_TITLE}</title>
-<style>
-${inlinable(STYLESHEET)}</style>
-</head>
-<body>
-<main>
-<h1>${PAGE_TITLE}</h1>
-<p>${PAGE_STATUS_LINE}</p>
-</main>
-</body>
-</html>
-`;
+/** The Dashboard surface: its heading, and the tiles it can show yet. */
+function dashboard(): string {
+  return [
+    '<main>',
+    `<h1>${escapeHtml(SURFACE_TITLE)}</h1>`,
+    tileGrid([
+      { label: STATUS_TILE_LABEL, content: { html: `<p>${escapeHtml(PAGE_STATUS_LINE)}</p>` } },
+    ]),
+    '</main>',
+  ].join('\n');
+}
 
 /**
  * The document to serve for `GET /`.
  *
- * A function rather than the bare constant because every later surface is a
- * function of the scan, and the adapter should be calling render from the
- * outset rather than being rewritten when the first real page arrives.
+ * A function of the resolved project root, which the composition root resolved
+ * once and passes through the adapter unchanged.
+ *
+ * It is checked in two places, deliberately, against one definition:
+ * `assertProjectRoot` in `./chrome.ts` is called by the HTTP adapter before it
+ * binds — so an unrenderable root stops the command rather than throwing inside
+ * a request handler — and again by `projectHeader` as a render-layer guard for
+ * any future caller that is not the adapter. Two call sites, one rule, so they
+ * cannot drift into disagreeing about what a usable root is. An earlier version
+ * of this comment claimed a single check while three existed with two different
+ * messages, which is why the definition is now shared rather than repeated.
  */
-export function renderPage(): string {
-  return DOCUMENT;
+export function renderPage(projectRoot: string): string {
+  return `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>${escapeHtml(PAGE_TITLE)}</title>
+<style>
+${inlinable(STYLESHEET)}</style>
+</head>
+<body>
+${projectHeader(projectRoot)}
+${dashboard()}
+</body>
+</html>
+`;
 }

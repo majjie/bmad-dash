@@ -1,0 +1,33 @@
+# Team / enterprise overrides for the bmad-build skill.
+# Committed to the repo — applies to every developer on the project.
+# Merges over .claude/skills/bmad-build/customize.toml, which is the shipped
+# default and carries "DO NOT EDIT -- overwritten on every update".
+# Scalars override; tables deep-merge; arrays append.
+
+[workflow]
+
+# Standing facts every build run carries, as planning-time requirements.
+#
+# Added 2026-09-01 after two consecutive `bad_spec` loops of the same species.
+# Story 1.2's tasks asked only for negative assertions ("no literal escapes, no
+# shadow, both floors hold") — every one of which an empty implementation
+# satisfies. Story 1.3's tasks named the files to test but never required that a
+# value produced in one module be observed at the module consuming it, so three
+# mutations passed a 263-test suite: the composition root handing the server the
+# wrong project, every type-role application deleted from the stylesheet, and two
+# of five entries removed from the escaping table.
+#
+# The pattern in both is the same, and it is not specific to this project: tests
+# written from a task list assert the thing the task names, at the place the task
+# names it. What goes unasserted is the join. These entries exist so the
+# requirement is inherited at planning time rather than rediscovered from the
+# shape of the last failure.
+persistent_facts = [
+  "VERIFICATION STANDARD — every spec's task list must require assertions in both directions, and the planning step must not present a spec that does not. (1) POSITIVE AND NEGATIVE: a negative assertion (no literal, no shadow, no script, nothing outside a set) is satisfied by an empty implementation and therefore cannot distinguish correct work from missing work. Every negative assertion is paired with a positive one naming what the artifact does produce. (2) ACROSS SEAMS: where a value is produced in one module and consumed in another, at least one test observes it at the CONSUMING end. Asserting it where it is created and again where it is rendered, with nothing crossing the join, leaves the join untested — which is where it silently breaks. (3) EVERY NEW MODULE GETS A TEST FILE, including modules added during implementation that the Code Map never anticipated; a module whose own doc comment argues for its existence is not thereby verified. (4) DEAD-END CHECKS: a named thing the artifact emits must be matched by the rule, handler or consumer that acts on it, checked in both directions — emitted-but-unhandled and handled-but-never-emitted are both defects.",
+
+  "EVIDENCE STANDARD — a value is not verified because it is plausible. This project has repeatedly shipped values asserted rather than observed: contrast ratios from plausibility, library versions from an article, marker counts from the wrong source, a bound address read from our own variable, task boxes trusted because they were ticked, string edits assumed to have applied. Compute, read from the source of truth, or run it. Where a document states a number that code depends on, a test recomputes it from the code's own inputs and fails when the document and the code disagree. Where a specified string must appear verbatim, the test reads the specifying document rather than holding a second copy of the string.",
+
+  "MUTATION AS THE STANDARD OF EVIDENCE — before marking a spec's tasks complete, break each invariant the story claims to enforce and confirm the suite fails. A test that passes proves nothing about what it would catch. Record which mutations were run and what failed. Prefer deterministic assertions over probabilistic ones: where a race or an ordering is the risk, assert the order of observable events rather than sampling a timing window, because a defect present 16% of the time passes a sixteen-run check most of the time.",
+
+  "TASK LEDGER HONESTY — verify each task line against the code before ticking it, not against your own report of having done it. Two false ticks reached a completed story in this project (a signal handler that was never registered, request bodies that were never drained). Where the implementation deliberately diverges from a task line, amend the line to describe what was built and why, rather than ticking a claim that is not true.",
+]

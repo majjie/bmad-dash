@@ -22,6 +22,7 @@ import {
 import type { AddressInfo } from 'node:net';
 
 import { renderPage } from '../../render/page.ts';
+import { assertProjectRoot } from '../../render/chrome.ts';
 
 /**
  * The only interface this tool ever binds. Never a name, never a wildcard.
@@ -49,8 +50,18 @@ const RETRYABLE_BIND_CODES = new Set(['EADDRINUSE', 'EACCES', 'EADDRNOTAVAIL']);
 export type BoundAddress = Readonly<Pick<AddressInfo, 'address' | 'port' | 'family'>>;
 
 export interface StartServerOptions {
-  /** Absolute path this run targets. Held for later stories; never read here. */
-  readonly projectRoot?: string | null;
+  /**
+   * Absolute path this run targets, resolved once in the composition root.
+   *
+   * **Required**, and validated before the socket binds. From Story 1.3 the
+   * served page states which project is open, so a server without a root
+   * cannot render — and an option its owner cannot function without should not
+   * be omittable. Requiring it turns "forgot to pass the root" from a throw
+   * inside a request handler, which would take the process down, into a
+   * compile error. It was optional and unread for two stories; the mirror of
+   * the `--port` finding, where an option had no consumer at all.
+   */
+  readonly projectRoot: string;
   /**
    * Preferred port. `0` — the default — asks the OS for a free one. A preferred
    * port that cannot be bound falls back to `0`, so the port reported is always
@@ -73,7 +84,8 @@ export interface ServerHandle {
   readonly family: string;
   /** The `net` layer's account of the bound socket, passed through untouched. */
   readonly addressInfo: BoundAddress;
-  readonly projectRoot: string | null;
+  /** The root this server renders for, exactly as validated at start. */
+  readonly projectRoot: string;
   /**
    * How many `error` listeners are on the socket **right now**. Must be at
    * least one, permanently: exposed so a test can assert the invariant rather
@@ -132,8 +144,14 @@ export function isExpectedHost(
  * never an output, so a bind to any other interface changes what this returns
  * instead of being masked by a constant.
  */
-export async function startServer(options: StartServerOptions = {}): Promise<ServerHandle> {
-  const projectRoot = options.projectRoot ?? null;
+export async function startServer(options: StartServerOptions): Promise<ServerHandle> {
+  const projectRoot = options.projectRoot;
+
+  // Before the bind, not at request time. A root that cannot be rendered must
+  // stop the command, not throw inside a request handler where the rejection
+  // would surface as an uncaught exception and take the process down while the
+  // user watches a browser tab hang.
+  assertProjectRoot(projectRoot);
   const preferredPort = options.port ?? 0;
   const onError = options.onError;
 
@@ -172,7 +190,7 @@ export async function startServer(options: StartServerOptions = {}): Promise<Ser
     // A client that disappears mid-exchange must not take the process with it.
     request.on('error', () => {});
     response.on('error', () => {});
-    handleRequest(request, response, bound);
+    handleRequest(request, response, bound, projectRoot, onError);
   });
 
   const adopt = (info: BoundAddress): void => {
@@ -294,6 +312,8 @@ function handleRequest(
   request: IncomingMessage,
   response: ServerResponse,
   bound: BoundAddress | null,
+  projectRoot: string,
+  onError: ((error: Error) => void) | undefined,
 ): void {
   if (bound === null) {
     // Unreachable in practice, and deliberately kept. The `request` listener
@@ -320,11 +340,24 @@ function handleRequest(
 
   const path = request.url?.split('?')[0] ?? '/';
   if (path === '/') {
+    // Rendering is pure and its input was validated before the bind, so a
+    // throw here means a defect rather than bad input. Caught all the same: an
+    // exception escaping a request listener is an uncaught exception, which
+    // ends the process while the reader watches a tab hang. A 500 they can
+    // report beats a server that vanishes.
+    let document: string;
+    try {
+      document = renderPage(projectRoot);
+    } catch (error: unknown) {
+      onError?.(error instanceof Error ? error : new Error(String(error)));
+      respondText(response, 500, 'The page could not be rendered.\n');
+      return;
+    }
     response.writeHead(200, {
       'content-type': 'text/html; charset=utf-8',
       'cache-control': 'no-store',
     });
-    response.end(renderPage());
+    response.end(document);
     return;
   }
 

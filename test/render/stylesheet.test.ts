@@ -39,11 +39,13 @@ import {
 import {
   STYLESHEET,
   PROSE_TOKENS,
-  EMITTED_COMPONENT,
+  EMITTED_COMPONENTS,
+  roleReference,
   customProperties,
   customPropertyName,
   cssValue,
   splitStylesheet,
+  typeRole,
   unemittedTokens,
 } from '../../src/render/stylesheet.ts';
 
@@ -138,15 +140,28 @@ test('the focus ring is emitted, with its references resolved to var()', () => {
   );
 });
 
-test('the tokens deliberately not emitted are the two prose values and Story 1.3 components', () => {
+test('every unemitted token is held for one of exactly three stated reasons', () => {
   const held = unemittedTokens();
-  const prose = held.filter((t) => t.reason === 'prose, not a CSS value').map((t) => t.token);
-  assert.deepEqual(prose.sort(), [...PROSE_TOKENS].sort());
+  const byReason = (reason: string) => held.filter((t) => t.reason === reason).map((t) => t.token);
+
+  assert.deepEqual(byReason('prose, not a CSS value').sort(), [...PROSE_TOKENS].sort());
+
+  // Role references: a token naming a whole type role cannot be one property,
+  // because a role is five declarations and `:root` emits each separately.
+  // Emitting one would produce a var() naming a property that does not exist.
+  const roles = byReason('type role reference; applied as declarations');
+  assert.ok(roles.length > 0, 'the role-reference category must not be empty');
+  for (const token of roles) {
+    const raw = flatTokens().get(token);
+    assert.ok(raw !== undefined && roleReference(raw) !== null, `${token} is not a role reference`);
+    assert.ok(
+      Object.keys(typography).includes(roleReference(raw ?? '') ?? ''),
+      `${token} names ${String(roleReference(raw ?? ''))}, which is not a type role`,
+    );
+  }
 
   const deferred = new Set(
-    held
-      .filter((t) => t.token.startsWith('components.') && !prose.includes(t.token))
-      .map((t) => t.token.split('.')[1]),
+    byReason('component token; a later story owns the component').map((t) => t.split('.')[1]),
   );
   assert.deepEqual(
     [...deferred].sort(),
@@ -158,15 +173,66 @@ test('the tokens deliberately not emitted are the two prose values and Story 1.3
       'evidence-badge',
       'refresh-progress',
       'signal-pill',
-      'tile',
-      'tile-raised',
     ],
-    'only the component sets Story 1.3 owns may be held back',
+    'only the component sets a later story owns may be held back',
   );
-  assert.ok(!deferred.has(EMITTED_COMPONENT), 'the focus ring is emitted, not held back');
+  for (const emitted of EMITTED_COMPONENTS) {
+    assert.ok(!deferred.has(emitted), `${emitted} is emitted, not held back`);
+  }
 
-  // Nothing is lost: every token is either emitted or on this list.
+  // Nothing is lost: every token is either emitted or on this list, and the
+  // three reasons above account for all of it.
   assert.equal(customProperties().length + held.length, flatTokens().size);
+  assert.equal(
+    byReason('prose, not a CSS value').length + roles.length + byReason('component token; a later story owns the component').length,
+    held.length,
+    'an unemitted token carries a reason outside the three stated categories',
+  );
+});
+
+test('the containers this story owns are emitted, and their references resolve', () => {
+  const emitted = new Map(customProperties().map((p) => [p.token, p]));
+  for (const [token, expected] of [
+    ['components.tile.background', 'var(--color-surface-container-low)'],
+    ['components.tile.borderRadius', 'var(--radius-lg)'],
+    ['components.tile.padding', 'var(--space-tile-padding)'],
+    ['components.tile.labelColor', 'var(--color-on-surface-variant)'],
+    ['components.tile-raised.background', 'var(--color-surface-container-high)'],
+  ] as const) {
+    const property = emitted.get(token);
+    assert.ok(property !== undefined, `${token} is not emitted`);
+    assert.equal(property.value, expected, `${token} resolved to ${property.value}`);
+  }
+  // The one tile token that is a role reference, deliberately absent.
+  assert.equal(emitted.get('components.tile.labelType'), undefined);
+});
+
+test('tile-raised sits exactly one elevation level above tile', () => {
+  // DESIGN.md's peer levels are 0 = surface, 1 = surface-container-low,
+  // 2 = surface-container-high. `surface-container` is not a peer level, so one
+  // *level* of lift is two *tones* on the five-tone ladder. Asserting the tone
+  // gap without saying which is meant is how "one step" became ambiguous in the
+  // first place.
+  const PEER_LEVELS = ['surface', 'surface-container-low', 'surface-container-high'] as const;
+  const toneOf = (reference: string) => reference.replace('{colors.', '').replace('}', '');
+
+  const base = toneOf(components.tile.background);
+  const raised = toneOf(components['tile-raised'].background);
+
+  assert.equal(PEER_LEVELS.indexOf(base as (typeof PEER_LEVELS)[number]), 1, 'a tile is level 1');
+  assert.equal(PEER_LEVELS.indexOf(raised as (typeof PEER_LEVELS)[number]), 2, 'a raised tile is level 2');
+  // Upward, by hex ordering — which for six-digit uppercase hex agrees with
+  // numeric ordering. Luminance monotonicity of the whole ladder is asserted
+  // properly in `contrast.test.ts`; this is only a local sanity check.
+  assert.ok(colors[raised as keyof typeof colors] > colors[base as keyof typeof colors]);
+});
+
+test('the two containers differ only in tone', () => {
+  // Same padding, same radius: that is what makes elevation *tonal*. A raised
+  // tile that also changed shape would be a second variable.
+  assert.equal(components['tile-raised'].borderRadius, components.tile.borderRadius);
+  assert.equal(components['tile-raised'].padding, components.tile.padding);
+  assert.notEqual(components['tile-raised'].background, components.tile.background);
 });
 
 test('custom property names are unique, so no token silently overwrites another', () => {
@@ -175,7 +241,7 @@ test('custom property names are unique, so no token silently overwrites another'
 });
 
 test('the emitter refuses to name a token it has no naming rule for', () => {
-  assert.throws(() => customPropertyName('components.tile.background'), /no custom property/);
+  assert.throws(() => customPropertyName('components.activity-row.paddingY'), /no custom property/);
   assert.throws(() => customPropertyName('elevation.level-2'), /no custom property/);
   assert.throws(() => customPropertyName('colors'), /no custom property/);
 });
@@ -231,6 +297,16 @@ test('the type roles reach the elements that carry them', () => {
     ['h2, h3', 'title'],
     ['p', 'body'],
     ['code, kbd, samp, pre', 'mono'],
+    // The four use sites this story added. Deleting every `typeRole()` call
+    // from `componentRules()` passed all 263 tests before these four lines:
+    // the header rendered filesystem paths in the body font, losing the
+    // monospacing UX-DR3 requires for any string originating from the
+    // filesystem, and the tile label lost its 11px label role.
+    ['.tile-label', 'tile-label'],
+    ['.project-name', 'title'],
+    ['.project-path', 'mono'],
+    ['.project-signal', 'mono-badge'],
+    ['.project-refresh', 'body-dense'],
   ] as const) {
     const block = new RegExp(`^${selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} \\{\\n([\\s\\S]*?)\\n\\}`, 'm').exec(RULES);
     assert.ok(block !== null, `no rule for ${selector}`);
@@ -412,6 +488,19 @@ const REQUIRED_RULES: readonly (readonly [string, readonly string[]])[] = [
   ['h2, h3', ['font-size: var(--type-title-font-size)']],
   ['p', ['font-size: var(--type-body-font-size)']],
   ['code, kbd, samp, pre', ['font-family: var(--type-mono-font-family)']],
+  // The containers this story adds. Listed here for the same reason as the
+  // rest: a rule that exists only in a token is a rule nothing draws.
+  ['.tile, .tile-raised', ['border-radius: var(--tile-border-radius)', 'padding: var(--tile-padding)']],
+  ['.tile', ['background: var(--tile-background)']],
+  ['.tile-raised', ['background: var(--tile-raised-background)']],
+  ['.tile-label', ['color: var(--tile-label-color)', 'text-transform: uppercase']],
+  ['.tile-empty', ['color: var(--color-on-surface-variant)']],
+  ['.project-header', ['display: flex', 'gap: var(--space-3)']],
+  ['.project-name', ['margin: 0']],
+  ['.project-path', ['color: var(--color-on-surface-variant)', 'overflow-wrap: anywhere', 'min-width: 0']],
+  ['.project-signal', ['text-transform: uppercase']],
+  ['.project-refresh', ['margin-inline-start: auto']],
+  ['.tile-grid', ['display: grid', 'gap: var(--space-tile-gap)']],
   // The one that a reviewer deleted whole while the suite stayed green.
   [
     ':focus-visible',
@@ -486,4 +575,89 @@ test('each type role is pinned to its floor class, so relabelling one fails', ()
   );
   assert.equal(CONTENT_FLOOR_ROLE, 'body-dense');
   assert.equal(MACHINE_FLOOR_ROLE, 'mono');
+});
+
+// ---------------------------------------------------------------------------
+// Nothing is emitted that nothing uses, and nothing is used that nothing emits
+// ---------------------------------------------------------------------------
+
+/**
+ * Type roles emitted but not yet applied by any rule, each with its reason.
+ *
+ * A list rather than a silence. The point of the test below is that an
+ * unapplied role must be a decision on the record — the same treatment
+ * `unemittedTokens()` gives a token it holds back — so that "nothing uses this"
+ * cannot be the accidental state it was for `prose` until someone looked.
+ */
+const ROLES_NOT_YET_APPLIED: readonly (readonly [string, string])[] = [
+  ['prose', 'the serif reading role; the Document reader that uses it is a later epic'],
+];
+
+test('every emitted type role is applied by a rule, or held back with a reason', () => {
+  // The general form of the finding this loop turned up. A role can be
+  // transcribed faithfully, emitted correctly, and reach no element at all —
+  // which the fidelity and emission tests both pass happily, because neither
+  // looks at whether a rule uses it.
+  const held = new Map(ROLES_NOT_YET_APPLIED);
+  const unapplied = Object.keys(typography).filter(
+    (role) => !RULES.includes(`var(--type-${role}-font-size)`),
+  );
+  assert.deepEqual(
+    unapplied.filter((role) => !held.has(role)),
+    [],
+    'a type role is emitted but no rule applies it; either use it or add it to ROLES_NOT_YET_APPLIED',
+  );
+  // And the list may not outlive its reason: a role listed here that a rule now
+  // applies is a stale exemption, which is how an exemption list rots.
+  for (const [role, reason] of ROLES_NOT_YET_APPLIED) {
+    assert.ok(Object.keys(typography).includes(role), `${role} is exempted but is not a role`);
+    assert.ok(reason.trim() !== '', `${role} is exempted with no reason`);
+    assert.ok(unapplied.includes(role), `${role} is exempted but a rule now applies it`);
+  }
+});
+
+test('every class rule is exercised by some render path, and vice versa', async () => {
+  // The other direction of `page.test.ts`'s `KNOWN_CLASSES` check, which only
+  // asks whether each class in the markup is known. `.project-refresh` was
+  // emitted in markup with zero rules in the sheet; the reverse — a rule
+  // written for markup nobody emits — was equally unchecked.
+  //
+  // "Some render path" rather than "the page", because a component may exist
+  // before a surface uses it: `.tile-raised` is styled and fully tested while
+  // the Dashboard has only one tile to show and nothing to raise. Rendering
+  // each component closes the loop without pretending the page uses everything.
+  const { renderPage } = await import('../../src/render/page.ts');
+  const { tile, tileGrid } = await import('../../src/render/components.ts');
+  const rendered = [
+    renderPage('/tmp/bmad-dash-test-project'),
+    tileGrid([
+      { label: 'A', content: { html: '<p>x</p>' }, raised: true },
+      { label: 'B', content: { empty: 'Nothing yet.' } },
+    ]),
+    tile({ label: 'C', content: { empty: 'Nothing yet.' } }),
+  ].join('\n');
+  const inMarkup = new Set(
+    [...rendered.matchAll(/\sclass="([^"]+)"/g)].flatMap((m) => (m[1] ?? '').split(/\s+/)),
+  );
+  const styled = new Set(
+    [...RULES.matchAll(/^\.([-a-zA-Z0-9]+)(?:,|\s)/gm)].map((m) => m[1] ?? ''),
+  );
+  assert.ok(styled.size > 0, 'the sheet must carry class rules');
+  for (const selector of styled) {
+    assert.ok(inMarkup.has(selector), `.${selector} is styled but no markup carries it`);
+  }
+  for (const selector of inMarkup) {
+    assert.ok(styled.has(selector), `.${selector} is rendered but nothing styles it`);
+  }
+});
+
+test('a rule cannot ask for a type role that does not exist', () => {
+  // `typeRole` filtered every property it could not find and returned an empty
+  // string, so a typo produced a rule with no declarations and no error.
+  assert.throws(() => typeRole('not-a-role'), /no emitted type role/);
+  assert.throws(() => typeRole('tile_label'), /no emitted type role/);
+  // And it still works for every real one, so the guard is not over-eager.
+  for (const role of Object.keys(typography)) {
+    assert.match(typeRole(role), /font-size: var\(--type-/, `${role} must resolve`);
+  }
 });

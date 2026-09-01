@@ -1,0 +1,120 @@
+/**
+ * Global chrome: the project header, present on every surface.
+ *
+ * It is not a tile. EXPERIENCE.md places it outside the dashboard grid because
+ * it answers a question every surface raises — *which project am I looking at,
+ * and how current is this?* — and a tile would make that answer specific to one
+ * page.
+ *
+ * DESIGN.md defines **no token set for it.** Its ten sets are components, and
+ * chrome is not one of them, so the header's values come from the scalar groups
+ * directly: it sits on the page ground it is already on, and its three lines
+ * take the `title`, `mono` and `mono-badge` roles. That decision is recorded in
+ * the spec's Design Notes; the styling itself is in `./stylesheet.ts` with the
+ * rest of the sheet.
+ *
+ * **Four of the six elements UX-DR14 asks for.** Snapshot currency, refresh
+ * progress and refresh failure all describe a snapshot, and there is no
+ * snapshot until Epic 3 — reporting them now would mean inventing states to
+ * report. Git availability is present but unexamined: the probe is its own
+ * story, so the signal reads `Not checked`, which is the string index's own
+ * wording for a signal that was never looked at. That is deliberately not the
+ * same as omitting it. A signal absent from the page is indistinguishable from
+ * a signal that does not exist, and telling those two apart is the entire
+ * reason the four-state vocabulary exists.
+ *
+ * **The refresh control is a link, not a script.** A page load builds a new
+ * snapshot, only `GET` and `HEAD` are served, and no client router may own a
+ * URL — so refresh is navigation, and the page needs no JavaScript to offer it.
+ * It is unstyled beyond the document's link rule: `button-primary` is the
+ * component DESIGN.md assigns to a surface's single main action, and that
+ * component belongs to a later story.
+ */
+
+import { basename, isAbsolute } from 'node:path';
+
+import { escapeHtml } from './html.ts';
+
+/**
+/**
+ * The one place a project root is judged usable, shared by the render layer and
+ * the HTTP adapter.
+ *
+ * It lives here rather than in `src/domain/` because the check needs
+ * `isAbsolute`, and the domain is frozen at zero outgoing imports. One
+ * definition with two callers, so the two cannot drift into disagreeing about
+ * what a usable root is — which they briefly did: the adapter carried a
+ * `typeof` guard this function lacked, and a doc comment claimed there was only
+ * one check while there were three.
+ *
+ * Returns the value so a caller can use it as a narrowing assertion.
+ */
+
+/**
+ * `Not checked` — the string index's wording for a signal never examined.
+ *
+ * Held as a constant so `test/render/chrome.test.ts` can assert it against
+ * EXPERIENCE.md's own table rather than against a second copy of the same
+ * belief. A string index that nothing reads is a style guide, not a contract.
+ */
+export const SIGNAL_NOT_CHECKED = 'Not checked';
+
+/** Caption for the git signal. Label-shaped: initial capital, no period. */
+export const GIT_SIGNAL_LABEL = 'Git:';
+
+/** The refresh control's label. Label-shaped. */
+export const REFRESH_LABEL = 'Refresh';
+
+/** Where the refresh control points: this surface, requested again. */
+export const REFRESH_HREF = '/';
+
+/**
+ * The project header.
+ *
+ * `projectRoot` is the absolute path the composition root resolved once, passed
+ * through unchanged. The display name is `basename` of it — a pure string
+ * projection, not a second resolution: it touches no filesystem, canonicalizes
+ * nothing and discovers nothing, so the rule that identity is resolved exactly
+ * once still holds.
+ *
+ * A root that is missing, empty or relative throws rather than rendering. A
+ * header showing a blank path, or one relative to whatever directory happened
+ * to be current, is worse than no page at all — every later surface resolves
+ * artifact paths against this value, so a wrong one here is wrong everywhere
+ * and looks authoritative while it is.
+ *
+ * What is *not* checked here: that the path exists, is a directory, or is
+ * canonical. Existence and canonicalization are Story 1.5's, which resolves the
+ * root and its artifact directories; a non-existent path therefore renders as a
+ * project today. Recorded in `deferred-work.md` rather than half-implemented,
+ * since a partial existence check is worse than an absent one.
+ */
+export function assertProjectRoot(projectRoot: unknown): string {
+  if (typeof projectRoot !== 'string' || projectRoot.trim() === '') {
+    throw new Error('the project header needs the resolved project root; it was empty or absent');
+  }
+  if (!isAbsolute(projectRoot)) {
+    throw new Error(
+      `the project root must be absolute, resolved once in the composition root: got "${projectRoot}"`,
+    );
+  }
+  return projectRoot;
+}
+
+export function projectHeader(projectRoot: string): string {
+  assertProjectRoot(projectRoot);
+
+  // `basename('/')` is the empty string, and a filesystem root is a legitimate
+  // if unusual target. Falling back to the path keeps the header from rendering
+  // a nameless project.
+  const name = basename(projectRoot) === '' ? projectRoot : basename(projectRoot);
+
+  return [
+    '<header class="project-header">',
+    `<p class="project-name">${escapeHtml(name)}</p>`,
+    `<code class="project-path">${escapeHtml(projectRoot)}</code>`,
+    `<p class="project-signal">${escapeHtml(`${GIT_SIGNAL_LABEL} ${SIGNAL_NOT_CHECKED}`)}</p>`,
+    `<a class="project-refresh" href="${escapeHtml(REFRESH_HREF)}">${escapeHtml(REFRESH_LABEL)}</a>`,
+    '</header>',
+  ].join('\n');
+}

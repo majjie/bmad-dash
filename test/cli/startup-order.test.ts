@@ -27,6 +27,14 @@ import { fileURLToPath } from 'node:url';
 import { run } from '../../src/cli/index.ts';
 import type { ServerHandle } from '../../src/adapters/http/server.ts';
 
+/**
+ * A synthetic absolute root. Fixed rather than `process.cwd()` so a test's
+ * expectations do not change with the directory it is run from, and chosen to
+ * look nothing like this repository so a path leaking from the real filesystem
+ * into an assertion is visible.
+ */
+const PROJECT_ROOT = '/tmp/bmad-dash-test-project';
+
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const CLI = join(
   REPO_ROOT,
@@ -46,7 +54,7 @@ function stubHandle(): ServerHandle {
     port: 1,
     family: 'IPv4',
     addressInfo: { address: '127.0.0.1', port: 1, family: 'IPv4' },
-    projectRoot: null,
+    projectRoot: PROJECT_ROOT,
     get socketErrorListeners(): number {
       return socket.listenerCount('error');
     },
@@ -176,3 +184,46 @@ for (const signal of ['SIGTERM', 'SIGINT', 'SIGHUP'] as const) {
     }
   });
 }
+
+test('the root the composition root resolves is the root the server is given', async () => {
+  // The seam this story opened, asserted at the *consuming* end. Both halves
+  // were already tested — `parseInvocation` resolves the argument, and the
+  // render layer prints whatever root it is handed — with nothing crossing the
+  // join. Replacing `invocation.projectRoot` with `process.cwd()` at the call
+  // site passed all 263 tests: the `Target:` line on stderr is built from
+  // `invocation.projectRoot` independently of what reaches `start`, so it
+  // cannot catch this, and no other test reads a response body.
+  let seen: unknown = '<never called>';
+  const target = '/tmp/bmad-dash-seam-check';
+
+  const code = await run([target], {
+    start: (options: { readonly projectRoot?: unknown }) => {
+      seen = options.projectRoot;
+      return Promise.resolve(stubHandle());
+    },
+    stdout: () => {},
+    stderr: () => {},
+    onSignal: () => {},
+  });
+
+  assert.equal(code, 0);
+  assert.equal(seen, target, 'the server was given a different root than the CLI resolved');
+});
+
+test('a relative argument reaches the server already resolved to absolute', async () => {
+  // The reason the seam matters: every later surface resolves artifact paths
+  // against this value, so a cwd-relative root recorded here would be resolved
+  // differently by each of them.
+  let seen = '';
+  await run(['.'], {
+    start: (options: { readonly projectRoot?: unknown }) => {
+      seen = String(options.projectRoot);
+      return Promise.resolve(stubHandle());
+    },
+    stdout: () => {},
+    stderr: () => {},
+    onSignal: () => {},
+  });
+  assert.ok(seen.startsWith('/'), `the server received a relative root: ${seen}`);
+  assert.equal(seen, process.cwd());
+});
