@@ -3,6 +3,14 @@
   "version": "0.1.0",
   "description": "Read-only local dashboard over a BMAD project's artifacts.",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/majjie/bmad-dash.git"
+  },
+  "bugs": {
+    "url": "https://github.com/majjie/bmad-dash/issues"
+  },
+  "homepage": "https://github.com/majjie/bmad-dash#readme",
   "author": "Nearform",
   "//": "Running the test suite requires Node >= 22.18, which strips .ts types without a flag. The SHIPPED tool needs only the engines floor of 22, because the package ships compiled JavaScript in dist/ and never builds on install.",
   "type": "module",

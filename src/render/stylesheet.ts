@@ -163,6 +163,10 @@ export function unemittedTokens(): readonly { readonly token: string; readonly r
 
 const INDENT = '  ';
 
+/** Emitted once: every rule below asks the same question of the same answer. */
+const EMITTED = customProperties();
+const EMITTED_NAMES = new Set(EMITTED.map((property) => property.name));
+
 function declaration(name: string, value: string): string {
   return `${INDENT}${name}: ${value};`;
 }
@@ -189,10 +193,6 @@ function rootBlock(): string {
   lines.push('}');
   return lines.join('\n');
 }
-
-/** Emitted once: every rule below asks the same question of the same answer. */
-const EMITTED = customProperties();
-const EMITTED_NAMES = new Set(EMITTED.map((property) => property.name));
 
 /**
  * The properties of one type role, as declarations inside a rule.
@@ -250,7 +250,14 @@ function baseRules(): readonly string[] {
     rule('h2, h3', [typeRole('title'), declaration('margin', '0 0 var(--space-2)')]),
     rule('p', [typeRole('body'), declaration('margin', '0 0 var(--space-2)')]),
     rule('code, kbd, samp, pre', [typeRole('mono')]),
-    rule('a', [declaration('color', 'var(--color-primary)')]),
+    // Underlined, not merely coloured. `primary` against `on-surface` is
+    // 1.46:1 — far under the 3:1 that WCAG 1.4.1 asks of a colour-only
+    // distinction — so the underline is the non-colour channel, not decoration.
+    rule('a', [
+      declaration('color', 'var(--color-primary)'),
+      declaration('text-decoration-line', 'underline'),
+      declaration('text-decoration-thickness', 'from-font'),
+    ]),
 
     // On every focusable element without exception, and never clipped: a
     // container reserves the offset inside its own padding rather than letting

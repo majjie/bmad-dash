@@ -33,7 +33,15 @@ import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { TOKEN_GROUPS, colors, typography, components, flattenTokens, flatTokens } from '../../src/render/tokens.ts';
+import {
+  TOKEN_GROUPS,
+  colors,
+  typography,
+  components,
+  flattenTokens,
+  flatTokens,
+  type TokenGroupName,
+} from '../../src/render/tokens.ts';
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 
@@ -158,6 +166,23 @@ export function parseYamlSubset(text: string, lineOffset = 0): Record<string, un
 }
 
 const FRONTMATTER = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?/;
+
+/**
+ * The frontmatter keys that are document header rather than tokens.
+ *
+ * Named explicitly so the closure test can tell a new *token group* from a new
+ * header field. `loadDesignTokens` reads only the six groups it is told to, so
+ * anything else upstream is invisible to it — which is how an added group
+ * could leave the whole gate green while this file claimed symmetry.
+ */
+const DESIGN_METADATA_KEYS: readonly string[] = [
+  'name',
+  'description',
+  'status',
+  'created',
+  'updated',
+  'sources',
+];
 
 /**
  * Read DESIGN.md's frontmatter and flatten the six token groups.
@@ -322,6 +347,20 @@ test('the module carries exactly the six token groups DESIGN.md declares', async
   }
   const prefixes = new Set([...flatTokens().keys()].map((token) => token.split('.')[0]));
   assert.deepEqual([...prefixes].sort(), [...TOKEN_GROUPS].sort());
+
+  // And no group DESIGN.md gained that the module has never heard of. Without
+  // this, adding an `elevation:` group upstream left every test green while
+  // this file claimed the comparison was symmetric: `loadDesignTokens` reads
+  // only the six groups it is told to, so an unknown seventh was invisible on
+  // both sides at once.
+  const unknown = Object.keys(document).filter(
+    (key) => !DESIGN_METADATA_KEYS.includes(key) && !TOKEN_GROUPS.includes(key as TokenGroupName),
+  );
+  assert.deepEqual(
+    unknown,
+    [],
+    'DESIGN.md declares a top-level key that is neither header metadata nor a transcribed token group',
+  );
 });
 
 // ---------------------------------------------------------------------------

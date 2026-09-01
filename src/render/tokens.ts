@@ -165,11 +165,12 @@ export const typography = {
 export type TypeRoleName = keyof typeof typography;
 
 /**
- * Which of the two type floors a role answers to.
+ * Which of the three type floors a role answers to.
  *
- * DESIGN.md states them as two classes, not one scale: **content text** never
- * goes below `body-dense`, and **labels and badges** are a separate class with
- * a floor of 11px. The classification has to be written down somewhere, because
+ * DESIGN.md states them as three classes, not one scale: **content text** never
+ * goes below `body-dense` (13px), **machine values** have a floor of 12px, and
+ * **labels and badges** a floor of 11px. The classification has to be written
+ * down somewhere, because
  * it cannot be recovered from the sizes — `mono` at 12px is below `body-dense`
  * and entirely correct, since it carries paths, timestamps and machine states
  * rather than content. Reading the floor off the numbers would either flag that
@@ -180,7 +181,8 @@ export type TypeRoleName = keyof typeof typography;
  * so it must not be the smallest text on screen.
  *
  * Adding a role without classifying it fails to typecheck, and
- * `test/render/stylesheet.test.ts` asserts both floors against these classes.
+ * `test/render/stylesheet.test.ts` asserts all three floors against these
+ * classes, and pins each role to its class so a reclassification fails.
  */
 export type TypeFloorClass = 'content' | 'machine' | 'label';
 

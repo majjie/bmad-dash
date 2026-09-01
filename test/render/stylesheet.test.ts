@@ -12,8 +12,10 @@
  *     the token values live by definition;
  *   - no shadow, gradient or blur appears anywhere, because elevation is tonal
  *     and a tile's tone is its edge;
- *   - both type floors hold, against the classification rather than against the
- *     numbers, since `mono` at 12px is below `body-dense` and correct;
+ *   - all three type floors hold, against the classification rather than against
+ *     the numbers, since `mono` at 12px is below `body-dense` and correct — and
+ *     each role is pinned to its class, so relabelling one to make it legal
+ *     fails instead of passing;
  *   - `prefers-reduced-motion: reduce` suppresses animation, and nothing
  *     animates outside that block in the first place.
  */
@@ -348,4 +350,140 @@ test('nothing animates outside the reduced-motion block, so there is nothing to 
   // waiting for Story 1.3 rather than a rule here.
   assert.equal(motion['duration-progress'], '900ms');
   assert.equal(motion['duration-focus'], '0ms');
+});
+
+// ---------------------------------------------------------------------------
+// The rules side
+//
+// Everything above this line questions `:root`. That was the hole: a sheet can
+// define every token correctly and draw nothing with them. Three mutations
+// passed the whole suite before these tests existed — deleting the
+// `:focus-visible` rule outright, pointing a `var()` at a property `:root`
+// never emits, and relabelling a content role as a label. All three are
+// silent in CSS: an unresolvable `var()` drops its entire declaration without
+// an error anywhere.
+// ---------------------------------------------------------------------------
+
+/** The body of one rule, by exact selector. Fails rather than returning empty. */
+function ruleBody(selector: string): string {
+  const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const found = new RegExp(`^${escaped} \\{\\n([\\s\\S]*?)\\n\\}`, 'm').exec(STYLESHEET);
+  assert.ok(found !== null, `the stylesheet declares no rule for \`${selector}\``);
+  return found?.[1] ?? '';
+}
+
+/** Every custom property a `var()` anywhere in the sheet asks for. */
+function referencedProperties(css: string): readonly string[] {
+  return [...css.matchAll(/var\(\s*(--[-a-zA-Z0-9]+)/g)].map((m) => m[1] ?? '');
+}
+
+test('every var() in the stylesheet names a property :root actually emits', () => {
+  const emitted = new Set(customProperties().map((p) => p.name));
+  const dangling = [...new Set(referencedProperties(STYLESHEET))].filter((name) => !emitted.has(name));
+  assert.deepEqual(
+    dangling,
+    [],
+    'an unresolvable var() drops its whole declaration silently — CSS reports nothing',
+  );
+});
+
+test('the rules do reference the tokens, so the closure above is not vacuous', () => {
+  // A sheet with no var() at all satisfies the test above perfectly.
+  const referenced = new Set(referencedProperties(RULES));
+  assert.ok(referenced.size >= 20, `only ${String(referenced.size)} properties are referenced by any rule`);
+  for (const property of ['--color-surface', '--color-on-surface', '--space-page-margin']) {
+    assert.ok(referenced.has(property), `no rule resolves ${property}`);
+  }
+});
+
+/**
+ * The rules that must exist, and what each must declare.
+ *
+ * Positive assertions, deliberately. The negative ones — no literal, no
+ * shadow, no animation outside the media block — are all satisfied by an empty
+ * stylesheet, so on their own they cannot tell a correct sheet from a missing
+ * one.
+ */
+const REQUIRED_RULES: readonly (readonly [string, readonly string[]])[] = [
+  ['*, *::before, *::after', ['box-sizing: border-box']],
+  ['html', ['background: var(--color-surface)', 'color: var(--color-on-surface)']],
+  ['body', ['margin: 0', 'padding: var(--space-page-margin)']],
+  ['h1', ['font-size: var(--type-display-font-size)']],
+  ['h2, h3', ['font-size: var(--type-title-font-size)']],
+  ['p', ['font-size: var(--type-body-font-size)']],
+  ['code, kbd, samp, pre', ['font-family: var(--type-mono-font-family)']],
+  // The one that a reviewer deleted whole while the suite stayed green.
+  [
+    ':focus-visible',
+    ['outline: var(--focus-ring-width) solid var(--focus-ring-color)', 'outline-offset: var(--focus-ring-offset)'],
+  ],
+];
+
+test('every required rule is present and declares what it exists to declare', () => {
+  for (const [selector, required] of REQUIRED_RULES) {
+    const body = ruleBody(selector);
+    for (const declared of required) {
+      assert.ok(
+        body.includes(`  ${declared};`),
+        `\`${selector}\` must declare \`${declared}\` — found:\n${body}`,
+      );
+    }
+  }
+});
+
+test('focus is visible: the ring is drawn, not merely defined', () => {
+  const body = ruleBody(':focus-visible');
+  assert.match(body, /outline:\s*var\(--focus-ring-width\) solid var\(--focus-ring-color\);/);
+  // `outline: none` and a zero width are the two ways to define a ring and
+  // draw nothing. Both are conformance failures (WCAG 2.4.7), not style choices.
+  assert.doesNotMatch(body, /outline:\s*(none|0)\b/);
+  assert.notEqual(components['focus-ring'].width, '0');
+  assert.notEqual(components['focus-ring'].width, '0px');
+  // Instant, per `motion.duration-focus`: a delayed ring is worse than none.
+  assert.equal(motion['duration-focus'], '0ms');
+});
+
+test('a link is distinguished by more than its colour', () => {
+  const body = ruleBody('a');
+  // `primary` on `on-surface` is 1.46:1. WCAG 1.4.1 asks for a non-colour
+  // channel, and DESIGN.md's own Do list says the same.
+  assert.match(body, /text-decoration-line:\s*underline;/, 'colour alone cannot carry the affordance');
+});
+
+test('no emitted value is prose, so a sentence cannot corrupt :root', () => {
+  for (const property of customProperties()) {
+    assert.ok(!property.value.includes(';'), `${property.token} would terminate its own declaration`);
+    assert.ok(!property.value.includes('}'), `${property.token} would close the :root block`);
+    assert.ok(
+      property.value.trim() !== '' && !/\s\w+\s\w+\s\w+\s\w+\s/.test(property.value),
+      `${property.token} reads as prose, not a CSS value: ${property.value}`,
+    );
+  }
+  // And the exemption list is not a place to hide a real token: every name on
+  // it must still exist in the module.
+  for (const token of PROSE_TOKENS) {
+    assert.ok(flatTokens().has(token), `${token} is exempted but no longer exists`);
+  }
+});
+
+test('each type role is pinned to its floor class, so relabelling one fails', () => {
+  // Spelled out rather than derived. The classification cannot be recovered
+  // from the sizes — that is the whole reason it exists — so the only thing
+  // that can catch a reclassification is a written-down expectation.
+  assert.deepEqual(
+    { ...TYPE_FLOOR_CLASS },
+    {
+      display: 'content',
+      title: 'content',
+      'tile-label': 'label',
+      body: 'content',
+      'body-dense': 'content',
+      mono: 'machine',
+      'mono-badge': 'label',
+      prose: 'content',
+    },
+    'moving a role between classes changes which floor it answers to — say so here first',
+  );
+  assert.equal(CONTENT_FLOOR_ROLE, 'body-dense');
+  assert.equal(MACHINE_FLOOR_ROLE, 'mono');
 });
