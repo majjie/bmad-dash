@@ -2,8 +2,9 @@
 title: 'Story 1.2 — Establish the visual foundation'
 type: 'feature'
 created: '2026-09-01'
-status: 'draft'
+status: 'ready-for-dev'
 review_loop_iteration: 0
+baseline_commit: '0ddf4dd2635ccc9c4cd661870625e2a3affa7483'
 context:
   - '{project-root}/_bmad-output/implementation-artifacts/epic-1-context.md'
 ---
@@ -43,7 +44,7 @@ Story 1.1 is complete and committed (`c10c3d9`). 114 tests, zero runtime depende
 - `_bmad-output/planning-artifacts/ux-designs/ux-bmad-2026-08-28/DESIGN.md` -- **the normative token contract**, read by the fidelity test. 24 colours, 8 typography roles, 4 motion, 5 radius, 12 spacing, 10 component token sets. Read-only; never edited to match code.
 - `src/adapters/http/server.ts:99` -- `PLACEHOLDER_PAGE`, the constant this story replaces. Per AD-2 the document belongs in `src/render/`; move it rather than styling it in place.
 - `test/architecture.test.ts` -- the AD-1 gate scans `src/render/` automatically; no gate change expected.
-- `scripts/test-run-policy.ts` -- `DEFAULT_MIN_TESTS` is 114 and must rise with the new tests, or the floor stops meaning anything.
+- `scripts/run-tests.ts:32` -- `DEFAULT_MIN_TESTS` is 114 and must rise with the new tests, or the floor stops meaning anything. Validation lives next door in `scripts/test-run-policy.ts`; the constant does not.
 
 To create:
 
@@ -62,7 +63,7 @@ To create:
 - [ ] `src/adapters/http/server.ts` -- consume `src/render/page.ts` instead of holding `PLACEHOLDER_PAGE`; response headers unchanged
 - [ ] `test/render/tokens.test.ts` -- parse DESIGN.md's frontmatter and assert the module matches it in both directions, covering all five matrix rows including the unreadable-file case -- UX-DR24
 - [ ] `test/render/stylesheet.test.ts` -- assert no literal values escape the tokens, that no shadow, gradient or blur appears anywhere, that both type floors hold, and that reduced motion suppresses animation
-- [ ] `scripts/test-run-policy.ts` -- raise `DEFAULT_MIN_TESTS` to the new total
+- [ ] `scripts/run-tests.ts` -- raise `DEFAULT_MIN_TESTS` to the new total
 
 **Acceptance Criteria:**
 - Given the token module and DESIGN.md agree, when `npm test` runs, then it passes; and given any single token is changed in either file, then it fails naming that token.

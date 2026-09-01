@@ -156,7 +156,7 @@ async function signalOnFirstByte(signal: NodeJS.Signals): Promise<{
   });
 }
 
-for (const signal of ['SIGTERM', 'SIGINT'] as const) {
+for (const signal of ['SIGTERM', 'SIGINT', 'SIGHUP'] as const) {
   test(`signalling on the first byte of the URL always exits 0 (${signal})`, async () => {
     const attempts = 12;
     const results = await Promise.all(

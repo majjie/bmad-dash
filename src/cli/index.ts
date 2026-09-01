@@ -24,6 +24,24 @@ const ACCEPTED = 'Accepted arguments: one optional path to a BMAD project. No fl
 const EXIT_USAGE = 2;
 const EXIT_FAILURE = 1;
 
+/**
+ * Signals that mean "stop". `SIGHUP` is here because closing the terminal is an
+ * ordinary way to end a foreground command, and without a handler it took the
+ * default disposition: the process died and the server was never closed.
+ */
+const STOP_SIGNALS = ['SIGINT', 'SIGTERM', 'SIGHUP'] as const;
+
+/**
+ * How long a shutdown may take before it is abandoned.
+ *
+ * `close()` was awaited with no timer, so a `close()` that never settles hung
+ * the process — the Loop 2 failure mode, left unguarded on the one signal path
+ * that had no test. Shutdown measures about a millisecond in practice, so this
+ * is generous; it exists so a hang is a bounded, reported failure rather than a
+ * process the user cannot kill without a second, harsher signal.
+ */
+const SHUTDOWN_TIMEOUT_MS = 2_000;
+
 export type Invocation =
   | { readonly ok: true; readonly projectRoot: string }
   | { readonly ok: false; readonly message: string };
@@ -121,8 +139,7 @@ export async function run(
       // `on`, not `once`: `once` removes the listener after the first signal, so
       // a second one falls through to the default action and kills the process
       // by signal instead of exiting 0. The latch makes repeat signals safe.
-      process.on('SIGINT', handler);
-      process.on('SIGTERM', handler);
+      for (const signal of STOP_SIGNALS) process.on(signal, handler);
     });
 
   const invocation = parseInvocation(argv, process.cwd());
@@ -154,6 +171,9 @@ export async function run(
     createShutdownHandler({
       close: () => (handle === null ? Promise.resolve() : handle.close()),
       exit,
+      onTimeout: (ms) => {
+        stderr(`Shutdown did not complete within ${String(ms)}ms; exiting anyway.\n`);
+      },
     }),
   );
 
@@ -190,14 +210,40 @@ export async function run(
 export function createShutdownHandler(dependencies: {
   readonly close: () => Promise<void>;
   readonly exit: (code: number) => void;
+  /** Override only in tests; production uses `SHUTDOWN_TIMEOUT_MS`. */
+  readonly timeoutMs?: number;
+  readonly onTimeout?: (timeoutMs: number) => void;
 }): () => void {
+  const timeoutMs = dependencies.timeoutMs ?? SHUTDOWN_TIMEOUT_MS;
   let shuttingDown = false;
+
   return () => {
     if (shuttingDown) return;
     shuttingDown = true;
+
+    let settled = false;
+    const finish = (code: number): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(watchdog);
+      dependencies.exit(code);
+    };
+
+    // A `close()` that never settles must not hold the process open. Unref'd so
+    // it never keeps the loop alive on its own: while a socket is still open the
+    // loop is alive and this fires, and once nothing is open there is nothing
+    // left to wait for.
+    const watchdog = setTimeout(() => {
+      if (settled) return;
+      dependencies.onTimeout?.(timeoutMs);
+      settled = true;
+      dependencies.exit(EXIT_FAILURE);
+    }, timeoutMs);
+    watchdog.unref();
+
     dependencies.close().then(
-      () => dependencies.exit(0),
-      () => dependencies.exit(EXIT_FAILURE),
+      () => finish(0),
+      () => finish(EXIT_FAILURE),
     );
   };
 }

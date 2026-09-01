@@ -1,272 +1,80 @@
 /**
  * AD-1: the read-only invariant, enforced structurally.
  *
- * Three layers, because the first alone does not verify what NFR-1 requires:
+ * Four layers, because the first alone does not verify what NFR-1 requires:
  *
  *   1. **Confinement.** `node:fs` may only be imported inside
  *      `src/adapters/fs/`; `node:child_process` only inside
- *      `src/adapters/git/` and `src/adapters/browser/`.
+ *      `src/adapters/git/`, `src/adapters/browser/` and `scripts/`.
  *   2. **Operation.** Inside that adapter, only the *reading* `fs` surface is
  *      permitted. Confining `node:fs` to one directory proves imports are tidy;
  *      it does nothing to stop that directory calling `writeFile`. Read-only is
  *      a property of the operations, not of the file layout.
- *   3. **Analysability.** `process.getBuiltinModule`, `createRequire` and a
- *      dynamic `import()` whose specifier is not a literal all reach a built-in
- *      without an import the gate can read. Those are reported rather than
- *      passed over, because a bypass the gate cannot see is a hole in the
- *      invariant it exists to enforce.
+ *   3. **Purity.** `src/domain/` has no outgoing imports at all (frozen
+ *      constraint). Written before the directory exists, because a prefix rule
+ *      that has only ever seen an empty layer passes vacuously.
+ *   4. **Analysability.** `process.getBuiltinModule`, `createRequire`, a
+ *      dynamic `import()` with a non-literal specifier, and a computed member
+ *      call inside a module that imports `fs` all reach an operation without a
+ *      name the gate can read. Those are reported rather than passed over,
+ *      because a bypass the gate cannot see is a hole in the invariant.
  *
  * The gate reads the `.ts` sources, not `dist/`, because the constraint lives in
  * the source a contributor edits. It reads stray `.js` under the scanned roots
- * too: a leftover compiled or legacy file must not hide a violation.
+ * too, and it **follows symlinks** — a `Dirent` for a symlink answers false to
+ * both `isDirectory()` and `isFile()`, so the walk used to skip every one and a
+ * symlinked source file was invisible.
+ *
+ * Scanning primitives live in `./support/gate.ts` and are unit-tested in
+ * `./support/scanner.test.ts`. This file is the assertions and the fixtures.
  */
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, writeFile, readFile, rm, readdir } from 'node:fs/promises';
-import type { Dirent } from 'node:fs';
+import { mkdtemp, mkdir, writeFile, readFile, rm, symlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join, relative, sep, dirname } from 'node:path';
+import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { dirname } from 'node:path';
+
+import {
+  SCANNED_ROOTS,
+  collectSourceFiles,
+  describeDomain,
+  describeImports,
+  describeOperations,
+  describeUnanalysable,
+  findDomainViolations,
+  findImportViolations,
+  findMutatingOperations,
+  findUnanalysable,
+} from './support/gate.ts';
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 
-/**
- * Every directory holding source a contributor edits, shipped or not.
- *
- * `scripts/` is included deliberately. It was outside the scan while
- * `scripts/run-tests.mjs` imports `node:child_process` — a module this gate
- * forbids outside two adapters — so the gate's reach was narrower than its
- * claim. A gate whose title is broader than what it reads is worse than no
- * gate, because it invites the belief that it checked.
- *
- * `test/` is exempt and stays exempt: fixtures legitimately create, write and
- * delete temporary trees, which is the whole mechanism by which the planted
- * violations below are proved to fail. Every assertion below names its scope.
- */
-const SCANNED_ROOTS = ['src', 'web', 'scripts'] as const;
-
-/**
- * Gated built-in -> the only directory prefixes allowed to import it.
- *
- * `scripts/` may spawn subprocesses: it is build and test tooling that runs on
- * a contributor's machine, is absent from the package `files` whitelist, and
- * never ships. It is *not* allowed to mutate the filesystem — see
- * `MUTATING_FS_OPERATIONS`, which applies to every scanned root. A future build
- * script that genuinely needs to write is an explicit decision to record here,
- * not something to discover by the gate quietly permitting it.
- */
-const GATED_MODULES = new Map<string, readonly string[]>([
-  ['fs', ['src/adapters/fs/']],
-  ['child_process', ['src/adapters/git/', 'src/adapters/browser/', 'scripts/']],
-]);
-
-/**
- * The mutating `fs` surface. Denied everywhere in `src/`, including inside the
- * adapter permitted to import `fs` at all — that permission is to *read*.
- *
- * Names prone to colliding with unrelated code (`write`, `open`, `close`,
- * `read`) are deliberately absent: they appear on streams and responses, and a
- * gate that cries wolf gets weakened. The list covers the operations that
- * actually change a filesystem.
- */
-const MUTATING_FS_OPERATIONS: readonly string[] = [
-  'writeFile', 'writeFileSync', 'appendFile', 'appendFileSync',
-  'mkdir', 'mkdirSync', 'mkdtemp', 'mkdtempSync',
-  'rm', 'rmSync', 'rmdir', 'rmdirSync', 'unlink', 'unlinkSync',
-  'rename', 'renameSync', 'copyFile', 'copyFileSync', 'cp', 'cpSync',
-  'chmod', 'chmodSync', 'fchmod', 'fchmodSync', 'lchmod', 'lchmodSync',
-  'chown', 'chownSync', 'fchown', 'fchownSync', 'lchown', 'lchownSync',
-  'truncate', 'truncateSync', 'ftruncate', 'ftruncateSync',
-  'utimes', 'utimesSync', 'futimes', 'futimesSync', 'lutimes', 'lutimesSync',
-  'symlink', 'symlinkSync', 'link', 'linkSync',
-  'createWriteStream',
-];
-
-const SOURCE_EXTENSIONS = new Set([
-  '.ts', '.mts', '.cts', '.tsx', '.js', '.mjs', '.cjs', '.jsx',
-]);
-
-/**
- * Every module specifier in an import, dynamic import or require position.
- * Deliberately syntactic: it over-matches rather than under-matches, because a
- * missed import is a hole in the invariant and a false positive is a loud test.
- */
-const SPECIFIER_PATTERN = /(?:\bfrom\s*|\bimport\s*(?:\(\s*)?|\brequire\s*\(\s*)(['"])([^'"]+)\1/g;
-
-/** Named bindings pulled out of an import, with the specifier they came from. */
-const NAMED_IMPORT_PATTERN =
-  /import\s*(?:type\s+)?\{([^}]*)\}\s*from\s*(['"])([^'"]+)\2/g;
-
-/** Ways to reach a built-in that no import-specifier scan can resolve. */
-const UNANALYSABLE_PATTERNS: readonly { readonly name: string; readonly pattern: RegExp }[] = [
-  { name: 'process.getBuiltinModule', pattern: /\bgetBuiltinModule\s*\(/ },
-  { name: 'createRequire', pattern: /\bcreateRequire\b/ },
-  { name: 'dynamic import() with a non-literal specifier', pattern: /\bimport\s*\(\s*(?!['"])/ },
-];
-
-interface Violation {
-  readonly file: string;
-  readonly specifier: string;
-  readonly allowed: readonly string[];
+/** A throwaway tree, cleaned up whether the test passes or not. */
+async function scratch(t: { after: (fn: () => unknown) => void }): Promise<string> {
+  const root = await mkdtemp(join(tmpdir(), 'bmad-dash-arch-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  return root;
 }
 
-interface OperationViolation {
-  readonly file: string;
-  readonly operation: string;
-  readonly how: string;
+async function write(root: string, relativePath: string, contents: string): Promise<string> {
+  const absolute = join(root, relativePath);
+  await mkdir(dirname(absolute), { recursive: true });
+  await writeFile(absolute, contents);
+  return absolute;
 }
 
-interface Unanalysable {
-  readonly file: string;
-  readonly mechanism: string;
-}
+const GATED_IMPORT = "import fs from 'node:fs';\nexport const x = fs;\n";
 
-/** The gate key: `node:` stripped, subpath dropped. */
-function gateKey(specifier: string): string {
-  const withoutPrefix = specifier.startsWith('node:')
-    ? specifier.slice('node:'.length)
-    : specifier;
-  return withoutPrefix.split('/')[0] ?? withoutPrefix;
-}
-
-/**
- * Strip comments before scanning for operations.
- *
- * The import scan is happy to over-match; the operation scan is not, because
- * prose legitimately names the operations it forbids — this very file does.
- */
-function stripComments(source: string): string {
-  return source.replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/\/\/[^\n]*/g, ' ');
-}
-
-/**
- * Repo-relative POSIX paths of source files under the scanned roots. A missing
- * root contributes nothing, so this holds on a tree where `web/` does not exist.
- */
-async function collectSourceFiles(root: string): Promise<string[]> {
-  const found: string[] = [];
-
-  async function walk(absolute: string): Promise<void> {
-    let entries: Dirent[];
-    try {
-      entries = await readdir(absolute, { withFileTypes: true });
-    } catch (error: unknown) {
-      if (isEnoent(error)) return;
-      throw error;
-    }
-    for (const entry of entries) {
-      const child = join(absolute, entry.name);
-      if (entry.isDirectory()) {
-        if (entry.name === 'node_modules' || entry.name.startsWith('.')) continue;
-        await walk(child);
-        continue;
-      }
-      if (!entry.isFile()) continue;
-      const dot = entry.name.lastIndexOf('.');
-      if (dot === -1 || !SOURCE_EXTENSIONS.has(entry.name.slice(dot))) continue;
-      found.push(relative(root, child).split(sep).join('/'));
-    }
-  }
-
-  for (const scanned of SCANNED_ROOTS) {
-    await walk(join(root, scanned));
-  }
-  return found.sort();
-}
-
-async function findImportViolations(root: string): Promise<Violation[]> {
-  const violations: Violation[] = [];
-
-  for (const file of await collectSourceFiles(root)) {
-    const source = await readFile(join(root, file), 'utf8');
-    for (const match of source.matchAll(SPECIFIER_PATTERN)) {
-      const specifier = match[2];
-      if (specifier === undefined) continue;
-      const allowed = GATED_MODULES.get(gateKey(specifier));
-      if (allowed === undefined) continue;
-      if (allowed.some((prefix) => file.startsWith(prefix))) continue;
-      violations.push({ file, specifier, allowed });
-    }
-  }
-
-  return violations;
-}
-
-/**
- * Uses of the mutating `fs` surface, anywhere in `src/` — the adapter included.
- * Caught two ways: imported by name from an `fs` module, and called.
- */
-async function findMutatingOperations(root: string): Promise<OperationViolation[]> {
-  const found: OperationViolation[] = [];
-  const denied = new Set(MUTATING_FS_OPERATIONS);
-
-  for (const file of await collectSourceFiles(root)) {
-    const raw = await readFile(join(root, file), 'utf8');
-    const code = stripComments(raw);
-
-    for (const match of code.matchAll(NAMED_IMPORT_PATTERN)) {
-      const [, bindings, , specifier] = match;
-      if (bindings === undefined || specifier === undefined) continue;
-      if (gateKey(specifier) !== 'fs') continue;
-      for (const binding of bindings.split(',')) {
-        const name = binding.split(/\s+as\s+/)[0]?.trim();
-        if (name !== undefined && denied.has(name)) {
-          found.push({ file, operation: name, how: `imported from '${specifier}'` });
-        }
-      }
-    }
-
-    for (const operation of MUTATING_FS_OPERATIONS) {
-      // A call site, whether bare or through a namespace: `rm(` or `fs.rm(`.
-      if (new RegExp(`(?:\\.|\\b)${operation}\\s*\\(`).test(code)) {
-        found.push({ file, operation, how: 'called' });
-      }
-    }
-  }
-
-  return found;
-}
-
-/** Indirections that would reach a built-in without a readable import. */
-async function findUnanalysable(root: string): Promise<Unanalysable[]> {
-  const found: Unanalysable[] = [];
-
-  for (const file of await collectSourceFiles(root)) {
-    const source = await readFile(join(root, file), 'utf8');
-    for (const { name, pattern } of UNANALYSABLE_PATTERNS) {
-      if (pattern.test(source)) found.push({ file, mechanism: name });
-    }
-  }
-
-  return found;
-}
-
-function describe(violations: readonly Violation[]): string {
-  return violations
-    .map((v) => `${v.file} imports ${v.specifier}; only ${v.allowed.join(', ')} may`)
-    .join('\n');
-}
-
-function describeOperations(found: readonly OperationViolation[]): string {
-  return found
-    .map((o) => `${o.file} ${o.how} the mutating operation ${o.operation}`)
-    .join('\n');
-}
-
-function describeUnanalysable(found: readonly Unanalysable[]): string {
-  return found.map((u) => `${u.file} uses ${u.mechanism}, which the gate cannot resolve`).join('\n');
-}
-
-function isEnoent(error: unknown): boolean {
-  return (
-    typeof error === 'object' && error !== null && (error as { code?: unknown }).code === 'ENOENT'
-  );
-}
+// ---------------------------------------------------------------------------
+// The real tree
+// ---------------------------------------------------------------------------
 
 test('no module outside its permitted adapter imports a gated built-in', async () => {
   const violations = await findImportViolations(REPO_ROOT);
-  assert.deepEqual(violations, [], `AD-1 violated:\n${describe(violations)}`);
+  assert.deepEqual(violations, [], `AD-1 violated:\n${describeImports(violations)}`);
 });
 
 test('no source under src/, web/ or scripts/ uses the mutating fs surface', async () => {
@@ -276,9 +84,12 @@ test('no source under src/, web/ or scripts/ uses the mutating fs surface', asyn
   assert.deepEqual(found, [], `read-only violated:\n${describeOperations(found)}`);
 });
 
+test('src/domain/ has no outgoing imports', async () => {
+  const found = await findDomainViolations(REPO_ROOT);
+  assert.deepEqual(found, [], `purity violated:\n${describeDomain(found)}`);
+});
+
 test('the permitted adapter imports fs, and only to read', async () => {
-  // Proves the allowance path is exercised on the real tree rather than only in
-  // the synthetic trees below, and that the permission is narrow.
   const source = await readFile(join(REPO_ROOT, 'src', 'adapters', 'fs', 'realpath.ts'), 'utf8');
   assert.match(source, /from 'node:fs'/);
   assert.match(source, /realpathSync/);
@@ -297,73 +108,139 @@ test('the scan actually reaches every root it claims, tooling included', async (
     'src/cli/index.ts',
     'src/adapters/http/server.ts',
     'src/adapters/fs/realpath.ts',
-    // Tooling: previously outside the scan while importing a gated built-in.
     'scripts/run-tests.ts',
+    'scripts/test-run-policy.ts',
   ]) {
     assert.ok(files.includes(expected), `${expected} not scanned; found: ${files.join(', ')}`);
   }
 });
 
 test('the subprocess allowance for tooling cannot leak into the package', async () => {
-  // `scripts/` may spawn because it never ships. That premise is the whole
-  // justification for the allowance, so it is asserted rather than assumed.
   const manifest: unknown = JSON.parse(await readFile(join(REPO_ROOT, 'package.json'), 'utf8'));
   const files = (manifest as { files?: unknown }).files;
   assert.ok(Array.isArray(files), 'package.json must declare an explicit files whitelist');
   for (const entry of files as unknown[]) {
-    assert.notEqual(entry, 'scripts', 'scripts/ must never be published');
-    assert.notEqual(entry, 'test', 'test/ must never be published');
-    assert.notEqual(entry, 'src', 'src/ must never be published');
+    for (const forbidden of ['scripts', 'test', 'src']) {
+      assert.notEqual(entry, forbidden, `${forbidden}/ must never be published`);
+    }
   }
 });
 
 test('no stale .js implementation sits beside its .ts replacement', async () => {
-  // Scoped to `src/`: `scripts/` is plain `.mjs` tooling by design, never
-  // compiled and never shipped, so it is not a stale-port candidate.
   const stale = (await collectSourceFiles(REPO_ROOT)).filter(
     (file) => file.startsWith('src/') && /\.(js|mjs|cjs|jsx)$/.test(file),
   );
   assert.deepEqual(stale, [], `JavaScript files remain under src/: ${stale.join(', ')}`);
 });
 
-test('an empty tree yields no findings of any kind', async (t) => {
-  const root = await mkdtemp(join(tmpdir(), 'bmad-dash-arch-'));
-  t.after(() => rm(root, { recursive: true, force: true }));
+// ---------------------------------------------------------------------------
+// Planted violations: the gate must fail, not merely pass
+// ---------------------------------------------------------------------------
 
+test('an empty tree yields no findings of any kind', async (t) => {
+  const root = await scratch(t);
   assert.deepEqual(await findImportViolations(root), []);
   assert.deepEqual(await findMutatingOperations(root), []);
   assert.deepEqual(await findUnanalysable(root), []);
+  assert.deepEqual(await findDomainViolations(root), []);
 });
 
 test('a planted node:fs import outside the fs adapter is reported by file name', async (t) => {
-  const root = await mkdtemp(join(tmpdir(), 'bmad-dash-arch-'));
-  t.after(() => rm(root, { recursive: true, force: true }));
-
-  await mkdir(join(root, 'src', 'domain'), { recursive: true });
-  await writeFile(
-    join(root, 'src', 'domain', 'offender.ts'),
-    "import fs from 'node:fs';\nexport const x = fs;\n",
-  );
-  await mkdir(join(root, 'src', 'adapters', 'fs'), { recursive: true });
-  await writeFile(
-    join(root, 'src', 'adapters', 'fs', 'reader.ts'),
+  const root = await scratch(t);
+  await write(root, 'src/domain/offender.ts', GATED_IMPORT);
+  await write(
+    root,
+    'src/adapters/fs/reader.ts',
     "import { readFile } from 'node:fs/promises';\nexport { readFile };\n",
   );
 
   const violations = await findImportViolations(root);
   assert.equal(violations.length, 1);
   assert.equal(violations[0]?.file, 'src/domain/offender.ts');
-  assert.match(describe(violations), /src\/domain\/offender\.ts/);
+  assert.match(describeImports(violations), /src\/domain\/offender\.ts/);
+});
+
+test('a symlinked source file with a gated import is scanned', async (t) => {
+  // The reviewer's reproduction. A `Dirent` for a symlink is neither a file nor
+  // a directory, so the walk skipped it and the gate reported nothing at all.
+  const root = await scratch(t);
+  const outside = join(root, 'outside');
+  await mkdir(outside, { recursive: true });
+  const hidden = join(outside, 'evil.ts');
+  await writeFile(hidden, GATED_IMPORT);
+  await mkdir(join(root, 'src', 'cli'), { recursive: true });
+  await symlink(hidden, join(root, 'src', 'cli', 'linked.ts'));
+
+  const files = await collectSourceFiles(root);
+  assert.ok(files.includes('src/cli/linked.ts'), `symlinked file not scanned: ${files.join(', ')}`);
+
+  const violations = await findImportViolations(root);
+  assert.deepEqual(
+    violations.map((v) => v.file),
+    ['src/cli/linked.ts'],
+    describeImports(violations),
+  );
+});
+
+test('a symlinked directory of source is scanned', async (t) => {
+  const root = await scratch(t);
+  const outside = join(root, 'outside');
+  await mkdir(outside, { recursive: true });
+  await writeFile(join(outside, 'evil.ts'), GATED_IMPORT);
+  await mkdir(join(root, 'src', 'cli'), { recursive: true });
+  await symlink(outside, join(root, 'src', 'cli', 'linked-dir'));
+
+  const violations = await findImportViolations(root);
+  assert.deepEqual(
+    violations.map((v) => v.file),
+    ['src/cli/linked-dir/evil.ts'],
+    describeImports(violations),
+  );
+});
+
+test('a symlinked mutating call inside the fs adapter is denied', async (t) => {
+  const root = await scratch(t);
+  const outside = join(root, 'outside');
+  await mkdir(outside, { recursive: true });
+  await writeFile(
+    join(outside, 'writer.ts'),
+    "import { writeFileSync } from 'node:fs';\nexport const save = (p, d) => writeFileSync(p, d);\n",
+  );
+  await mkdir(join(root, 'src', 'adapters', 'fs'), { recursive: true });
+  await symlink(join(outside, 'writer.ts'), join(root, 'src', 'adapters', 'fs', 'linked.ts'));
+
+  const found = await findMutatingOperations(root);
+  assert.ok(found.some((o) => o.operation === 'writeFileSync'), describeOperations(found));
+});
+
+test('a symlink cycle terminates instead of recursing forever', async (t) => {
+  const root = await scratch(t);
+  await mkdir(join(root, 'src', 'cli'), { recursive: true });
+  await write(root, 'src/cli/index.ts', 'export const x = 1;\n');
+  // A directory linking back to one of its own ancestors.
+  await symlink(join(root, 'src'), join(root, 'src', 'cli', 'loop'));
+
+  const files = await collectSourceFiles(root);
+  assert.ok(files.includes('src/cli/index.ts'));
+  assert.ok(files.length < 50, `cycle produced ${String(files.length)} entries`);
+});
+
+test('a dangling symlink is skipped rather than fatal', async (t) => {
+  const root = await scratch(t);
+  await mkdir(join(root, 'src', 'cli'), { recursive: true });
+  await write(root, 'src/cli/index.ts', 'export const x = 1;\n');
+  await symlink(join(root, 'src', 'cli', 'never-created.ts'), join(root, 'src', 'cli', 'dead.ts'));
+
+  const files = await collectSourceFiles(root);
+  assert.deepEqual(files, ['src/cli/index.ts']);
+  assert.deepEqual(await findImportViolations(root), []);
 });
 
 test('a mutating call inside the permitted fs adapter is still denied', async (t) => {
-  const root = await mkdtemp(join(tmpdir(), 'bmad-dash-arch-'));
-  t.after(() => rm(root, { recursive: true, force: true }));
-
-  await mkdir(join(root, 'src', 'adapters', 'fs'), { recursive: true });
-  // Import-legal: this is the one directory allowed to touch `node:fs`.
-  await writeFile(
-    join(root, 'src', 'adapters', 'fs', 'writer.ts'),
+  const root = await scratch(t);
+  await write(
+    root,
+    'src/adapters/fs/writer.ts',
     "import { writeFileSync, realpathSync } from 'node:fs';\n" +
       'export const save = (p: string, d: string) => writeFileSync(p, d);\n' +
       'export const look = (p: string) => realpathSync(p);\n',
@@ -383,31 +260,153 @@ test('a mutating call inside the permitted fs adapter is still denied', async (t
 });
 
 test('a mutating call through an fs namespace is denied', async (t) => {
-  const root = await mkdtemp(join(tmpdir(), 'bmad-dash-arch-'));
-  t.after(() => rm(root, { recursive: true, force: true }));
-
-  await mkdir(join(root, 'src', 'adapters', 'fs'), { recursive: true });
-  await writeFile(
-    join(root, 'src', 'adapters', 'fs', 'ns.ts'),
+  const root = await scratch(t);
+  await write(
+    root,
+    'src/adapters/fs/ns.ts',
     "import fs from 'node:fs';\nexport const wipe = (p: string) => fs.rmSync(p, { recursive: true });\n",
   );
-
   const found = await findMutatingOperations(root);
   assert.ok(found.some((o) => o.operation === 'rmSync'), describeOperations(found));
 });
 
-test('prose naming a mutating operation is not a violation', async (t) => {
-  const root = await mkdtemp(join(tmpdir(), 'bmad-dash-arch-'));
-  t.after(() => rm(root, { recursive: true, force: true }));
+test('bracket-notation access to a mutating operation is denied', async (t) => {
+  const root = await scratch(t);
+  await write(
+    root,
+    'src/adapters/fs/bracket.ts',
+    "import fs from 'node:fs';\nexport const save = (p: string, d: string) => fs['writeFileSync'](p, d);\n",
+  );
+  const found = await findMutatingOperations(root);
+  assert.ok(
+    found.some((o) => o.operation === 'writeFileSync' && o.how.includes('bracket')),
+    describeOperations(found),
+  );
+});
 
-  await mkdir(join(root, 'src', 'adapters', 'fs'), { recursive: true });
-  await writeFile(
-    join(root, 'src', 'adapters', 'fs', 'documented.ts'),
-    '/**\n * Nothing here calls writeFile, mkdir or rm. Those would be writes.\n */\n' +
-      "import { realpathSync } from 'node:fs';\n" +
-      'export const look = (p: string) => realpathSync(p);\n',
+test('a renamed destructure of a mutating operation is denied', async (t) => {
+  // Ordinary code someone could write with no intent to evade.
+  const root = await scratch(t);
+  await write(
+    root,
+    'src/adapters/fs/destructured.ts',
+    "import fs from 'node:fs';\nconst { writeFileSync: w } = fs;\nexport const save = (p: string, d: string) => w(p, d);\n",
+  );
+  const found = await findMutatingOperations(root);
+  assert.ok(
+    found.some((o) => o.operation === 'writeFileSync' && o.how.includes('destructured')),
+    describeOperations(found),
+  );
+});
+
+test('a plain destructure of a mutating operation is denied', async (t) => {
+  const root = await scratch(t);
+  await write(
+    root,
+    'src/adapters/fs/plain.ts',
+    "import fs from 'node:fs';\nconst { rmSync } = fs;\nexport const wipe = (p: string) => rmSync(p);\n",
+  );
+  const found = await findMutatingOperations(root);
+  assert.ok(found.some((o) => o.operation === 'rmSync'), describeOperations(found));
+});
+
+test('a computed member call in a module that imports fs is flagged unanalysable', async (t) => {
+  // `fs[op](p, d)` carries no name to match on, so it cannot be denied by name.
+  // Reporting it as unanalysable is the honest answer.
+  const root = await scratch(t);
+  await write(
+    root,
+    'src/adapters/fs/computed.ts',
+    "import fs from 'node:fs';\nexport const run = (op: string, p: string, d: string) => fs[op](p, d);\n",
   );
 
+  const byName = await findMutatingOperations(root);
+  assert.deepEqual(byName, [], 'a computed name cannot be matched by name — that is the point');
+
+  const found = await findUnanalysable(root);
+  assert.ok(
+    found.some((u) => u.mechanism.includes('computed member call')),
+    describeUnanalysable(found),
+  );
+});
+
+test('a computed member call elsewhere is not flagged', async (t) => {
+  // Scoped to modules that import fs, so ordinary indexing stays quiet.
+  const root = await scratch(t);
+  await write(
+    root,
+    'src/render/dispatch.ts',
+    'const handlers: Record<string, () => string> = {};\nexport const go = (k: string) => handlers[k]();\n',
+  );
+  assert.deepEqual(await findUnanalysable(root), []);
+});
+
+test('the openSync/writeSync file-descriptor write path is denied', async (t) => {
+  // A working write path that passed both the named-import and call-site layers:
+  // neither `openSync` nor `writeSync` was on the list.
+  const root = await scratch(t);
+  await write(
+    root,
+    'src/adapters/fs/fd.ts',
+    "import { openSync, writeSync, closeSync } from 'node:fs';\n" +
+      'export const save = (p: string, d: string): void => {\n' +
+      "  const fd = openSync(p, 'w');\n" +
+      '  writeSync(fd, d);\n' +
+      '  closeSync(fd);\n' +
+      '};\n',
+  );
+
+  const found = await findMutatingOperations(root);
+  const operations = new Set(found.map((o) => o.operation));
+  assert.ok(operations.has('openSync'), `openSync not denied: ${describeOperations(found)}`);
+  assert.ok(operations.has('writeSync'), `writeSync not denied: ${describeOperations(found)}`);
+});
+
+test('a mutating call hidden behind a string literal is still denied', async (t) => {
+  // The reviewer's case, at the gate level: comment stripping used to run with
+  // no awareness of literals, so the call after this string was never seen.
+  const root = await scratch(t);
+  // Both on ONE line, deliberately: `//` stripping is per-line, so a call on the
+  // following line survives naive stripping and would prove nothing.
+  await write(
+    root,
+    'src/adapters/fs/sneaky.ts',
+    "import fs from 'node:fs';\n" +
+      "const doc = 'http://example.invalid'; fs.writeFileSync(p, d);\n",
+  );
+
+  const found = await findMutatingOperations(root);
+  assert.ok(
+    found.some((o) => o.operation === 'writeFileSync'),
+    `hidden behind a string containing //: ${describeOperations(found)}`,
+  );
+});
+
+test('a mutating call after a block-comment opener inside a string is denied', async (t) => {
+  const root = await scratch(t);
+  await write(
+    root,
+    'src/adapters/fs/sneaky2.ts',
+    "import fs from 'node:fs';\n" + "const a = '/*'; fs.rmSync(p); const b = '*/';\n",
+  );
+
+  const found = await findMutatingOperations(root);
+  assert.ok(
+    found.some((o) => o.operation === 'rmSync'),
+    `hidden behind a fake comment opener: ${describeOperations(found)}`,
+  );
+});
+
+test('prose naming a mutating operation is not a violation', async (t) => {
+  const root = await scratch(t);
+  await write(
+    root,
+    'src/adapters/fs/documented.ts',
+    '/**\n * Nothing here calls writeFile, mkdir or rm. Those would be writes.\n */\n' +
+      "import { realpathSync } from 'node:fs';\n" +
+      '// Also not a call: writeFileSync(p, d)\n' +
+      'export const look = (p: string) => realpathSync(p);\n',
+  );
   assert.deepEqual(
     await findMutatingOperations(root),
     [],
@@ -416,15 +415,8 @@ test('prose naming a mutating operation is not a violation', async (t) => {
 });
 
 test('a stray .js file cannot hide a gated import from the scan', async (t) => {
-  const root = await mkdtemp(join(tmpdir(), 'bmad-dash-arch-'));
-  t.after(() => rm(root, { recursive: true, force: true }));
-
-  await mkdir(join(root, 'src', 'domain'), { recursive: true });
-  await writeFile(
-    join(root, 'src', 'domain', 'leftover.js'),
-    "import fs from 'node:fs';\nexport const x = fs;\n",
-  );
-
+  const root = await scratch(t);
+  await write(root, 'src/domain/leftover.js', GATED_IMPORT);
   assert.deepEqual(
     (await findImportViolations(root)).map((v) => v.file),
     ['src/domain/leftover.js'],
@@ -432,22 +424,19 @@ test('a stray .js file cannot hide a gated import from the scan', async (t) => {
 });
 
 test('a planted child_process import outside the git and browser adapters is reported', async (t) => {
-  const root = await mkdtemp(join(tmpdir(), 'bmad-dash-arch-'));
-  t.after(() => rm(root, { recursive: true, force: true }));
-
-  await mkdir(join(root, 'src', 'adapters', 'http'), { recursive: true });
-  await writeFile(
-    join(root, 'src', 'adapters', 'http', 'server.ts'),
+  const root = await scratch(t);
+  await write(
+    root,
+    'src/adapters/http/server.ts',
     "const { spawn } = require('child_process');\nexport default spawn;\n",
   );
   for (const permitted of ['git', 'browser']) {
-    await mkdir(join(root, 'src', 'adapters', permitted), { recursive: true });
-    await writeFile(
-      join(root, 'src', 'adapters', permitted, 'run.ts'),
+    await write(
+      root,
+      `src/adapters/${permitted}/run.ts`,
       "import { execFile } from 'node:child_process';\nexport { execFile };\n",
     );
   }
-
   assert.deepEqual(
     (await findImportViolations(root)).map((v) => v.file),
     ['src/adapters/http/server.ts'],
@@ -455,17 +444,9 @@ test('a planted child_process import outside the git and browser adapters is rep
 });
 
 test('dynamic import and bare specifiers are caught too', async (t) => {
-  const root = await mkdtemp(join(tmpdir(), 'bmad-dash-arch-'));
-  t.after(() => rm(root, { recursive: true, force: true }));
-
-  await mkdir(join(root, 'src', 'render'), { recursive: true });
-  await writeFile(
-    join(root, 'src', 'render', 'lazy.ts'),
-    "export const load = () => import('node:fs/promises');\n",
-  );
-  await mkdir(join(root, 'src', 'ports'), { recursive: true });
-  await writeFile(join(root, 'src', 'ports', 'legacy.ts'), "import 'fs';\n");
-
+  const root = await scratch(t);
+  await write(root, 'src/render/lazy.ts', "export const load = () => import('node:fs/promises');\n");
+  await write(root, 'src/ports/legacy.ts', "import 'fs';\n");
   assert.deepEqual(
     (await findImportViolations(root)).map((v) => v.file).sort(),
     ['src/ports/legacy.ts', 'src/render/lazy.ts'],
@@ -473,20 +454,16 @@ test('dynamic import and bare specifiers are caught too', async (t) => {
 });
 
 test('each unanalysable indirection is flagged rather than passing silently', async (t) => {
-  const root = await mkdtemp(join(tmpdir(), 'bmad-dash-arch-'));
-  t.after(() => rm(root, { recursive: true, force: true }));
-
-  await mkdir(join(root, 'src', 'domain'), { recursive: true });
-  await writeFile(
-    join(root, 'src', 'domain', 'builtin.ts'),
-    'export const fs = process.getBuiltinModule("node:fs");\n',
-  );
-  await writeFile(
-    join(root, 'src', 'domain', 'required.ts'),
+  const root = await scratch(t);
+  await write(root, 'src/domain/builtin.ts', 'export const fs = process.getBuiltinModule("node:fs");\n');
+  await write(
+    root,
+    'src/domain/required.ts',
     "import { createRequire } from 'node:module';\nexport const req = createRequire(import.meta.url);\n",
   );
-  await writeFile(
-    join(root, 'src', 'domain', 'computed.ts'),
+  await write(
+    root,
+    'src/domain/computed.ts',
     'const name = "node:" + "fs";\nexport const load = () => import(name);\n',
   );
 
@@ -499,4 +476,72 @@ test('each unanalysable indirection is flagged rather than passing silently', as
 
   // The import-specifier scan alone sees none of these, which is the point.
   assert.deepEqual((await findImportViolations(root)).map((v) => v.file), []);
+});
+
+test('a literal dynamic import is not mistaken for a computed one', async (t) => {
+  const root = await scratch(t);
+  await write(root, 'src/render/ok.ts', "export const load = () => import('./other.ts');\n");
+  assert.deepEqual(await findUnanalysable(root), []);
+});
+
+// ---------------------------------------------------------------------------
+// Purity: src/domain/ has no outgoing imports
+// ---------------------------------------------------------------------------
+
+test('an outgoing import from src/domain/ is denied, in each of its forms', async (t) => {
+  const root = await scratch(t);
+  await write(root, 'src/domain/builtin.ts', "import { join } from 'node:path';\nexport { join };\n");
+  await write(root, 'src/domain/pkg.ts', "import md from 'markdown-it';\nexport default md;\n");
+  await write(
+    root,
+    'src/domain/escapes.ts',
+    "import { resolveRealPath } from '../adapters/fs/realpath.ts';\nexport { resolveRealPath };\n",
+  );
+  await write(root, 'src/adapters/fs/realpath.ts', 'export const resolveRealPath = (p: string) => p;\n');
+
+  const found = await findDomainViolations(root);
+  assert.deepEqual(
+    found.map((d) => d.file).sort(),
+    ['src/domain/builtin.ts', 'src/domain/escapes.ts', 'src/domain/pkg.ts'],
+    describeDomain(found),
+  );
+  assert.match(describeDomain(found), /no outgoing imports/);
+});
+
+test('an import that stays inside src/domain/ is permitted', async (t) => {
+  const root = await scratch(t);
+  await write(root, 'src/domain/model.ts', 'export type Artifact = { path: string };\n');
+  await write(
+    root,
+    'src/domain/identify.ts',
+    "import type { Artifact } from './model.ts';\nexport const key = (a: Artifact) => a.path;\n",
+  );
+  await write(
+    root,
+    'src/domain/nested/order.ts',
+    "import type { Artifact } from '../model.ts';\nexport const first = (a: Artifact[]) => a[0];\n",
+  );
+
+  assert.deepEqual(
+    await findDomainViolations(root),
+    [],
+    'intra-layer imports are internal, not outgoing',
+  );
+});
+
+test('the purity rule is not merely passing vacuously on the real tree', async (t) => {
+  // `src/domain/` does not exist yet, so the real-tree assertion above is
+  // trivially true. This proves the rule fires when the layer does exist —
+  // which is the moment Story 1.5 adds its first file.
+  const root = await scratch(t);
+  assert.deepEqual(await findDomainViolations(root), [], 'no layer, no findings');
+
+  await write(root, 'src/domain/first.ts', "import { join } from 'node:path';\nexport { join };\n");
+  const found = await findDomainViolations(root);
+  assert.equal(found.length, 1, 'the rule must fire the moment the layer exists');
+  assert.equal(found[0]?.file, 'src/domain/first.ts');
+});
+
+test('the scanned roots are the ones the assertions claim', () => {
+  assert.deepEqual([...SCANNED_ROOTS], ['src', 'web', 'scripts']);
 });

@@ -767,7 +767,7 @@ test('an explicit path argument targets that path', async (t) => {
   assert.match(cli.stderr(), new RegExp(`Target: ${escapeForRegExp(target)}`));
 });
 
-for (const signal of ['SIGINT', 'SIGTERM'] as const) {
+for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP'] as const) {
   test(`${signal} shuts the server down with exit code 0`, async () => {
     const cli = await startCli([], REPO_ROOT);
 
@@ -952,7 +952,7 @@ test('a closed stdout is a clean exit, not a stack trace', async () => {
   assert.doesNotMatch(result.stderr, /at ContextifyScript|at node:internal/);
 });
 
-for (const signal of ['SIGINT', 'SIGTERM'] as const) {
+for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP'] as const) {
   test(`a repeated ${signal} during shutdown still exits 0`, async () => {
     const cli = await startCli([], REPO_ROOT);
     const agent = new Agent({ keepAlive: true, maxSockets: 1 });
