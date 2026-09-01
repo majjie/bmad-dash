@@ -1,0 +1,21 @@
+# Team / enterprise overrides for the bmad-ux skill.
+# Committed to the repo — applies to every developer on the project.
+# Merges over .claude/skills/bmad-ux/customize.toml, which is the shipped
+# default and carries "DO NOT EDIT -- overwritten on every update".
+# Scalars override; tables deep-merge; arrays append.
+
+[workflow]
+
+# Standing reviewer lenses for the Finalize gate.
+#
+# Shaped after the two that bmad-architecture already carries: verify claims
+# against reality, then attack the seams. Added 2026-08-28 after a UX spine
+# shipped a contrast claim ("at or above 4.5:1 on every container") that had
+# never been computed.
+finalize_reviewers = [
+  "Verify WCAG contrast conformance by COMPUTING ratios, treating every contrast claim in the spines as unverified until checked. Write and run a script implementing the WCAG relative-luminance and contrast-ratio formulas, then compute every meaningful foreground/background pairing from the DESIGN.md colour tokens: each text role against every surface it may sit on, each semantic/status colour against its paired container and against the plain surfaces, the accent wherever it carries text or a boundary, and the focus ring against every surface it may be drawn on. Apply 4.5:1 to normal-size text, 3:1 to large text and to UI components, graphical objects and focus indicators — using the typography tokens to decide which threshold governs which role, since small roles need the higher bar. Report every pairing with its computed ratio, then failures in severity order with the minimum hex change that fixes each while preserving hue and register. Also test whether status colours remain distinguishable under deuteranopia and protanopia, treating that as robustness rather than conformance where colour is already paired with text.",
+
+  "Build a state-by-surface coverage matrix and report every unspecified cell. Cross every surface named in the information architecture against every state the spines claim to specify, judging each cell on whether observable behaviour is actually specified for THAT surface — a state described generally elsewhere does not count. Then extend the matrix with states the product plainly has but the document does not name, deriving them from the project's own reality (its source-shapes companion, brownfield notes, or platform constraints) rather than from a generic checklist: sources that vanish between read and use, inputs whose shape is ambiguous, an environment where a whole signal is unavailable, partial failure of a long operation, and a deep link whose target no longer exists. For each gap, state the condition, what a developer would have to invent, and what happens when two developers invent differently. Rank by likelihood of producing a user-visible inconsistency.",
+
+  "Inspect the seam between DESIGN.md and EXPERIENCE.md, which are peers that nothing else joins. Report: orphan tokens defined but referenced nowhere, distinguishing genuinely unused from explicitly reserved; dangling {path.to.token} references whose path does not resolve against the actual YAML, checked by resolving every path literally; behaviour required by EXPERIENCE.md with no token or component in DESIGN.md; components specified in DESIGN.md that EXPERIENCE.md never says when to use; direct contradictions between the two on elevation levels, component names, status vocabularies, focus treatment, type roles versus where text appears, and breakpoints; hardcoded hex, px or rem values in prose that should be token references, including whether DESIGN.md obeys its own Do's and Don'ts; and naming drift where one concept goes by several names. Be exhaustive on the mechanical categories. Give each finding's location in both documents and the minimum fix.",
+]

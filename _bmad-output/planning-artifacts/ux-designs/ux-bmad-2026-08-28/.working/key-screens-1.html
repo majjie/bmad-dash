@@ -1,0 +1,220 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>bmad-dash — key screens</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Serif:wght@400&display=swap">
+<style>
+/* Tokens lifted verbatim from DESIGN.md after the contrast fixes. */
+:root{
+  --surface:#121617; --c-low:#181D1E; --c:#1C2223; --c-high:#212829; --c-highest:#273031;
+  --on-surface:#E5EAEA; --on-variant:#93A3A4; --on-faint:#8B9899;
+  --outline:#687A7D; --outline-variant:#2A3234;
+  --primary:#6FD3C6; --on-primary:#08302C; --primary-container:#1D3A37; --on-primary-container:#7FD9CD;
+  --s-present:#9BD98F; --s-present-c:#243A22;
+  --s-absent:#96A5A7; --s-absent-c:#20282A;
+  --s-unread:#E0B072; --s-unread-c:#3D2F20;
+  --s-unchecked:#B8A2D6; --s-unchecked-c:#2A2333;
+  --focus:#6FD3C6; --focus-on-primary:#08302C;
+  --sans:'IBM Plex Sans',ui-sans-serif,system-ui,sans-serif;
+  --mono:'IBM Plex Mono',ui-monospace,monospace;
+  --serif:'IBM Plex Serif',Georgia,serif;
+}
+*{box-sizing:border-box}
+body{margin:0;background:#0a0c0d;color:var(--on-surface);font-family:var(--sans);font-size:14px;line-height:1.5}
+.shell{max-width:1320px;margin:0 auto;padding:26px 22px 90px}
+.caption{font-family:var(--mono);font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--on-variant);margin:34px 0 9px}
+.caption:first-of-type{margin-top:0}
+.frame{border:1px solid var(--outline-variant);border-radius:12px;overflow:hidden;background:var(--surface)}
+.note{font-family:var(--mono);font-size:11px;color:var(--on-faint);margin:9px 0 0}
+
+/* ---------- global chrome ---------- */
+.chrome{padding:12px 16px;border-bottom:1px solid var(--outline-variant);display:flex;flex-wrap:wrap;gap:10px 18px;align-items:center}
+.proj{font-weight:600;font-size:15px}
+.path{font-family:var(--mono);font-size:11.5px;color:var(--on-variant)}
+.currency{font-family:var(--mono);font-size:11px;color:var(--on-variant);margin-left:auto}
+.gitflag{font-family:var(--mono);font-size:10.5px;color:var(--on-variant);border:1px solid var(--outline);border-radius:9999px;padding:2px 8px}
+.btn{font-family:var(--sans);font-size:13px;font-weight:500;padding:6px 14px;border-radius:9999px;border:1px solid transparent;cursor:pointer}
+.btn-primary{background:var(--primary);color:var(--on-primary)}
+.btn-primary.focused{outline:2px solid var(--focus);outline-offset:2px;box-shadow:inset 0 0 0 1px var(--focus-on-primary)}
+.btn-ghost{background:transparent;color:var(--primary);border-color:var(--outline)}
+.btn-ghost.focused{outline:2px solid var(--focus);outline-offset:2px}
+.progress{width:100%;height:2px;background:var(--outline-variant);margin-top:10px}
+.progress>i{display:block;height:2px;width:38%;background:var(--primary)}
+.progresslabel{font-family:var(--mono);font-size:11px;color:var(--on-variant);margin-top:6px}
+
+/* ---------- dashboard grid ---------- */
+.grid{display:grid;grid-template-columns:1fr;gap:12px;padding:16px}
+@media(min-width:960px){.grid{grid-template-columns:1.5fr 1fr}}
+.col{display:flex;flex-direction:column;gap:12px;min-width:0}
+.tile{background:var(--c-low);border-radius:12px;padding:15px}
+.tile.raised{background:var(--c-high)}
+.tlabel{font-size:11px;font-weight:600;letter-spacing:.1em;text-transform:uppercase;color:var(--on-variant);margin:0 0 11px}
+
+/* rows */
+.row{display:flex;gap:12px;align-items:baseline;padding:8px 0;border-bottom:1px solid var(--outline-variant)}
+.row:last-child{border-bottom:none}
+.row .what{flex:1;min-width:0}
+.row .nm{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.row .mt{font-family:var(--mono);font-size:12px;color:var(--on-variant)}
+.row.focused{outline:2px solid var(--focus);outline-offset:2px;border-radius:4px}
+.badge{font-family:var(--mono);font-size:11px;letter-spacing:.05em;padding:2px 7px;border-radius:3px;white-space:nowrap;border:1px solid}
+.badge.strong{color:var(--primary);border-color:var(--primary-container)}
+.badge.weak{color:var(--on-variant);border-color:var(--outline)}
+.row.degraded .nm{color:var(--s-unread)}
+
+.groupsep{font-family:var(--mono);font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--on-faint);padding:12px 0 4px;border-top:1px solid var(--outline-variant);margin-top:6px}
+
+/* core cards */
+.cards{display:grid;grid-template-columns:1fr 1fr;gap:9px}
+.card{background:var(--c-highest);border-radius:9px;padding:11px;min-height:64px;display:flex;flex-direction:column;justify-content:space-between}
+.card .cn{font-weight:500}
+.card .cs{font-family:var(--mono);font-size:11px;color:var(--on-variant)}
+.card.absent{background:var(--c);}
+.card.absent .cn,.card.absent .cs{color:var(--on-faint)}
+
+/* signal pills */
+.pills{display:flex;flex-wrap:wrap;gap:7px;margin-top:12px}
+.pill{font-family:var(--mono);font-size:11px;padding:2px 9px;border-radius:9999px;border:1px solid}
+.pill.present{color:var(--s-present);background:var(--s-present-c);border-color:var(--s-present)}
+.pill.absent{color:var(--s-absent);background:var(--s-absent-c);border-color:var(--s-absent)}
+.pill.unread{color:var(--s-unread);background:var(--s-unread-c);border-color:var(--s-unread)}
+.pill.unchecked{color:var(--s-unchecked);background:var(--s-unchecked-c);border-color:var(--s-unchecked)}
+.riskline{display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--outline-variant);font-size:13.5px}
+.riskline:last-child{border-bottom:none}
+.riskline b{font-family:var(--mono);font-weight:500}
+
+/* ---------- artifact view ---------- */
+.banner{display:flex;gap:12px;align-items:center;flex-wrap:wrap;padding:10px 16px;background:var(--s-unread-c);border-bottom:1px solid var(--s-unread)}
+.banner .bt{color:var(--s-unread);font-size:13.5px}
+.banner .bt b{font-weight:600}
+.avhead{padding:14px 16px;border-bottom:1px solid var(--outline-variant);display:flex;flex-wrap:wrap;gap:8px 14px;align-items:baseline}
+.avhead h2{margin:0;font-size:17px;font-weight:600}
+.avhead .p{font-family:var(--mono);font-size:11.5px;color:var(--on-variant);flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis}
+.tl{padding:14px 16px;display:flex;flex-direction:column}
+.entry{display:grid;grid-template-columns:96px 1fr;gap:12px;padding:9px 0;border-bottom:1px solid var(--outline-variant)}
+.entry:last-child{border-bottom:none}
+.etype{font-family:var(--mono);font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;padding:2px 7px;border-radius:3px;border:1px solid;height:fit-content;text-align:center}
+.etype.decision{color:var(--on-variant);border-color:var(--outline)}
+.etype.change{color:var(--on-variant);border-color:var(--outline)}
+.etype.override{color:var(--s-unread);border-color:var(--s-unread);background:var(--s-unread-c);font-weight:500}
+.etype.assumption{color:var(--s-unchecked);border-color:var(--s-unchecked);background:var(--s-unchecked-c);font-weight:500}
+.etype.event{color:var(--on-faint);border-color:var(--outline-variant)}
+.etext{min-width:0}
+.filters{display:flex;gap:7px;flex-wrap:wrap;padding:11px 16px;border-bottom:1px solid var(--outline-variant)}
+.f{font-family:var(--mono);font-size:11px;padding:3px 10px;border-radius:9999px;border:1px solid var(--outline);color:var(--on-variant)}
+.f.on{color:var(--on-primary);background:var(--primary);border-color:var(--primary)}
+</style>
+</head>
+<body>
+<div class="shell">
+
+<p class="caption">Key screen 1 — Dashboard · mid-refresh, with a degraded row and an unordered group</p>
+<div class="frame">
+  <div style="padding:12px 16px;border-bottom:1px solid var(--outline-variant)">
+    <div style="display:flex;flex-wrap:wrap;gap:10px 18px;align-items:center">
+      <span class="proj">bmad</span>
+      <span class="path">/home/jamie/code/scratch/bmad</span>
+      <span class="gitflag">git · 3 uncommitted</span>
+      <span class="currency">scanned 4 min ago</span>
+      <button class="btn btn-primary focused">Refresh</button>
+    </div>
+    <div class="progress"><i></i></div>
+    <div class="progresslabel">Scanning — 41 of 108 files</div>
+  </div>
+
+  <div class="grid">
+    <div class="col">
+      <div class="tile">
+        <p class="tlabel">Recent activity</p>
+        <div class="row focused">
+          <div class="what"><span class="nm">ARCHITECTURE-SPINE.md — status set to final</span><span class="mt">architecture · 14 min ago</span></div>
+          <span class="badge strong">uncommitted</span>
+        </div>
+        <div class="row">
+          <div class="what"><span class="nm">prd.md — FR-28 withdrawn</span><span class="mt">prds · 38 min ago</span></div>
+          <span class="badge strong">commit</span>
+        </div>
+        <div class="row">
+          <div class="what"><span class="nm">SPEC.md derived from memlog</span><span class="mt">specs · today</span></div>
+          <span class="badge weak">day only</span>
+        </div>
+        <div class="row degraded">
+          <div class="what"><span class="nm">sprint-status.yaml — unreadable at parse</span><span class="mt">line 34 · invalid mapping</span></div>
+          <span class="badge weak">file time</span>
+        </div>
+        <div class="groupsep">Order unknown — 2 items</div>
+        <div class="row">
+          <div class="what"><span class="nm">bmad-source-shapes.md</span><span class="mt">specs · no ordering evidence</span></div>
+          <span class="badge weak">none</span>
+        </div>
+        <div class="row">
+          <div class="what"><span class="nm">addendum.md</span><span class="mt">prds · no ordering evidence</span></div>
+          <span class="badge weak">none</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="col">
+      <div class="tile raised">
+        <p class="tlabel">Core artifacts</p>
+        <div class="cards">
+          <div class="card"><span class="cn">PRD</span><span class="cs">final · 69 FR</span></div>
+          <div class="card"><span class="cn">Architecture</span><span class="cs">final · 19 AD</span></div>
+          <div class="card"><span class="cn">Spec</span><span class="cs">6 CAP</span></div>
+          <div class="card absent"><span class="cn">Epics</span><span class="cs">Not found</span></div>
+        </div>
+      </div>
+
+      <div class="tile">
+        <p class="tlabel">Risk summary</p>
+        <div class="riskline"><span>Overrides recorded</span><b>3</b></div>
+        <div class="riskline"><span>Assumptions open</span><b>1</b></div>
+        <div class="riskline"><span>Final with open items</span><b>0</b></div>
+        <div class="riskline"><span>Unreadable artifacts</span><b>1</b></div>
+        <div class="pills">
+          <span class="pill present">Present</span>
+          <span class="pill absent">Not found</span>
+          <span class="pill unread">Unreadable</span>
+          <span class="pill unchecked">Not checked</span>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+<p class="note">Shows: global chrome with determinate progress · strong vs weak evidence badges · a degraded row rendered in place · the Order unknown group · an absent core card at on-surface-faint · all four signal pills with their 1px strokes · focus ring on both a filled button (with inner stroke) and a row.</p>
+
+<p class="caption">Key screen 2 — Artifact view · memlog timeline, opened stale</p>
+<div class="frame">
+  <div class="banner">
+    <span class="bt"><b>This file changed after the last scan.</b> You are reading the version scanned 4 minutes ago.</span>
+    <button class="btn btn-ghost" style="margin-left:auto">Refresh</button>
+  </div>
+  <div class="avhead">
+    <h2>.memlog.md</h2>
+    <span class="p">_bmad-output/planning-artifacts/prds/prd-bmad-2026-08-28/.memlog.md</span>
+    <button class="btn btn-ghost">Copy path</button>
+    <button class="btn btn-ghost focused">Open in editor</button>
+  </div>
+  <div class="filters">
+    <span class="f on">all 79</span>
+    <span class="f">decision 31</span>
+    <span class="f">change 24</span>
+    <span class="f">override 3</span>
+    <span class="f">assumption 1</span>
+    <span class="f">event 20</span>
+  </div>
+  <div class="tl">
+    <div class="entry"><span class="etype override">override</span><span class="etext">Git decision was made on a false premise supplied by the parent — BMAD ships git_evidence.py, documented "only MEASURES". Must be re-offered on correct facts.</span></div>
+    <div class="entry"><span class="etype decision">decision</span><span class="etext">Read-only confirmed for v1: agents write these files during display; fix-sprint-status proves single-writer corruption already occurs.</span></div>
+    <div class="entry"><span class="etype assumption">assumption</span><span class="etext">Should the heading-weight carve-up defer to BMAD's own sharding when a doc is already sharded? Unresolved.</span></div>
+    <div class="entry"><span class="etype change">change</span><span class="etext">FR-7 revised: no-BMAD-artifacts case now serves a plain page rather than exiting to terminal.</span></div>
+    <div class="entry"><span class="etype event">event</span><span class="etext">PRD finalized</span></div>
+  </div>
+</div>
+<p class="note">Shows: the stale banner in unreadable-amber, which is the one place a signal colour carries chrome · override and assumption typed distinctly from decision/change/event, per FR-19 "distinguishable at a glance" · type-count filters in the URL · read-only affordances only, no action that writes.</p>
+
+</div>
+</body>
+</html>

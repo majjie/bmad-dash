@@ -1,0 +1,388 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>bmad-dash — dark theme variations</title>
+<style>
+/* ============================================================
+   Five dark Material-3-flavoured variations for bmad-dash.
+   All use M3 tonal elevation (surface-container ladder), never shadow.
+   All body text >= 4.5:1 on its surface; accents >= 3:1 for UI/focus.
+   ============================================================ */
+*{box-sizing:border-box}
+body{
+  margin:0; background:#0a0c0d; color:#e8eaeb;
+  font-family:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  font-size:15px; line-height:1.5;
+}
+.page{max-width:1500px;margin:0 auto;padding:28px 24px 80px}
+h1{font-size:1.5rem;margin:0 0 6px;font-weight:600;letter-spacing:-.01em}
+.lede{color:#98a0a3;margin:0 0 8px;max-width:80ch;font-size:14px}
+.hint{color:#7e878a;margin:0 0 26px;max-width:80ch;font-size:13px}
+
+.variants{display:flex;flex-direction:column;gap:30px}
+.variant{border:1px solid #23282a;border-radius:12px;overflow:hidden;background:#101314}
+.vhead{padding:14px 18px;border-bottom:1px solid #23282a;display:flex;flex-wrap:wrap;gap:4px 14px;align-items:baseline}
+.vname{font-weight:600;font-size:1.02rem}
+.vreg{color:#98a0a3;font-size:13px}
+.vnum{font-family:ui-monospace,monospace;font-size:11px;color:#6f797c;letter-spacing:.1em;text-transform:uppercase}
+
+/* token chips */
+.chips{display:flex;flex-wrap:wrap;gap:7px;padding:14px 18px;border-bottom:1px solid #23282a}
+.chip{display:flex;align-items:center;gap:7px;font-family:ui-monospace,monospace;font-size:10.5px;color:#98a0a3;border:1px solid #2a3033;border-radius:20px;padding:3px 9px 3px 4px}
+.sw{width:16px;height:16px;border-radius:50%;border:1px solid rgba(255,255,255,.14)}
+
+/* the demo surface */
+.demo{padding:20px 18px 22px}
+.grid{display:grid;grid-template-columns:1fr;gap:12px}
+@media(min-width:900px){.grid{grid-template-columns:1.45fr 1fr}}
+.tile{border-radius:12px;padding:14px 15px}
+.tile h3{margin:0 0 10px;font-size:11px;letter-spacing:.1em;text-transform:uppercase;font-weight:600}
+.rows{display:flex;flex-direction:column}
+.row{display:flex;gap:11px;align-items:baseline;padding:8px 0;border-bottom:1px solid rgba(255,255,255,.055)}
+.row:last-child{border-bottom:none}
+.row .what{flex:1;min-width:0}
+.row .name{font-size:14px;display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.row .sub{font-size:11.5px;opacity:.72;font-family:ui-monospace,monospace}
+.ev{font-family:ui-monospace,monospace;font-size:10px;letter-spacing:.05em;text-transform:uppercase;padding:2px 6px;border-radius:3px;white-space:nowrap;border:1px solid transparent}
+.core{display:grid;grid-template-columns:1fr 1fr;gap:9px}
+.cd{border-radius:9px;padding:10px 11px;min-height:62px;display:flex;flex-direction:column;justify-content:space-between}
+.cd .cn{font-size:13px;font-weight:500}
+.cd .cs{font-size:10.5px;font-family:ui-monospace,monospace;opacity:.7}
+.cd.gone{opacity:.42}
+.sig{display:flex;flex-wrap:wrap;gap:6px;margin-top:11px}
+.pill{font-size:10.5px;font-family:ui-monospace,monospace;padding:2px 8px;border-radius:20px;letter-spacing:.03em}
+.focusdemo{margin-top:13px;display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+.btn{font-size:12.5px;padding:6px 13px;border-radius:20px;border:1px solid transparent;font-weight:500}
+.btn.focused{outline-offset:2px}
+.note{font-size:11px;color:#7e878a;margin:12px 18px 16px;font-family:ui-monospace,monospace}
+
+/* ---------- V1 · GRAPHITE / CYAN-SLATE ---------- */
+/* surface #121617 · container-low #181d1e · high #212829 · primary #6fd3c6 · outline #394345 */
+.v1 .demo{background:#121617}
+.v1 .tile{background:#181d1e}
+.v1 .tile.raised{background:#212829}
+.v1 .tile h3{color:#8fa0a3}
+.v1 .name{color:#e5eaea}
+.v1 .sub{color:#93a3a4}
+.v1 .ev{color:#6fd3c6;border-color:#2c4b48}
+.v1 .ev.weak{color:#9aa8aa;border-color:#333c3e}
+.v1 .cd{background:#212829}
+.v1 .cd .cn{color:#e5eaea}
+.v1 .pill.present{background:#1d3a37;color:#7fd9cd}
+.v1 .pill.absent{background:#20282a;color:#96a5a7}
+.v1 .pill.unread{background:#3d2f20;color:#e0b072}
+.v1 .pill.unchecked{background:#2a2333;color:#b8a2d6}
+.v1 .btn{background:#6fd3c6;color:#08302c}
+.v1 .btn.ghost{background:transparent;color:#6fd3c6;border-color:#394345}
+.v1 .btn.focused{outline:2px solid #6fd3c6}
+
+/* ---------- V2 · INK / AMBER-SIGNAL ---------- */
+/* surface #14161a · container-low #1b1e24 · high #24282f · primary #f0b354 · outline #3a4048 */
+.v2 .demo{background:#14161a}
+.v2 .tile{background:#1b1e24}
+.v2 .tile.raised{background:#24282f}
+.v2 .tile h3{color:#98a0ae}
+.v2 .name{color:#e7e9ee}
+.v2 .sub{color:#98a0ae}
+.v2 .ev{color:#f0b354;border-color:#4c3d20}
+.v2 .ev.weak{color:#9aa2b0;border-color:#383e46}
+.v2 .cd{background:#24282f}
+.v2 .cd .cn{color:#e7e9ee}
+.v2 .pill.present{background:#2c3a2b;color:#96cf8e}
+.v2 .pill.absent{background:#252932;color:#9aa2b0}
+.v2 .pill.unread{background:#43301c;color:#f0b354}
+.v2 .pill.unchecked{background:#2b2b38;color:#a8a8cc}
+.v2 .btn{background:#f0b354;color:#31220a}
+.v2 .btn.ghost{background:transparent;color:#f0b354;border-color:#3a4048}
+.v2 .btn.focused{outline:2px solid #f0b354}
+
+/* ---------- V3 · NEAR-MONO / SINGLE ACCENT ---------- */
+/* surface #131313 · container-low #1a1a1a · high #242424 · primary #d8d8d8 · signal #7aa2f7 */
+.v3 .demo{background:#131313}
+.v3 .tile{background:#1a1a1a}
+.v3 .tile.raised{background:#242424}
+.v3 .tile h3{color:#9a9a9a}
+.v3 .name{color:#e6e6e6}
+.v3 .sub{color:#949494}
+.v3 .ev{color:#e6e6e6;border-color:#3a3a3a}
+.v3 .ev.weak{color:#8f8f8f;border-color:#2e2e2e}
+.v3 .cd{background:#242424}
+.v3 .cd .cn{color:#e6e6e6}
+.v3 .pill.present{background:#2a2a2a;color:#e0e0e0}
+.v3 .pill.absent{background:#202020;color:#8f8f8f}
+.v3 .pill.unread{background:#332b22;color:#d9ab74}
+.v3 .pill.unchecked{background:#222831;color:#8fb0e8}
+.v3 .btn{background:#e6e6e6;color:#161616}
+.v3 .btn.ghost{background:transparent;color:#d8d8d8;border-color:#3a3a3a}
+.v3 .btn.focused{outline:2px solid #7aa2f7}
+
+/* ---------- V4 · DEEP INDIGO / M3 TONAL ---------- */
+/* surface #131318 · container-low #1b1b23 · high #25252f · primary #b3c0ff · outline #43435a */
+.v4 .demo{background:#131318}
+.v4 .tile{background:#1b1b23}
+.v4 .tile.raised{background:#25252f}
+.v4 .tile h3{color:#9d9db4}
+.v4 .name{color:#e5e4ee}
+.v4 .sub{color:#9d9db4}
+.v4 .ev{color:#b3c0ff;border-color:#3b3f66}
+.v4 .ev.weak{color:#9d9db4;border-color:#383848}
+.v4 .cd{background:#25252f}
+.v4 .cd .cn{color:#e5e4ee}
+.v4 .pill.present{background:#25344a;color:#9cc4ef}
+.v4 .pill.absent{background:#26262f;color:#9d9db4}
+.v4 .pill.unread{background:#43301f;color:#eeb277}
+.v4 .pill.unchecked{background:#332742;color:#c6a8e0}
+.v4 .btn{background:#b3c0ff;color:#1a1f45}
+.v4 .btn.ghost{background:transparent;color:#b3c0ff;border-color:#43435a}
+.v4 .btn.focused{outline:2px solid #b3c0ff}
+
+/* ---------- V5 · WARM CHARCOAL / MUTED SAGE ---------- */
+/* surface #17151400 → #171514 · container-low #1f1c1a · high #292522 · primary #a9c49a · outline #4a443f */
+.v5 .demo{background:#171514}
+.v5 .tile{background:#1f1c1a}
+.v5 .tile.raised{background:#292522}
+.v5 .tile h3{color:#a49b92}
+.v5 .name{color:#ece7e2}
+.v5 .sub{color:#a49b92}
+.v5 .ev{color:#a9c49a;border-color:#3d4a37}
+.v5 .ev.weak{color:#a49b92;border-color:#403a35}
+.v5 .cd{background:#292522}
+.v5 .cd .cn{color:#ece7e2}
+.v5 .pill.present{background:#2f3a2a;color:#a9c49a}
+.v5 .pill.absent{background:#2a2624;color:#a49b92}
+.v5 .pill.unread{background:#43301d;color:#e5ac6d}
+.v5 .pill.unchecked{background:#332a33;color:#c4a3bd}
+.v5 .btn{background:#a9c49a;color:#1f2a19}
+.v5 .btn.ghost{background:transparent;color:#a9c49a;border-color:#4a443f}
+.v5 .btn.focused{outline:2px solid #a9c49a}
+</style>
+</head>
+<body>
+<div class="page">
+  <h1>bmad-dash — five dark directions</h1>
+  <p class="lede">The same dashboard fragment in five palettes. All use Material 3 tonal elevation, so tiles separate from the ground by surface tone rather than shadow. All body text clears 4.5:1 on its own surface; accents and focus rings clear 3:1.</p>
+  <p class="hint">Real content throughout — the activity feed, the core-artifact tiles, the four signal states, and a focused control so you can judge the focus ring. Pick a number, or say what to pull from one into another.</p>
+
+  <div class="variants">
+
+  <!-- ================= V1 ================= -->
+  <section class="variant v1">
+    <div class="vhead"><span class="vnum">01</span><span class="vname">Graphite / Cyan-slate</span><span class="vreg">Cool and instrumental. Reads like a measuring tool.</span></div>
+    <div class="chips">
+      <span class="chip"><span class="sw" style="background:#121617"></span>surface</span>
+      <span class="chip"><span class="sw" style="background:#181d1e"></span>container-low</span>
+      <span class="chip"><span class="sw" style="background:#212829"></span>container-high</span>
+      <span class="chip"><span class="sw" style="background:#6fd3c6"></span>primary</span>
+      <span class="chip"><span class="sw" style="background:#e5eaea"></span>on-surface</span>
+      <span class="chip"><span class="sw" style="background:#394345"></span>outline</span>
+    </div>
+    <div class="demo">
+      <div class="grid">
+        <div class="tile">
+          <h3>Recent activity</h3>
+          <div class="rows">
+            <div class="row"><div class="what"><span class="name">ARCHITECTURE-SPINE.md finalized</span><span class="sub">architecture · 14 min ago</span></div><span class="ev">commit</span></div>
+            <div class="row"><div class="what"><span class="name">prd.md — 3 requirements withdrawn</span><span class="sub">prds · 41 min ago</span></div><span class="ev">uncommitted</span></div>
+            <div class="row"><div class="what"><span class="name">SPEC.md derived from memlog</span><span class="sub">specs · today</span></div><span class="ev weak">day only</span></div>
+            <div class="row"><div class="what"><span class="name">review-adversarial-seams.md</span><span class="sub">architecture/reviews · today</span></div><span class="ev weak">day only</span></div>
+          </div>
+        </div>
+        <div class="tile raised">
+          <h3>Core artifacts</h3>
+          <div class="core">
+            <div class="cd"><span class="cn">PRD</span><span class="cs">final · 69 FR</span></div>
+            <div class="cd"><span class="cn">Architecture</span><span class="cs">final · 19 AD</span></div>
+            <div class="cd"><span class="cn">Spec</span><span class="cs">6 CAP</span></div>
+            <div class="cd gone"><span class="cn">Epics</span><span class="cs">absent</span></div>
+          </div>
+          <div class="sig">
+            <span class="pill present">present</span><span class="pill absent">absent</span><span class="pill unread">unreadable</span><span class="pill unchecked">unchecked</span>
+          </div>
+          <div class="focusdemo">
+            <button class="btn focused">Refresh</button>
+            <button class="btn ghost">Open in editor</button>
+          </div>
+        </div>
+      </div>
+    </div>
+    <p class="note">primary #6fd3c6 · surface #121617 · outline #394345</p>
+  </section>
+
+  <!-- ================= V2 ================= -->
+  <section class="variant v2">
+    <div class="vhead"><span class="vnum">02</span><span class="vname">Ink / Amber-signal</span><span class="vreg">Blue-black ground, warm accent. Attention feels earned rather than constant.</span></div>
+    <div class="chips">
+      <span class="chip"><span class="sw" style="background:#14161a"></span>surface</span>
+      <span class="chip"><span class="sw" style="background:#1b1e24"></span>container-low</span>
+      <span class="chip"><span class="sw" style="background:#24282f"></span>container-high</span>
+      <span class="chip"><span class="sw" style="background:#f0b354"></span>primary</span>
+      <span class="chip"><span class="sw" style="background:#e7e9ee"></span>on-surface</span>
+      <span class="chip"><span class="sw" style="background:#3a4048"></span>outline</span>
+    </div>
+    <div class="demo">
+      <div class="grid">
+        <div class="tile">
+          <h3>Recent activity</h3>
+          <div class="rows">
+            <div class="row"><div class="what"><span class="name">ARCHITECTURE-SPINE.md finalized</span><span class="sub">architecture · 14 min ago</span></div><span class="ev">commit</span></div>
+            <div class="row"><div class="what"><span class="name">prd.md — 3 requirements withdrawn</span><span class="sub">prds · 41 min ago</span></div><span class="ev">uncommitted</span></div>
+            <div class="row"><div class="what"><span class="name">SPEC.md derived from memlog</span><span class="sub">specs · today</span></div><span class="ev weak">day only</span></div>
+            <div class="row"><div class="what"><span class="name">review-adversarial-seams.md</span><span class="sub">architecture/reviews · today</span></div><span class="ev weak">day only</span></div>
+          </div>
+        </div>
+        <div class="tile raised">
+          <h3>Core artifacts</h3>
+          <div class="core">
+            <div class="cd"><span class="cn">PRD</span><span class="cs">final · 69 FR</span></div>
+            <div class="cd"><span class="cn">Architecture</span><span class="cs">final · 19 AD</span></div>
+            <div class="cd"><span class="cn">Spec</span><span class="cs">6 CAP</span></div>
+            <div class="cd gone"><span class="cn">Epics</span><span class="cs">absent</span></div>
+          </div>
+          <div class="sig">
+            <span class="pill present">present</span><span class="pill absent">absent</span><span class="pill unread">unreadable</span><span class="pill unchecked">unchecked</span>
+          </div>
+          <div class="focusdemo">
+            <button class="btn focused">Refresh</button>
+            <button class="btn ghost">Open in editor</button>
+          </div>
+        </div>
+      </div>
+    </div>
+    <p class="note">primary #f0b354 · surface #14161a · outline #3a4048</p>
+  </section>
+
+  <!-- ================= V3 ================= -->
+  <section class="variant v3">
+    <div class="vhead"><span class="vnum">03</span><span class="vname">Near-mono / Single accent</span><span class="vreg">Almost no colour. Colour becomes information, never decoration.</span></div>
+    <div class="chips">
+      <span class="chip"><span class="sw" style="background:#131313"></span>surface</span>
+      <span class="chip"><span class="sw" style="background:#1a1a1a"></span>container-low</span>
+      <span class="chip"><span class="sw" style="background:#242424"></span>container-high</span>
+      <span class="chip"><span class="sw" style="background:#d8d8d8"></span>primary</span>
+      <span class="chip"><span class="sw" style="background:#7aa2f7"></span>focus</span>
+      <span class="chip"><span class="sw" style="background:#3a3a3a"></span>outline</span>
+    </div>
+    <div class="demo">
+      <div class="grid">
+        <div class="tile">
+          <h3>Recent activity</h3>
+          <div class="rows">
+            <div class="row"><div class="what"><span class="name">ARCHITECTURE-SPINE.md finalized</span><span class="sub">architecture · 14 min ago</span></div><span class="ev">commit</span></div>
+            <div class="row"><div class="what"><span class="name">prd.md — 3 requirements withdrawn</span><span class="sub">prds · 41 min ago</span></div><span class="ev">uncommitted</span></div>
+            <div class="row"><div class="what"><span class="name">SPEC.md derived from memlog</span><span class="sub">specs · today</span></div><span class="ev weak">day only</span></div>
+            <div class="row"><div class="what"><span class="name">review-adversarial-seams.md</span><span class="sub">architecture/reviews · today</span></div><span class="ev weak">day only</span></div>
+          </div>
+        </div>
+        <div class="tile raised">
+          <h3>Core artifacts</h3>
+          <div class="core">
+            <div class="cd"><span class="cn">PRD</span><span class="cs">final · 69 FR</span></div>
+            <div class="cd"><span class="cn">Architecture</span><span class="cs">final · 19 AD</span></div>
+            <div class="cd"><span class="cn">Spec</span><span class="cs">6 CAP</span></div>
+            <div class="cd gone"><span class="cn">Epics</span><span class="cs">absent</span></div>
+          </div>
+          <div class="sig">
+            <span class="pill present">present</span><span class="pill absent">absent</span><span class="pill unread">unreadable</span><span class="pill unchecked">unchecked</span>
+          </div>
+          <div class="focusdemo">
+            <button class="btn focused">Refresh</button>
+            <button class="btn ghost">Open in editor</button>
+          </div>
+        </div>
+      </div>
+    </div>
+    <p class="note">primary #d8d8d8 · focus #7aa2f7 · surface #131313</p>
+  </section>
+
+  <!-- ================= V4 ================= -->
+  <section class="variant v4">
+    <div class="vhead"><span class="vnum">04</span><span class="vname">Deep indigo / M3 tonal</span><span class="vreg">Closest to stock Material 3 dark. Familiar to anyone who knows the system.</span></div>
+    <div class="chips">
+      <span class="chip"><span class="sw" style="background:#131318"></span>surface</span>
+      <span class="chip"><span class="sw" style="background:#1b1b23"></span>container-low</span>
+      <span class="chip"><span class="sw" style="background:#25252f"></span>container-high</span>
+      <span class="chip"><span class="sw" style="background:#b3c0ff"></span>primary</span>
+      <span class="chip"><span class="sw" style="background:#e5e4ee"></span>on-surface</span>
+      <span class="chip"><span class="sw" style="background:#43435a"></span>outline</span>
+    </div>
+    <div class="demo">
+      <div class="grid">
+        <div class="tile">
+          <h3>Recent activity</h3>
+          <div class="rows">
+            <div class="row"><div class="what"><span class="name">ARCHITECTURE-SPINE.md finalized</span><span class="sub">architecture · 14 min ago</span></div><span class="ev">commit</span></div>
+            <div class="row"><div class="what"><span class="name">prd.md — 3 requirements withdrawn</span><span class="sub">prds · 41 min ago</span></div><span class="ev">uncommitted</span></div>
+            <div class="row"><div class="what"><span class="name">SPEC.md derived from memlog</span><span class="sub">specs · today</span></div><span class="ev weak">day only</span></div>
+            <div class="row"><div class="what"><span class="name">review-adversarial-seams.md</span><span class="sub">architecture/reviews · today</span></div><span class="ev weak">day only</span></div>
+          </div>
+        </div>
+        <div class="tile raised">
+          <h3>Core artifacts</h3>
+          <div class="core">
+            <div class="cd"><span class="cn">PRD</span><span class="cs">final · 69 FR</span></div>
+            <div class="cd"><span class="cn">Architecture</span><span class="cs">final · 19 AD</span></div>
+            <div class="cd"><span class="cn">Spec</span><span class="cs">6 CAP</span></div>
+            <div class="cd gone"><span class="cn">Epics</span><span class="cs">absent</span></div>
+          </div>
+          <div class="sig">
+            <span class="pill present">present</span><span class="pill absent">absent</span><span class="pill unread">unreadable</span><span class="pill unchecked">unchecked</span>
+          </div>
+          <div class="focusdemo">
+            <button class="btn focused">Refresh</button>
+            <button class="btn ghost">Open in editor</button>
+          </div>
+        </div>
+      </div>
+    </div>
+    <p class="note">primary #b3c0ff · surface #131318 · outline #43435a</p>
+  </section>
+
+  <!-- ================= V5 ================= -->
+  <section class="variant v5">
+    <div class="vhead"><span class="vnum">05</span><span class="vname">Warm charcoal / Muted sage</span><span class="vreg">Warm neutrals, low-saturation accent. Quieter and less clinical.</span></div>
+    <div class="chips">
+      <span class="chip"><span class="sw" style="background:#171514"></span>surface</span>
+      <span class="chip"><span class="sw" style="background:#1f1c1a"></span>container-low</span>
+      <span class="chip"><span class="sw" style="background:#292522"></span>container-high</span>
+      <span class="chip"><span class="sw" style="background:#a9c49a"></span>primary</span>
+      <span class="chip"><span class="sw" style="background:#ece7e2"></span>on-surface</span>
+      <span class="chip"><span class="sw" style="background:#4a443f"></span>outline</span>
+    </div>
+    <div class="demo">
+      <div class="grid">
+        <div class="tile">
+          <h3>Recent activity</h3>
+          <div class="rows">
+            <div class="row"><div class="what"><span class="name">ARCHITECTURE-SPINE.md finalized</span><span class="sub">architecture · 14 min ago</span></div><span class="ev">commit</span></div>
+            <div class="row"><div class="what"><span class="name">prd.md — 3 requirements withdrawn</span><span class="sub">prds · 41 min ago</span></div><span class="ev">uncommitted</span></div>
+            <div class="row"><div class="what"><span class="name">SPEC.md derived from memlog</span><span class="sub">specs · today</span></div><span class="ev weak">day only</span></div>
+            <div class="row"><div class="what"><span class="name">review-adversarial-seams.md</span><span class="sub">architecture/reviews · today</span></div><span class="ev weak">day only</span></div>
+          </div>
+        </div>
+        <div class="tile raised">
+          <h3>Core artifacts</h3>
+          <div class="core">
+            <div class="cd"><span class="cn">PRD</span><span class="cs">final · 69 FR</span></div>
+            <div class="cd"><span class="cn">Architecture</span><span class="cs">final · 19 AD</span></div>
+            <div class="cd"><span class="cn">Spec</span><span class="cs">6 CAP</span></div>
+            <div class="cd gone"><span class="cn">Epics</span><span class="cs">absent</span></div>
+          </div>
+          <div class="sig">
+            <span class="pill present">present</span><span class="pill absent">absent</span><span class="pill unread">unreadable</span><span class="pill unchecked">unchecked</span>
+          </div>
+          <div class="focusdemo">
+            <button class="btn focused">Refresh</button>
+            <button class="btn ghost">Open in editor</button>
+          </div>
+        </div>
+      </div>
+    </div>
+    <p class="note">primary #a9c49a · surface #171514 · outline #4a443f</p>
+  </section>
+
+  </div>
+</div>
+</body>
+</html>

@@ -1,0 +1,30 @@
+{
+  "name": "bmad-dash",
+  "version": "0.1.0",
+  "description": "Read-only local dashboard over a BMAD project's artifacts.",
+  "license": "MIT",
+  "author": "Nearform",
+  "//": "Running the test suite requires Node >= 22.18, which strips .ts types without a flag. The SHIPPED tool needs only the engines floor of 22, because the package ships compiled JavaScript in dist/ and never builds on install.",
+  "type": "module",
+  "bin": {
+    "bmad-dash": "dist/cli/index.js"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "esbuild src/cli/index.ts --bundle --platform=node --format=esm --target=node22 --outfile=dist/cli/index.js",
+    "typecheck": "tsc --noEmit",
+    "test": "npm run typecheck && npm run build && node scripts/run-tests.ts",
+    "prepack": "npm run build",
+    "test:raw": "node --test --test-reporter=spec \"test/**/*.test.ts\""
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.1",
+    "esbuild": "^0.28.2",
+    "typescript": "^5.9.3"
+  }
+}
