@@ -2,9 +2,9 @@
 title: 'Story 1.2 — Establish the visual foundation'
 type: 'feature'
 created: '2026-09-01'
-status: 'ready-for-dev'
+status: 'in-progress'
 review_loop_iteration: 0
-baseline_commit: '0ddf4dd2635ccc9c4cd661870625e2a3affa7483'
+baseline_commit: '06b1a76'
 context:
   - '{project-root}/_bmad-output/implementation-artifacts/epic-1-context.md'
 ---
@@ -39,12 +39,12 @@ context:
 
 ## Code Map
 
-Story 1.1 is complete and committed (`c10c3d9`). 114 tests, zero runtime dependencies.
+Story 1.1 is complete and committed (`06b1a76`). 154 tests, zero runtime dependencies. Its code review closed three high findings in the AD-1 gate; 21 medium/low findings are deferred and recorded.
 
 - `_bmad-output/planning-artifacts/ux-designs/ux-bmad-2026-08-28/DESIGN.md` -- **the normative token contract**, read by the fidelity test. 24 colours, 8 typography roles, 4 motion, 5 radius, 12 spacing, 10 component token sets. Read-only; never edited to match code.
 - `src/adapters/http/server.ts:99` -- `PLACEHOLDER_PAGE`, the constant this story replaces. Per AD-2 the document belongs in `src/render/`; move it rather than styling it in place.
 - `test/architecture.test.ts` -- the AD-1 gate scans `src/render/` automatically; no gate change expected.
-- `scripts/run-tests.ts:32` -- `DEFAULT_MIN_TESTS` is 114 and must rise with the new tests, or the floor stops meaning anything. Validation lives next door in `scripts/test-run-policy.ts`; the constant does not.
+- `scripts/run-tests.ts:32` -- `DEFAULT_MIN_TESTS` is 154 and must rise with the new tests, or the floor stops meaning anything. Validation lives next door in `scripts/test-run-policy.ts`; the constant does not.
 
 To create:
 
@@ -57,13 +57,13 @@ To create:
 ## Tasks & Acceptance
 
 **Execution:**
-- [ ] `src/render/tokens.ts` -- create the typed token module transcribing every DESIGN.md token, structured so a mismatch is locatable by name -- UX-DR1
-- [ ] `src/render/stylesheet.ts` -- emit custom properties from the tokens plus the base rules the page needs, with a `prefers-reduced-motion` block; no literal values -- UX-DR1, UX-DR2, UX-DR4, UX-DR23
-- [ ] `src/render/page.ts` -- move the document out of the HTTP adapter and give it the stylesheet; the adapter serves what render produces -- AD-2
-- [ ] `src/adapters/http/server.ts` -- consume `src/render/page.ts` instead of holding `PLACEHOLDER_PAGE`; response headers unchanged
-- [ ] `test/render/tokens.test.ts` -- parse DESIGN.md's frontmatter and assert the module matches it in both directions, covering all five matrix rows including the unreadable-file case -- UX-DR24
-- [ ] `test/render/stylesheet.test.ts` -- assert no literal values escape the tokens, that no shadow, gradient or blur appears anywhere, that both type floors hold, and that reduced motion suppresses animation
-- [ ] `scripts/run-tests.ts` -- raise `DEFAULT_MIN_TESTS` to the new total
+- [x] `src/render/tokens.ts` -- create the typed token module transcribing every DESIGN.md token, structured so a mismatch is locatable by name -- UX-DR1
+- [x] `src/render/stylesheet.ts` -- emit custom properties from the tokens plus the base rules the page needs, with a `prefers-reduced-motion` block; no literal values -- UX-DR1, UX-DR2, UX-DR4, UX-DR23
+- [x] `src/render/page.ts` -- move the document out of the HTTP adapter and give it the stylesheet; the adapter serves what render produces -- AD-2
+- [x] `src/adapters/http/server.ts` -- consume `src/render/page.ts` instead of holding `PLACEHOLDER_PAGE`; response headers unchanged
+- [x] `test/render/tokens.test.ts` -- parse DESIGN.md's frontmatter and assert the module matches it in both directions, covering all five matrix rows including the unreadable-file case -- UX-DR24
+- [x] `test/render/stylesheet.test.ts` -- assert no literal values escape the tokens, that no shadow, gradient or blur appears anywhere, that both type floors hold, and that reduced motion suppresses animation
+- [x] `scripts/run-tests.ts` -- raise `DEFAULT_MIN_TESTS` to the new total
 
 **Acceptance Criteria:**
 - Given the token module and DESIGN.md agree, when `npm test` runs, then it passes; and given any single token is changed in either file, then it fails naming that token.

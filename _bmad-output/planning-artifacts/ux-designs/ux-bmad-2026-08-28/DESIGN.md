@@ -242,7 +242,11 @@ A 4px base scale. `{spacing.tile-gap}` between tiles, `{spacing.tile-padding}` i
 
 Density comes from tight vertical rhythm rather than from small type: `{typography.body}` stays at 14px while `{spacing.row-padding-y}` compresses row spacing.
 
-Two floors, one per class. **Content text** never goes below `{typography.body-dense}`; never shrink content text to gain density. **Labels and badges** form a separate class with a floor of 11px (`{typography.tile-label}`, `{typography.mono-badge}`), carrying short, repeated strings. `mono-badge` sits at that floor rather than below it: its text is the redundant channel that keeps signal state legible without colour, so it must not be the smallest text on screen.
+Three floors, one per class, because the roles describe three kinds of text rather than two.
+
+**Content text** never goes below `{typography.body-dense}` (13px); never shrink content to gain density. **Machine values** have a floor of 12px (`{typography.mono}`) — file paths, timestamps and artifact IDs are content by any reading, but they are also scanned rather than read, and monospace at 12px stays legible where a proportional face would not. **Labels and badges** have a floor of 11px (`{typography.tile-label}`, `{typography.mono-badge}`), carrying short, repeated strings; `mono-badge` sits at that floor rather than below it, because its text is the redundant channel that keeps signal state legible without colour and must not be the smallest thing on screen.
+
+The middle class exists because the two-class version was wrong: it put the content floor at 13px while defining a content-carrying role at 12px, so `mono` was legal only by being miscalled a label. The values were chosen deliberately and are unchanged; the rule was under-specified.
 
 **Tiles are static.** Position is fixed by the design; nothing drags, resizes, or dismisses. Tile layout is a developer extension point — a new capability adds a tile — not a user preference, because remembering a user's arrangement would require persistence the architecture forbids.
 
@@ -312,7 +316,7 @@ On an element already filled with `{colors.primary}` the ring would be invisible
 
 - Don't use shadow, gradient, or blur for depth. Tone only.
 - Don't use `#000` as a ground, and don't put pure white on graphite.
-- Don't shrink content text below `{typography.body-dense}`, or any label or badge below 11px. Compress spacing instead.
+- Don't shrink content text below `{typography.body-dense}`, a machine value below 12px, or a label or badge below 11px. Compress spacing instead.
 - Don't accent more than one *control or heading* per tile with `{colors.primary}`. Repeating data columns are exempt: an evidence badge appears on every activity row by requirement, and its accent is a data value, not emphasis. The rule governs emphasis, not encoding.
 - Don't reuse a signal colour as a severity level; the set is closed and unranked.
 - Don't introduce a hex literal in a component. Every colour resolves through a token.

@@ -4,7 +4,13 @@
  * Binds the literal loopback address and nothing else, lets the OS assign a
  * free port, and rejects any request whose `Host` header does not match the
  * address and port actually bound. Nothing here reads, writes or launches
- * anything: the placeholder body is a constant.
+ * anything.
+ *
+ * It does not compose the document either. Per AD-2 the served HTML belongs to
+ * `src/render/`, so this module asks `renderPage()` for a body and decides only
+ * the status and the headers. The page was a constant here through Story 1.1;
+ * Story 1.2 moved it rather than styling it in place, because a page that gains
+ * a stylesheet in the transport layer gains components there next.
  */
 
 import {
@@ -14,6 +20,8 @@ import {
   type ServerResponse,
 } from 'node:http';
 import type { AddressInfo } from 'node:net';
+
+import { renderPage } from '../../render/page.ts';
 
 /**
  * The only interface this tool ever binds. Never a name, never a wildcard.
@@ -95,22 +103,6 @@ export interface ServerHandle {
    */
   close(): Promise<void>;
 }
-
-const PLACEHOLDER_PAGE = `<!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>bmad-dash</title>
-</head>
-<body>
-<main>
-<h1>bmad-dash</h1>
-<p>Serving. No surface built yet.</p>
-</main>
-</body>
-</html>
-`;
 
 /**
  * True when `headerValue` names exactly the address and port bound.
@@ -332,7 +324,7 @@ function handleRequest(
       'content-type': 'text/html; charset=utf-8',
       'cache-control': 'no-store',
     });
-    response.end(PLACEHOLDER_PAGE);
+    response.end(renderPage());
     return;
   }
 
