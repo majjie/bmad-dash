@@ -28,6 +28,7 @@
     "typecheck": "tsc --noEmit",
     "test": "npm run typecheck && npm run build && node scripts/run-tests.ts",
     "prepack": "npm run build",
+    "prepublishOnly": "npm test",
     "test:raw": "node --test --test-reporter=spec \"test/**/*.test.ts\""
   },
   "devDependencies": {

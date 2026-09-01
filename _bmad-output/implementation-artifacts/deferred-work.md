@@ -1,5 +1,5 @@
 - source_spec: `_bmad-output/implementation-artifacts/spec-1-1-run-the-command-and-reach-a-served-page.md`
-  summary: No `--help`, `-h` or `--version`; all three exit 2 as unknown arguments and the USAGE string is reachable only by error.
+  summary: RESOLVED 2026-09-01 by Story 1.4 — `--help`, `-h` and `--version` are implemented and exit 0, the help text is reachable on request rather than only by error, and FR-6's flag is named `--no-open`. The deferral test in test/server.test.ts was inverted to assert the new behaviour. Original: No `--help`, `-h` or `--version`; all three exit 2 as unknown arguments and the USAGE string is reachable only by error.
   evidence: Reviewers confirmed `parseArgs` runs strict with an empty options map. A published CLI with no --version is hard to support. FR-6's suppression flag is also still unnamed in the PRD.
 
 - source_spec: `_bmad-output/implementation-artifacts/spec-1-1-run-the-command-and-reach-a-served-page.md`
@@ -47,7 +47,7 @@
      the 21 below deferred by decision so 1.1 could close. Locations preserved verbatim. -->
 
 - source_spec: `_bmad-output/implementation-artifacts/spec-1-1-run-the-command-and-reach-a-served-page.md`
-  summary: (medium) Expose `--port <n>` on the CLI
+  summary: RESOLVED 2026-09-01 by Story 1.4 — `--port <n>` is exposed, validated as a plain decimal integer in range, passed to the server, and a fallback to an OS-assigned port is now reported rather than silent. This also makes the port-80 `Host` allowance and the bind-retry path reachable outside tests, which was the reason for exposing it. Original: (medium) Expose `--port <n>` on the CLI
   evidence: From the 2026-09-01 code review, located and verified there. Full text: Expose `--port <n>` on the CLI [src/cli/index.ts:54-89, 161] — resolves the decision above. Add a `port` option to the `parseArgs` call (strict, so an unknown flag still exits 2), validate it as an integer in `0..65535` and exit 2 naming the value and the range on failure, pass it into `start(...)`,
 
 - source_spec: `_bmad-output/implementation-artifacts/spec-1-1-run-the-command-and-reach-a-served-page.md`
@@ -161,3 +161,11 @@
 - source_spec: `_bmad-output/implementation-artifacts/spec-1-2-establish-the-visual-foundation.md`
   summary: (low) RE-DEFERRED from Story 1.2 — the declared contrast pairing table that 1.2's entry said "Story 1.3 extends as it introduces surfaces" was not extended by Story 1.3.
   evidence: Re-recorded 2026-09-01 rather than left as a silently unmet trigger. Story 1.3 introduced three header pairings, all of which reuse colours the existing structural tests already sweep across the whole tonal ladder — `on-surface-variant` on every ladder level, which covers `.project-path` and `.project-signal`. So no new *pairing* went unchecked, and building the declared table would have been ceremony. The trigger stands for the first story that introduces a colour pairing the ladder sweep does not already cover.
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-1-4-open-the-browser-but-never-depend-on-it.md`
+  summary: (low) A repeated flag silently takes the last value — `--port 3000 --port 4000` binds 4000, and nothing warns. `parseArgs` is not configured with `multiple`, and the help text does not say last-wins.
+  evidence: From the Story 1.4 review, 2026-09-01, verified against the built CLI. Left as-is because last-wins is the conventional shell behaviour and a reader who typed a flag twice most likely meant the second; making it an error risks refusing an invocation assembled by a wrapper script that appends a default. Worth revisiting if a flag ever gains a value where silently taking the last is dangerous rather than merely surprising.
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-1-4-open-the-browser-but-never-depend-on-it.md`
+  summary: (low) The help text documents no exit codes, and does not mention that `--` ends option parsing — so `bmad-dash -- --no-open` resolving a path literally named `--no-open` is undiscoverable from the tool itself.
+  evidence: From the Story 1.4 review, 2026-09-01, both verified. The CLI deliberately distinguishes exit 2 (you typed it wrong) from exit 1 (it could not start), which is useful to a script author and currently documented nowhere. Deferred rather than added now because the right place is probably a `--help` section that grows with the flag surface, and the surface is four flags old.

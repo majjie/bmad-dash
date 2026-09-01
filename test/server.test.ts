@@ -210,9 +210,21 @@ interface CliResult {
  * Run the compiled CLI to completion, failing with a diagnostic rather than
  * stalling the suite if it never exits.
  */
+/**
+ * `--no-open` is prepended by every helper below, not left to call sites.
+ *
+ * From Story 1.4 a browser launch is the default, so a spawned CLI that serves
+ * opens a real tab — and the suite spawns one many times per run. Suppression
+ * lives in the helper so no test can forget it, and `test/cli/flags.test.ts`
+ * scans for spawns that escaped it. Prepended rather than appended: appended,
+ * it would be swallowed as the value of a trailing option such as `--port`.
+ *
+ * The one exception is the EPIPE test's shell pipeline, which builds a command
+ * string rather than an argv and is suppressed at its own site.
+ */
 function runCli(args: readonly string[], cwd: string = REPO_ROOT): Promise<CliResult> {
   return new Promise<CliResult>((resolve, reject) => {
-    const child = spawn(process.execPath, [CLI, ...args], { cwd });
+    const child = spawn(process.execPath, [CLI, '--no-open', ...args], { cwd });
     let stdout = '';
     let stderr = '';
     const timer = setTimeout(() => {
@@ -267,7 +279,9 @@ interface RunningCli {
 /** Start the compiled CLI and wait for the URL it prints. Caller must stop it. */
 function startCli(args: readonly string[], cwd: string): Promise<RunningCli> {
   return new Promise<RunningCli>((resolve, reject) => {
-    const child: ChildProcessWithoutNullStreams = spawn(process.execPath, [CLI, ...args], { cwd });
+    const child: ChildProcessWithoutNullStreams = spawn(process.execPath, [CLI, '--no-open', ...args], {
+      cwd,
+    });
     let stdout = '';
     let stderr = '';
     let settled = false;
@@ -727,6 +741,7 @@ test('the resolved target is absolute for a relative argument', () => {
   ] as const) {
     const invocation = parseInvocation([argument], cwd);
     assert.ok(invocation.ok, `${argument} should parse`);
+    assert.ok('projectRoot' in invocation, `${argument} should be a serving invocation`);
     assert.equal(invocation.projectRoot, expected, `${argument} resolved wrongly`);
   }
 });
@@ -734,6 +749,7 @@ test('the resolved target is absolute for a relative argument', () => {
 test('no argument resolves to the working directory, absolutely', () => {
   const invocation = parseInvocation([], '/tmp/somewhere');
   assert.ok(invocation.ok);
+  assert.ok('projectRoot' in invocation);
   assert.equal(invocation.projectRoot, '/tmp/somewhere');
 });
 
@@ -850,13 +866,47 @@ test('more than one path argument exits with exactly code 2', async () => {
   assert.match(result.stderr, /Accepted arguments/);
 });
 
-test('the deferred --help and --version are rejected as unknown arguments', async () => {
-  // Recorded in deferred-work.md: all three exit 2 rather than being handled.
-  for (const flag of ['--help', '-h', '--version']) {
+test('--help, -h and --version answer on stdout and exit 0', async () => {
+  // Story 1.1 asserted the opposite here, pinning the deferral recorded in
+  // deferred-work.md: all three exited 2 as unknown arguments. Story 1.4 lands
+  // them, so the assertion inverts — which is the deferral test doing its job
+  // rather than a regression.
+  for (const flag of ['--help', '-h']) {
     const result = await runCli([flag]);
-    assert.equal(result.code, 2, `${flag} should exit 2`);
-    assert.equal(result.stdout, '');
-    assert.match(result.stderr, new RegExp(escapeForRegExp(flag)));
+    assert.equal(result.code, 0, `${flag} should exit 0`);
+    assert.equal(result.stderr, '', `${flag} must not write to stderr`);
+    assert.match(result.stdout, /^Usage: bmad-dash \[path\] \[options\]/);
+  }
+
+  const version = await runCli(['--version']);
+  assert.equal(version.code, 0);
+  assert.equal(version.stderr, '');
+  assert.match(version.stdout, /^\d+\.\d+\.\d+\n$/, 'a bare semantic version and nothing else');
+});
+
+test('--help and --version bind no socket and launch nothing', async () => {
+  // The matrix row says "nothing bound, nothing launched", and both would be
+  // invisible if not asserted: a bound socket in a process that exits
+  // immediately leaves no trace, and a launcher is not observable from outside.
+  for (const flag of ['--help', '--version']) {
+    let started = 0;
+    let launched = 0;
+    const code = await run([flag], {
+      start: () => {
+        started += 1;
+        throw new Error('a server must not be started for ' + flag);
+      },
+      launch: () => {
+        launched += 1;
+        return Promise.resolve({ opened: true, command: 'stub' });
+      },
+      stdout: () => {},
+      stderr: () => {},
+      onSignal: () => {},
+    });
+    assert.equal(code, 0, `${flag} should exit 0`);
+    assert.equal(started, 0, `${flag} started a server`);
+    assert.equal(launched, 0, `${flag} launched a browser`);
   }
 });
 
@@ -920,6 +970,7 @@ test('a failure to start exits 1, distinct from the usage code 2', async () => {
   // stated point is that misuse and failure-to-start are different outcomes.
   const written: string[] = [];
   const code = await run([], {
+    launch: () => Promise.resolve({ opened: true, command: 'stub' }),
     start: () => Promise.reject(new Error('bind refused, for the test')),
     stdout: () => {},
     stderr: (text) => written.push(text),
@@ -932,6 +983,7 @@ test('a failure to start exits 1, distinct from the usage code 2', async () => {
 test('a usage error exits 2 through the same call path', async () => {
   const written: string[] = [];
   const code = await run(['--not-a-flag'], {
+    launch: () => Promise.resolve({ opened: true, command: 'stub' }),
     start: () => {
       throw new Error('start must not be reached for a usage error');
     },
@@ -950,7 +1002,7 @@ test('a closed stdout is a clean exit, not a stack trace', async () => {
   // A real pipeline is required: destroying the parent's read end does not
   // reproduce it.
   const quote = (value: string): string => `"${value}"`;
-  const pipeline = `${quote(process.execPath)} ${quote(CLI)} | ${quote(process.execPath)} -e ""`;
+  const pipeline = `${quote(process.execPath)} ${quote(CLI)} --no-open | ${quote(process.execPath)} -e ""`;
 
   const result = await new Promise<{ code: number | null; stderr: string }>((resolve, reject) => {
     const child = spawn(pipeline, { shell: true, stdio: ['ignore', 'ignore', 'pipe'] });
@@ -1019,4 +1071,27 @@ test('the handle reports the root it was given, so a caller can check it', async
   const handle = await startServer({ projectRoot: PROJECT_ROOT });
   t.after(() => handle.close());
   assert.equal(handle.projectRoot, PROJECT_ROOT);
+});
+
+test('a requested port is the port actually bound, end to end', async (t) => {
+  // Through a real spawned process, against the socket rather than against our
+  // own variable. `--port` was the CLI's first consumer of an option that had
+  // been implemented and test-only since Story 1.1.
+  // Borrowed from the OS rather than hardcoded: a fixed number fails on any
+  // machine already using it, and `startServer`'s own fallback would then bind
+  // elsewhere and make an environment collision look like a `--port` defect.
+  const wanted = await new Promise<number>((settle, fail) => {
+    const probe = createServer();
+    probe.on('error', fail);
+    probe.listen(0, LOOPBACK_ADDRESS, () => {
+      const bound = (probe.address() as AddressInfo).port;
+      probe.close(() => settle(bound));
+    });
+  });
+  const cli = await startCli(['--port', String(wanted)], REPO_ROOT);
+  t.after(() => cli.stop());
+
+  assert.equal(cli.port, wanted, `asked for ${String(wanted)}, bound ${String(cli.port)}`);
+  const response = await get({ port: wanted });
+  assert.equal(response.status, 200, 'the requested port serves the page');
 });

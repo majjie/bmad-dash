@@ -1,5 +1,7 @@
 {
   "compilerOptions": {
+    // `src/version.json` is the single published version; see src/cli/index.ts.
+    "resolveJsonModule": true,
     "target": "es2023",
     "lib": ["es2023"],
     "module": "nodenext",

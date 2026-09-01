@@ -67,6 +67,7 @@ test('the signal handler is registered before anything a consumer can observe', 
   const order: string[] = [];
 
   const code = await run([], {
+    launch: () => Promise.resolve({ opened: true, command: 'stub' }),
     start: () => {
       // The listening socket is observable too, so the handler must already be
       // in place before the bind — not merely before the URL is printed.
@@ -86,6 +87,7 @@ test('the signal handler is registered before anything a consumer can observe', 
 test('the URL is the last thing startup emits', async () => {
   const order: string[] = [];
   await run([], {
+    launch: () => Promise.resolve({ opened: true, command: 'stub' }),
     start: () => Promise.resolve(stubHandle()),
     onSignal: () => order.push('register-signal-handler'),
     stdout: () => order.push('announce-url'),
@@ -107,6 +109,7 @@ test('a signal arriving before the bind completes still exits 0', async () => {
   let handler: (() => void) | undefined;
 
   await run([], {
+    launch: () => Promise.resolve({ opened: true, command: 'stub' }),
     start: () => {
       handler?.();
       return Promise.resolve(stubHandle());
@@ -129,7 +132,10 @@ test('the EPIPE guards are installed before any write', async () => {
   // real process invocation.
   const source = await readFile(join(REPO_ROOT, 'src', 'cli', 'index.ts'), 'utf8');
   const guard = source.indexOf("stream.on('error'");
-  const invoke = source.indexOf('await run(process.argv.slice(2))');
+  // Matched on the prefix rather than the whole call: the production invocation
+  // gained an argument when `launch` became a required dependency, and a test
+  // that pins the exact call text fails on every future dependency too.
+  const invoke = source.indexOf('await run(process.argv.slice(2)');
   assert.notEqual(guard, -1, 'no EPIPE guard found');
   assert.notEqual(invoke, -1, 'could not find the run invocation');
   assert.ok(guard < invoke, 'the EPIPE guard must be installed before run() writes anything');
@@ -144,7 +150,10 @@ async function signalOnFirstByte(signal: NodeJS.Signals): Promise<{
   code: number | null;
   signal: NodeJS.Signals | null;
 }> {
-  const child = spawn(process.execPath, [CLI], { cwd: REPO_ROOT, stdio: ['ignore', 'pipe', 'ignore'] });
+  const child = spawn(process.execPath, [CLI, '--no-open'], {
+    cwd: REPO_ROOT,
+    stdio: ['ignore', 'pipe', 'ignore'],
+  });
   let sent = false;
   child.stdout.on('data', () => {
     if (sent) return;
@@ -197,6 +206,7 @@ test('the root the composition root resolves is the root the server is given', a
   const target = '/tmp/bmad-dash-seam-check';
 
   const code = await run([target], {
+    launch: () => Promise.resolve({ opened: true, command: 'stub' }),
     start: (options: { readonly projectRoot?: unknown }) => {
       seen = options.projectRoot;
       return Promise.resolve(stubHandle());
@@ -216,6 +226,7 @@ test('a relative argument reaches the server already resolved to absolute', asyn
   // differently by each of them.
   let seen = '';
   await run(['.'], {
+    launch: () => Promise.resolve({ opened: true, command: 'stub' }),
     start: (options: { readonly projectRoot?: unknown }) => {
       seen = String(options.projectRoot);
       return Promise.resolve(stubHandle());
@@ -226,4 +237,152 @@ test('a relative argument reaches the server already resolved to absolute', asyn
   });
   assert.ok(seen.startsWith('/'), `the server received a relative root: ${seen}`);
   assert.equal(seen, process.cwd());
+});
+
+test('the URL reaches stdout before any launch is attempted', async () => {
+  // AD-15 as an ordering, asserted as the order of observable events rather
+  // than as a timing window — a launch that happened to be slow would make a
+  // timing-based version pass while the guarantee was broken.
+  const order: string[] = [];
+
+  const code = await run([], {
+    start: () => Promise.resolve(stubHandle()),
+    stdout: (text: string) => {
+      order.push(`stdout:${text.trim()}`);
+    },
+    stderr: (text: string) => {
+      order.push(`stderr:${text.trim().split(':')[0] ?? ''}`);
+    },
+    launch: (url: string) => {
+      order.push(`launch:${url}`);
+      return Promise.resolve({ opened: true, command: 'stub' });
+    },
+    onSignal: () => {},
+  });
+
+  assert.equal(code, 0);
+  const announcement = order.indexOf('stdout:http://127.0.0.1:1/');
+  const attempt = order.indexOf('launch:http://127.0.0.1:1/');
+  assert.notEqual(announcement, -1, `the URL was never announced: ${order.join(' | ')}`);
+  assert.notEqual(attempt, -1, `no launch was attempted: ${order.join(' | ')}`);
+  assert.ok(
+    announcement < attempt,
+    `the launch preceded the announcement: ${order.join(' | ')}`,
+  );
+  // And the launcher is handed the URL that was announced, not a rebuilt one.
+  assert.equal(order[attempt], `launch:${order[announcement]?.slice('stdout:'.length) ?? ''}`);
+});
+
+test('--no-open attempts no launch at all', async () => {
+  // Not "launches and fails" — never calls the launcher. A suppression flag
+  // that still spawned something would be worse than none, because the reader
+  // asked for exactly the opposite.
+  let attempts = 0;
+  const code = await run(['--no-open'], {
+    start: () => Promise.resolve(stubHandle()),
+    stdout: () => {},
+    stderr: () => {},
+    launch: () => {
+      attempts += 1;
+      return Promise.resolve({ opened: true, command: 'stub' });
+    },
+    onSignal: () => {},
+  });
+  assert.equal(code, 0);
+  assert.equal(attempts, 0, '--no-open still called the launcher');
+});
+
+test('a failed launch is reported and changes nothing else', async () => {
+  // AD-15: reported and ignored. The exit code must not move, and the URL must
+  // still have been announced — a reader whose browser did not open needs the
+  // URL more than anyone.
+  const out: string[] = [];
+  const err: string[] = [];
+  const code = await run([], {
+    start: () => Promise.resolve(stubHandle()),
+    stdout: (text: string) => out.push(text),
+    stderr: (text: string) => err.push(text),
+    launch: () => Promise.resolve({ opened: false, command: 'xdg-open', reason: 'spawn xdg-open ENOENT' }),
+    onSignal: () => {},
+  });
+
+  assert.equal(code, 0, 'a failed launch must not change the exit code');
+  assert.ok(out.join('').includes('http://127.0.0.1:1/'), 'the URL is still announced');
+  const report = err.join('');
+  assert.match(report, /Could not open a browser: spawn xdg-open ENOENT\./);
+  assert.match(report, /Open the URL above\./, 'the reader is told what to do instead');
+});
+
+test('a successful launch says nothing', async () => {
+  // The common case is silent. A line saying "opened your browser" is noise
+  // next to a browser that just appeared.
+  const err: string[] = [];
+  await run([], {
+    start: () => Promise.resolve(stubHandle()),
+    stdout: () => {},
+    stderr: (text: string) => err.push(text),
+    launch: () => Promise.resolve({ opened: true, command: 'xdg-open' }),
+    onSignal: () => {},
+  });
+  assert.doesNotMatch(err.join(''), /browser/i, 'success must be silent');
+});
+
+test('the port the CLI parsed is the port the server is asked for', async () => {
+  // The same seam as `projectRoot`, one story later and in the same file:
+  // `parsePort` is tested where the value is created, `startServer` is tested
+  // where it is used, and nothing crossed the join. Deleting `port:` from the
+  // start options passed the whole suite.
+  for (const [argv, expected] of [
+    [['--port', '3000'], 3000],
+    [['--port', '0'], 0],
+    [['--port', '65535'], 65_535],
+    [[], 0],
+  ] as const) {
+    let seen: unknown = '<never called>';
+    const code = await run([...argv], {
+      start: (options: { readonly port?: unknown }) => {
+        seen = options.port;
+        return Promise.resolve(stubHandle());
+      },
+    launch: () => Promise.resolve({ opened: true, command: 'stub' }),
+      stdout: () => {},
+      stderr: () => {},
+      onSignal: () => {},
+    });
+    assert.equal(code, 0);
+    assert.equal(seen, expected, `${argv.join(' ') || '(no flags)'} reached the server as ${String(seen)}`);
+  }
+});
+
+test('a requested port that could not be bound is reported, not swallowed', async () => {
+  // The adapter falls back to an OS-assigned port so the tool still starts,
+  // which is right. Saying nothing about it is not: `--port 45999` binding
+  // 36203 in silence tells the reader their instruction was obeyed.
+  const err: string[] = [];
+  const code = await run(['--port', '45999'], {
+    start: () => Promise.resolve({ ...stubHandle(), port: 36_203, url: 'http://127.0.0.1:36203/' }),
+    launch: () => Promise.resolve({ opened: true, command: 'stub' }),
+    stdout: () => {},
+    stderr: (text: string) => err.push(text),
+    onSignal: () => {},
+  });
+
+  assert.equal(code, 0, 'a fallback is not a failure');
+  assert.match(err.join(''), /Port 45999 was not available; using 36203 instead\./);
+});
+
+test('an honoured port is not remarked on, and neither is the default', async () => {
+  // The other direction: the default of 0 *means* "whatever is free", so
+  // reporting the fallback every run would be noise on every ordinary start.
+  for (const argv of [[], ['--port', '1']]) {
+    const err: string[] = [];
+    await run([...argv], {
+      start: () => Promise.resolve(stubHandle()),
+      launch: () => Promise.resolve({ opened: true, command: 'stub' }),
+      stdout: () => {},
+      stderr: (text: string) => err.push(text),
+      onSignal: () => {},
+    });
+    assert.doesNotMatch(err.join(''), /was not available/, `${argv.join(' ') || '(default)'} should be quiet`);
+  }
 });

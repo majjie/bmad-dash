@@ -2,7 +2,7 @@
 /**
  * Composition root.
  *
- * Parses the one accepted argument, resolves it, starts the inbound HTTP
+ * Parses the arguments, resolves the target, starts the inbound HTTP
  * adapter and reports the URL actually bound. stdout carries the URL and
  * nothing else; every diagnostic goes to stderr.
  */
@@ -13,9 +13,63 @@ import { fileURLToPath } from 'node:url';
 
 import { startServer, type ServerHandle } from '../adapters/http/server.ts';
 import { resolveRealPath } from '../adapters/fs/realpath.ts';
+import { openBrowser, type LaunchResult } from '../adapters/browser/open.ts';
 
-const USAGE = 'Usage: bmad-dash [path]';
-const ACCEPTED = 'Accepted arguments: one optional path to a BMAD project. No flags are accepted.';
+const USAGE = 'Usage: bmad-dash [path] [options]';
+const ACCEPTED =
+  'Accepted arguments: one optional path to a BMAD project, and --no-open, --port <n>, ' +
+  '-h/--help, --version.';
+
+/**
+ * The lowest and highest port a socket can be asked for. `0` is meaningful — it
+ * asks the OS for a free one — so the range starts there rather than at 1.
+ */
+const MIN_PORT = 0;
+const MAX_PORT = 65_535;
+
+/**
+ * The published version.
+ *
+ * A one-key JSON file rather than `package.json`, and rather than an esbuild
+ * `--define`. Importing `package.json` works in all three toolchains but makes
+ * esbuild inline the *whole* file, shipping devDependencies and script commands
+ * to every consumer — measured, not assumed. A `--define` avoided that but had
+ * to smuggle a quoted string through the shell, and the `'"0.1.0"'` form relies
+ * on `sh` stripping the outer quotes; `cmd.exe` does not, so a Windows build
+ * shipped a version with the quotes embedded — on the one platform this story
+ * goes out of its way to support a launcher for.
+ *
+ * So the version lives in a file that contains nothing else. It is duplicated
+ * from `package.json`, which `test/cli-entry.test.ts` asserts, and
+ * `prepublishOnly` runs the suite so a stale copy cannot be published.
+ */
+import versionFile from '../version.json' with { type: 'json' };
+
+export const VERSION: string = (versionFile as { version: string }).version;
+
+/**
+ * The help text, specified in the story rather than invented here.
+ *
+ * The last two lines are the point: they state the guarantees a reader most
+ * wants from something they are about to aim at their own work, in the place
+ * they are most likely to look first.
+ */
+export const HELP = `${USAGE}
+
+A read-only local dashboard over a BMAD project's artifacts.
+
+Arguments:
+  path          the BMAD project to inspect (default: the current directory)
+
+Options:
+  --no-open     do not launch a browser; the URL is still printed
+  --port <n>    preferred port, ${String(MIN_PORT)}-${String(MAX_PORT)} (default: 0, an OS-assigned port)
+  -h, --help    print this message and exit
+  --version     print the version and exit
+
+Binds 127.0.0.1 only. Never writes to the project. Makes no outbound
+network request.
+`;
 
 /**
  * Usage error, deliberately distinct from the runtime-failure code so a caller
@@ -42,9 +96,40 @@ const STOP_SIGNALS = ['SIGINT', 'SIGTERM', 'SIGHUP'] as const;
  */
 const SHUTDOWN_TIMEOUT_MS = 2_000;
 
+/**
+ * What the arguments asked for.
+ *
+ * `print` is its own case rather than a flag on the success case, because
+ * `--help` and `--version` do not start a server at all — and the matrix row
+ * that says so ("nothing bound, nothing launched") is only assertable if the
+ * two paths are different shapes. A boolean on the serving case would have to
+ * be checked, and a check can be forgotten.
+ */
 export type Invocation =
-  | { readonly ok: true; readonly projectRoot: string }
+  | { readonly ok: true; readonly projectRoot: string; readonly open: boolean; readonly port: number }
+  | { readonly ok: true; readonly print: string }
   | { readonly ok: false; readonly message: string };
+
+/**
+ * `--port` as a number, or `null` if it is not a port.
+ *
+ * Absent means `0`, the OS-assigned default. Everything else must be a plain
+ * decimal integer in range: `Number()` alone would accept `0x10`, `1e3`, `1.5`,
+ * `' 80 '` and `Infinity`, each of which is a typo rather than a port, and
+ * `parseInt` would accept `80abc`. The pattern is checked before the value so
+ * the two cannot disagree.
+ */
+export function parsePort(raw: string | undefined): number | null {
+  if (raw === undefined) return 0;
+  // `0` alone, or a digit string with no leading zero. `0080` was accepted and
+  // parsed to 80 — which is privileged, so it then fell back to an OS-assigned
+  // port and bound 40821. A typo should be refused, not silently reinterpreted
+  // twice. This also keeps the rule consistent with rejecting `+80` and ` 80 `.
+  if (!/^(0|[1-9][0-9]*)$/.test(raw)) return null;
+  const port = Number(raw);
+  if (!Number.isSafeInteger(port) || port < MIN_PORT || port > MAX_PORT) return null;
+  return port;
+}
 
 /**
  * The first token that looks like an option.
@@ -57,10 +142,47 @@ export type Invocation =
 function firstOptionToken(argv: readonly string[]): string | undefined {
   for (const token of argv) {
     if (token === '--') return undefined;
-    if (token.length > 1 && token.startsWith('-')) return token;
+    if (token.length <= 1 || !token.startsWith('-')) continue;
+    // The first option token is not necessarily the *unknown* one. It was,
+    // while no flag was accepted at all — every option token was unknown by
+    // definition. Now that four are declared, reporting the first would answer
+    // `bmad-dash --no-open --nope` with "Unknown argument: --no-open", naming a
+    // flag that works and sending the reader to look in the wrong place.
+    if (isDeclaredOption(token)) continue;
+    return token;
   }
   return undefined;
 }
+
+/** The token following `name`, or the inline value of `name=value`. */
+function valueAfter(argv: readonly string[], name: string): string | undefined {
+  for (const [index, token] of argv.entries()) {
+    if (token === name) return argv[index + 1];
+    if (token.startsWith(`${name}=`)) return token.slice(name.length + 1);
+  }
+  return undefined;
+}
+
+/** Long and short forms the parser accepts, including `--flag=value`. */
+function isDeclaredOption(token: string): boolean {
+  const name = token.startsWith('--') ? (token.split('=')[0] ?? token) : token;
+  return DECLARED_OPTIONS.includes(name);
+}
+
+/**
+ * Every option token the parser accepts, as written on a command line.
+ *
+ * Kept beside `parseArgs`'s own options map, and `test/cli/flags.test.ts`
+ * asserts the two agree — a second list that drifts is how the message above
+ * would start lying again.
+ */
+export const DECLARED_OPTIONS: readonly string[] = [
+  '--no-open',
+  '--port',
+  '--help',
+  '-h',
+  '--version',
+];
 
 /**
  * Resolve the target path from the arguments after the node binary and script.
@@ -70,11 +192,39 @@ function firstOptionToken(argv: readonly string[]): string | undefined {
  * re-resolved against whatever directory happened to be current at the time.
  */
 export function parseInvocation(argv: readonly string[], cwd: string): Invocation {
+  // Before parsing, deliberately. `parseArgs` throws on an undeclared flag, so
+  // `--help --nope` exited 2 while the matrix promised help wins over anything
+  // else on the line — and a reader who mistyped a flag is exactly the reader
+  // who wants the help text rather than a refusal. `--` still ends options, so
+  // `bmad-dash -- --help` is a path.
+  const beforeSeparator = argv.slice(0, argv.indexOf('--') === -1 ? argv.length : argv.indexOf('--'));
+  if (beforeSeparator.includes('--help') || beforeSeparator.includes('-h')) {
+    return { ok: true, print: HELP };
+  }
+
   let positionals: string[];
+  let values: {
+    readonly 'no-open'?: boolean;
+    readonly port?: string;
+    readonly help?: boolean;
+    readonly version?: boolean;
+  };
   try {
-    ({ positionals } = parseArgs({
+    ({ positionals, values } = parseArgs({
       args: [...argv],
-      options: {},
+      options: {
+        // Declared literally as `no-open`: Node's `parseArgs` has no automatic
+        // `--no-` negation, so an `open` option would not answer to it.
+        'no-open': { type: 'boolean' },
+        // A string, then validated. `parseArgs` has no numeric type, and
+        // accepting `--port abc` only to fail later is worse than one check
+        // that names both the value and the range.
+        port: { type: 'string' },
+        help: { type: 'boolean', short: 'h' },
+        version: { type: 'boolean' },
+      },
+      // Still strict, so an undeclared flag exits 2 exactly as it did when no
+      // flag at all was accepted.
       strict: true,
       allowPositionals: true,
     }));
@@ -87,9 +237,28 @@ export function parseInvocation(argv: readonly string[], cwd: string): Invocatio
         message: `Unknown argument: ${flag ?? 'unrecognised option'}\n${ACCEPTED}\n${USAGE}`,
       };
     }
+    if (code === 'ERR_PARSE_ARGS_INVALID_OPTION_VALUE') {
+      // Node raises this for `--port -1`, because a value beginning with `-`
+      // is ambiguous with the next flag. Its prose asks "did you forget to
+      // specify the option argument?", which never names the range and sends
+      // the reader looking for a missing argument rather than a bad one.
+      const offending = valueAfter(argv, '--port');
+      return {
+        ok: false,
+        message:
+          `Invalid --port value: ${JSON.stringify(offending ?? '')}. ` +
+          `Expected an integer from ${String(MIN_PORT)} to ${String(MAX_PORT)}.\n${USAGE}`,
+      };
+    }
     const detail = error instanceof Error ? error.message : String(error);
     return { ok: false, message: `Could not parse arguments: ${detail}\n${ACCEPTED}\n${USAGE}` };
   }
+
+  // Before the positional check and before any resolution: `bmad-dash --help`
+  // with three stray paths is still a request for help, and answering it with a
+  // usage error would be pedantry.
+  if (values.help === true) return { ok: true, print: HELP };
+  if (values.version === true) return { ok: true, print: `${VERSION}\n` };
 
   if (positionals.length > 1) {
     return {
@@ -98,12 +267,22 @@ export function parseInvocation(argv: readonly string[], cwd: string): Invocatio
     };
   }
 
+  const port = parsePort(values.port);
+  if (port === null) {
+    return {
+      ok: false,
+      message:
+        `Invalid --port value: ${JSON.stringify(values.port)}. ` +
+        `Expected an integer from ${String(MIN_PORT)} to ${String(MAX_PORT)}.\n${USAGE}`,
+    };
+  }
+
   const projectRoot = resolve(cwd, positionals[0] ?? '.');
   if (!isAbsolute(projectRoot)) {
     // Unreachable via `resolve`, asserted because everything downstream trusts it.
     return { ok: false, message: `Could not resolve an absolute path for the target.\n${USAGE}` };
   }
-  return { ok: true, projectRoot };
+  return { ok: true, projectRoot, open: values['no-open'] !== true, port };
 }
 
 /**
@@ -122,12 +301,27 @@ export interface RunDependencies {
   /** Registers the shutdown handler. Injected so tests do not touch the real process. */
   readonly onSignal?: (handler: () => void) => void;
   readonly exit?: (code: number) => void;
+  /**
+   * **Required, unlike every other dependency here.**
+   *
+   * The others default to something inert or observable; this one is the only
+   * dependency whose default reaches out of the process and changes something
+   * on the user's desktop. It was optional for one afternoon, and in that time
+   * five in-process tests and one shell pipeline silently opened real browser
+   * tabs on every suite run — the tests injected `start` and `stdout` faithfully
+   * and simply never thought about this one, because nothing made them.
+   *
+   * Requiring it moves "a test forgot to stub the launcher" from something a
+   * grep might notice to something that does not compile. The real entry point
+   * passes `openBrowser`; that is the single place the side effect is chosen.
+   */
+  readonly launch: (url: string) => Promise<LaunchResult>;
 }
 
 /** Returns the process exit code. `0` means the server is up. */
 export async function run(
   argv: readonly string[],
-  dependencies: RunDependencies = {},
+  dependencies: RunDependencies,
 ): Promise<number> {
   const start = dependencies.start ?? startServer;
   const stdout = dependencies.stdout ?? ((text: string) => void process.stdout.write(text));
@@ -142,10 +336,20 @@ export async function run(
       for (const signal of STOP_SIGNALS) process.on(signal, handler);
     });
 
+  const launch = dependencies.launch;
+
   const invocation = parseInvocation(argv, process.cwd());
   if (!invocation.ok) {
     stderr(`${invocation.message}\n`);
     return EXIT_USAGE;
+  }
+
+  // `--help` and `--version` answer and leave. Nothing is bound, no signal
+  // handler is registered and no launcher is called: a successful invocation
+  // that happens not to involve a server.
+  if ('print' in invocation) {
+    stdout(invocation.print);
+    return 0;
   }
 
   /**
@@ -180,6 +384,7 @@ export async function run(
   try {
     handle = await start({
       projectRoot: invocation.projectRoot,
+      port: invocation.port,
       onError: (error) => {
         stderr(`Socket error after bind: ${error.message}\n`);
       },
@@ -190,9 +395,39 @@ export async function run(
     return EXIT_FAILURE;
   }
 
+  // A requested port that could not be bound is reported, not swallowed. The
+  // adapter falls back to an OS-assigned port so the tool still starts — which
+  // is right — but `--port 45999` binding 36203 in silence tells the reader
+  // their instruction was obeyed when it was not. Only when a port was actually
+  // asked for: the default of 0 *means* "whatever is free", so reporting it
+  // would be noise on every ordinary run.
+  if (invocation.port !== 0 && handle.port !== invocation.port) {
+    stderr(
+      `Port ${String(invocation.port)} was not available; using ${String(handle.port)} instead.\n`,
+    );
+  }
+
   stderr(`Target: ${invocation.projectRoot}\n`);
-  // Last. See the comment above before moving anything below this line.
+  // Last of the readiness announcements. See the comment above before moving
+  // anything below this line.
   stdout(`${handle.url}\n`);
+
+  /**
+   * **After the announcement, and never a gate.** AD-15: the server is bound and
+   * its URL is on stdout by the time this runs, so a launch that fails costs the
+   * reader a copy and paste and nothing else. The result is reported and
+   * discarded; the exit code does not move.
+   *
+   * Awaited rather than left dangling, so the order of events is deterministic
+   * and a test can assert it instead of sampling a timing window. `launch` never
+   * rejects — see `openBrowser` — so there is nothing here to catch.
+   */
+  if (invocation.open) {
+    const result = await launch(handle.url);
+    if (!result.opened) {
+      stderr(`Could not open a browser: ${result.reason}. Open the URL above.\n`);
+    }
+  }
 
   return 0;
 }
@@ -289,6 +524,6 @@ if (isDirectInvocation()) {
     });
   }
 
-  const code = await run(process.argv.slice(2));
+  const code = await run(process.argv.slice(2), { launch: openBrowser });
   if (code !== 0) process.exit(code);
 }

@@ -20,7 +20,16 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { request as httpRequest } from 'node:http';
 import { spawn } from 'node:child_process';
-import { mkdtemp, mkdir, symlink, rm, access, copyFile, readFile } from 'node:fs/promises';
+import {
+  mkdtemp,
+  mkdir,
+  symlink,
+  rm,
+  access,
+  copyFile,
+  readFile,
+  writeFile,
+} from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, dirname, posix } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -53,6 +62,31 @@ if (BIN_RELATIVE === undefined) {
   throw new Error('package.json declares no bin entry for bmad-dash');
 }
 const BUILT_ENTRY = join(REPO_ROOT, BIN_RELATIVE);
+
+/**
+ * Run the built entry point with arguments and collect what it printed.
+ *
+ * For the flags that answer and leave — `--version`, `--help` — so no server is
+ * ever bound and the child always exits on its own.
+ */
+function runBuilt(args: readonly string[]): Promise<{
+  readonly code: number | null;
+  readonly stdout: string;
+  readonly stderr: string;
+}> {
+  return new Promise((settle, fail) => {
+    const child = spawn(process.execPath, [BUILT_ENTRY, '--no-open', ...args], { cwd: REPO_ROOT });
+    let stdout = '';
+    let stderr = '';
+    child.stdout.setEncoding('utf8');
+    child.stderr.setEncoding('utf8');
+    child.stdout.on('data', (chunk: string) => (stdout += chunk));
+    child.stderr.on('data', (chunk: string) => (stderr += chunk));
+    child.on('error', fail);
+    child.on('close', (code) => settle({ code, stdout, stderr }));
+  });
+}
+
 const URL_PATTERN = /^http:\/\/127\.0\.0\.1:(\d+)\/$/;
 const TIMEOUT_MS = 15_000;
 
@@ -78,7 +112,7 @@ interface Served {
  */
 function serveVia(entry: string, cwd: string, flags: readonly string[] = []): Promise<Served> {
   return new Promise<Served>((resolve, reject) => {
-    const child = spawn(process.execPath, [...flags, entry], { cwd });
+    const child = spawn(process.execPath, [...flags, entry, '--no-open'], { cwd });
     let stdout = '';
     let stderr = '';
     let settled = false;
@@ -246,4 +280,121 @@ test('invoked as a copy at an unrelated path, the CLI still serves', async (t) =
   await copyFile(BUILT_ENTRY, copy);
 
   assert.equal((await serveVia(copy, dir)).status, 200);
+});
+
+test('the built artifact reports the version package.json declares', async () => {
+  // The seam this closes: the version is inlined by an esbuild `--define`, so
+  // `package.json` and `dist/` are two places one number lives. Neither a JSON
+  // import nor a build-time file read was available — the former makes esbuild
+  // inline the whole of package.json into the bundle, shipping devDependencies
+  // to consumers, and the latter needs `node:fs` in `scripts/`, which AD-1
+  // forbids. So the duplication is deliberate and this is what guards it,
+  // observed at the consuming end rather than by parsing the build command.
+  const declared = (
+    JSON.parse(await readFile(join(REPO_ROOT, 'package.json'), 'utf8')) as { version: string }
+  ).version;
+  assert.match(declared, /^\d+\.\d+\.\d+/, 'package.json must declare a semantic version');
+
+  const printed = await runBuilt(['--version']);
+  assert.equal(printed.code, 0, '--version should exit 0');
+  assert.equal(
+    printed.stdout,
+    `${declared}\n`,
+    'the built CLI reports a different version than package.json declares',
+  );
+});
+
+test('src/version.json and package.json declare the same version', async () => {
+  // The duplication this guards. `src/version.json` exists because importing
+  // package.json makes esbuild inline the whole file into dist, and a `--define`
+  // could not carry a quoted string through both sh and cmd.exe. One key in one
+  // file is the smallest honest form of that, and this is what keeps the two in
+  // step — with `prepublishOnly: npm test` ensuring it runs before a publish.
+  const declared = (
+    JSON.parse(await readFile(join(REPO_ROOT, 'package.json'), 'utf8')) as { version: string }
+  ).version;
+  const shipped = (
+    JSON.parse(await readFile(join(REPO_ROOT, 'src', 'version.json'), 'utf8')) as { version: string }
+  ).version;
+  assert.equal(shipped, declared, 'src/version.json has drifted from package.json');
+});
+
+test('src/version.json carries the version and nothing else', async () => {
+  // Its whole reason for existing is that it is not package.json. A second key
+  // would start it down the road of becoming one, and esbuild inlines all of it.
+  const raw = JSON.parse(await readFile(join(REPO_ROOT, 'src', 'version.json'), 'utf8')) as Record<
+    string,
+    unknown
+  >;
+  assert.deepEqual(Object.keys(raw), ['version']);
+});
+
+test('the published bundle carries no build metadata', async () => {
+  // The failure that ruled out importing package.json directly: esbuild inlines
+  // the whole file, so dist would have shipped devDependencies and script
+  // commands to every consumer.
+  const bundle = await readFile(join(REPO_ROOT, BIN_RELATIVE), 'utf8');
+  for (const leaked of ['devDependencies', 'esbuild', 'prepublishOnly', 'typescript']) {
+    assert.ok(!bundle.includes(leaked), `the bundle leaks ${leaked} from package.json`);
+  }
+});
+
+test('a real invocation actually reaches a platform launcher with the announced URL', async (t) => {
+  // The wiring seam. `RunDependencies.launch` being required catches *omission*
+  // at compile time, but substituting `openBrowser` for anything inert is
+  // invisible to the type system — and replacing it with a no-op passed the
+  // whole suite. Every other test either injects its own launcher or passes
+  // `--no-open`, so nothing observed which function the entry point wires.
+  //
+  // No real tab is opened: the platform launcher is shadowed on PATH by a
+  // recorder, which is the same trick used to audit the suite's own hygiene.
+  const shim = await mkdtemp(join(tmpdir(), 'bmad-dash-launcher-'));
+  t.after(() => rm(shim, { recursive: true, force: true }));
+  const log = join(shim, 'launched.txt');
+
+  // Whichever launcher this platform reaches for; `rundll32` is not shimmable
+  // this way, so Windows is covered by the adapter's unit tests alone.
+  const launcher = process.platform === 'darwin' ? 'open' : 'xdg-open';
+  const recorder = join(shim, launcher);
+  await writeFile(recorder, `#!/bin/sh\nprintf '%s\\n' "$@" >> ${JSON.stringify(log)}\n`, {
+    mode: 0o755,
+  });
+
+  const child = spawn(process.execPath, [BUILT_ENTRY], {
+    cwd: REPO_ROOT,
+    env: { ...process.env, PATH: shim },
+  });
+  t.after(() => child.kill('SIGTERM'));
+
+  const url = await new Promise<string>((settle, fail) => {
+    let out = '';
+    const timer = setTimeout(() => fail(new Error(`no URL within 10s; got ${JSON.stringify(out)}`)), 10_000);
+    timer.unref();
+    child.stdout.setEncoding('utf8');
+    child.stdout.on('data', (chunk: string) => {
+      out += chunk;
+      const line = out.split('\n')[0] ?? '';
+      if (out.includes('\n')) {
+        clearTimeout(timer);
+        settle(line.trim());
+      }
+    });
+    child.on('error', fail);
+  });
+
+  assert.match(url, /^http:\/\/127\.0\.0\.1:\d+\/$/, `unexpected URL: ${url}`);
+
+  // Give the launch its moment; it happens strictly after the announcement.
+  let recorded = '';
+  for (let attempt = 0; attempt < 40 && !recorded.includes(url); attempt += 1) {
+    await new Promise((r) => setTimeout(r, 50));
+    recorded = await readFile(log, 'utf8').catch(() => '');
+  }
+
+  assert.ok(
+    recorded.includes(url),
+    `the launcher was never invoked with the announced URL. recorded: ${JSON.stringify(recorded)}`,
+  );
+  // And behind the end-of-options separator, so a URL cannot become an option.
+  assert.ok(recorded.includes('--'), `no end-of-options separator in ${JSON.stringify(recorded)}`);
 });
