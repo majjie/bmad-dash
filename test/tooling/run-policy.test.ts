@@ -30,7 +30,7 @@ test('an absent floor override falls back to the default', () => {
 test('a floor override that cannot be read is refused, naming the value', () => {
   // `Number('abc')` is NaN and `0 < NaN` is false; `Number('')` is 0. Either
   // way the floor silently stopped protecting anything.
-  for (const bad of ['', ' ', 'abc', '-1', '1.5', 'null', 'NaN', '0x10', '1e3', '+1', '١٢']) {
+  for (const bad of ['', ' ', 'abc', '-1', '1.5', 'null', 'NaN', '0x10', '1e3', '+1', '١٢', '0', '00']) {
     const parsed = parseFloor(bad, 93);
     assert.equal(parsed.ok, false, `${JSON.stringify(bad)} must be refused`);
     if (!parsed.ok) {
@@ -43,9 +43,8 @@ test('a floor override that cannot be read is refused, naming the value', () => 
   }
 });
 
-test('a valid floor override is accepted, including zero', () => {
+test('a valid floor override is accepted; zero is not', () => {
   for (const [raw, expected] of [
-    ['0', 0],
     ['1', 1],
     ['93', 93],
     [' 7 ', 7],

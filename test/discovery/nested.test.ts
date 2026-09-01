@@ -168,7 +168,7 @@ for (const bad of ['', 'abc', '-1', '1.5', 'null', '0x10', '1e3', ' ']) {
     assert.notEqual(ran.code, 0, `a floor of ${JSON.stringify(bad)} must not be accepted`);
     assert.match(
       ran.output,
-      /BMAD_DASH_TEST_MIN must be a non-negative integer/,
+      /BMAD_DASH_TEST_MIN must be an integer of 1 or more/,
       `expected a rejection naming the bad value, got: ${ran.output}`,
     );
     assert.match(ran.output, new RegExp(JSON.stringify(JSON.stringify(bad)).slice(1, -1)));

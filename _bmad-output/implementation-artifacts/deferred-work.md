@@ -12,7 +12,8 @@
 
 - source_spec: `_bmad-output/implementation-artifacts/spec-1-1-run-the-command-and-reach-a-served-page.md`
   summary: The AD-1 gate does not cover ungated escape hatches to the filesystem (`node:module`, `node:worker_threads`, `node:vm`) or any outbound-network module, despite NFR-11 forbidding outbound requests entirely.
-  evidence: A reviewer noted the gated set is narrower than the read-only, no-telemetry claim it enforces. Expanding the gate's remit is a scope decision rather than a patch, and gating network modules would also cover NFR-11, which currently has no automated enforcement anywhere.
+  evidence: A reviewer noted the gated set is narrower than the read-only, no-telemetry claim it enforces. Expanding the gate's remit is a scope decision rather than a patch, and gating network modules would also cover NFR-11, which currently has no automated enforcement anywhere. Postponed by the user with eyes open.
+  revisit: Before Story 1.7, when markdown-it and yaml arrive. The gate reads source specifiers, so once a runtime dependency exists it could reach the network with nothing for the gate to see — a hole the gate cannot close retroactively. NFR-11 remains the only NFR with no automated enforcement until then.
 
 - source_spec: `_bmad-output/implementation-artifacts/spec-1-1-run-the-command-and-reach-a-served-page.md`
   summary: Repository hygiene absent — no .gitignore, README, LICENSE, repository or author fields, and no CI workflow running typecheck or tests.

@@ -33,6 +33,14 @@ export const PATTERN_ENV = 'BMAD_DASH_TEST_PATTERN';
  * an unparseable value silently switched the floor off. `Number('')` is `0`, so
  * a CI variable *declared without a value* did the same. The guard protecting
  * the whole suite must not be disableable by a typo.
+ *
+ * Zero is rejected too, though it parses cleanly. A floor of zero *is* no floor,
+ * and this override exists for one reason only — so the suite can test its own
+ * guard, which needs values like 1 and 999 and never 0. Anyone wanting an
+ * unguarded subset run can invoke `node --test <pattern>` directly; this runner
+ * is the guarded path, so the one capability it must not offer is a way to make
+ * itself unguarded. `BMAD_DASH_TEST_MIN: 0` in a CI file reads like a default,
+ * not like disabling a safety check.
  */
 export function parseFloor(raw: string | undefined, fallback: number): Parsed<number> {
   if (raw === undefined) return { ok: true, value: fallback };
@@ -41,7 +49,7 @@ export function parseFloor(raw: string | undefined, fallback: number): Parsed<nu
   const reject = (): Rejected => ({
     ok: false,
     message:
-      `${MIN_ENV} must be a non-negative integer, got ${JSON.stringify(raw)}. ` +
+      `${MIN_ENV} must be an integer of 1 or more, got ${JSON.stringify(raw)}. ` +
       'Refusing to run: an unreadable floor is an absent floor, and this floor is ' +
       `what proves the suite ran at all. Unset ${MIN_ENV} to use the default of ` +
       `${String(fallback)}.`,
@@ -49,7 +57,7 @@ export function parseFloor(raw: string | undefined, fallback: number): Parsed<nu
 
   if (trimmed === '' || !/^\d+$/.test(trimmed)) return reject();
   const parsed = Number(trimmed);
-  if (!Number.isSafeInteger(parsed) || parsed < 0) return reject();
+  if (!Number.isSafeInteger(parsed) || parsed < 1) return reject();
   return { ok: true, value: parsed };
 }
 
