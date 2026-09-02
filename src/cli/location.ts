@@ -21,7 +21,7 @@
  */
 
 import { canonical, toPlatform, type CanonicalPath } from '../adapters/fs/paths.ts';
-import { ConfinedReader } from '../adapters/fs/read.ts';
+import { ConfinedReader, type Entry } from '../adapters/fs/read.ts';
 
 /**
  * The two directories that make a directory a BMAD project.
@@ -45,14 +45,27 @@ export const MARKERS = ['_bmad', '_bmad-output'] as const;
  * mistyped path, a file, or a permissions problem are not answered by
  * "try running it over there".
  */
-export type Refusal = 'absent' | 'not-a-directory' | 'unreadable' | 'not-a-project';
+export type Refusal =
+  | 'absent'
+  | 'not-a-directory'
+  | 'unreadable'
+  | 'not-a-project'
+  | 'marker-out-of-tree';
 
 export type Location =
   | { readonly ok: true; readonly root: CanonicalPath }
   | { readonly ok: false; readonly reason: Refusal; readonly message: string };
 
-/** The markers, listed the way the failure messages name them. */
-function markerList(): string {
+/**
+ * The markers, listed the way the failure messages name them.
+ *
+ * Exported because Story 1.6's suggestion scan names them in its own sentence
+ * and had its own copy of this join for one review round. Two functions
+ * formatting one user-visible fragment is exactly the drift the string-index
+ * contract exists to prevent — the third marker this project keeps threatening
+ * to add would have been listed two different ways.
+ */
+export function markerList(): string {
   return MARKERS.join(' and ');
 }
 
@@ -87,7 +100,30 @@ export function resolveLocation(target: string): Location {
   // failure into whichever later story first tried to read inside it.
   const missing: string[] = [];
   for (const marker of MARKERS) {
-    const entry = reader.entryAt(marker);
+    // `entryAt` *throws* when the path escapes the root, and a marker can:
+    // `_bmad` as a symlink to somewhere else resolves outside the directory
+    // holding it, so `resolveWithin` refuses it — correctly, and by design
+    // without a non-throwing form. Uncaught, that reached the user as a Node
+    // stack trace and exit 1. It was reachable in Story 1.5 only by pointing
+    // the tool straight at such a directory; Story 1.6's scan probes every
+    // candidate in bounds, which turns it into a routine reachability.
+    let entry: Entry;
+    try {
+      entry = reader.entryAt(marker);
+    } catch {
+      // Its own refusal, not `unreadable` and not `not-a-project`: the marker
+      // is present and readable, and the reason it cannot be used is neither a
+      // permissions problem nor a missing directory. Exit 2 like every refusal
+      // but `unreadable`, and the suggestion scan does not run for it — the
+      // scan is gated on `not-a-project` alone.
+      return {
+        ok: false,
+        reason: 'marker-out-of-tree',
+        message:
+          `Cannot use ${shown} as a BMAD project: ${marker} resolves outside it.\n` +
+          'A marker that leaves the project it marks is not a marker.',
+      };
+    }
     if (entry.kind === 'unreadable') {
       return {
         ok: false,

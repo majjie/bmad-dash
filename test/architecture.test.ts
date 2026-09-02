@@ -33,14 +33,15 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, writeFile, readFile, rm, symlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, dirname, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { dirname } from 'node:path';
 
 import {
   GATED_MODULES,
   SCANNED_ROOTS,
+  SPECIFIER_PATTERN,
   collectSourceFiles,
+  scanSource,
   describeDomain,
   describeImports,
   describeOperations,
@@ -606,6 +607,7 @@ test('the scan reaches the composition root and the render layer too', async () 
   for (const required of [
     'src/cli/index.ts',
     'src/cli/location.ts',
+    'src/cli/suggest.ts',
     'src/render/page.ts',
     'src/adapters/http/server.ts',
     'scripts/run-tests.ts',
@@ -615,4 +617,161 @@ test('the scan reaches the composition root and the render layer too', async () 
   }
   // And the count is not allowed to collapse quietly.
   assert.ok(scanned.length >= 12, `only ${String(scanned.length)} files scanned`);
+});
+
+// ---------------------------------------------------------------------------
+// AD-9 rule 2: the suggestion scan is a failure message, never a resolution path
+// ---------------------------------------------------------------------------
+
+test('the listing adapter is scanned, and permitted only to read', async () => {
+  // A second unconfined module under `src/adapters/fs/` is exactly the kind of
+  // addition that makes AD-1 worth having: it steps outside the permitted root
+  // deliberately, so the *operation* layer of the gate is the only thing
+  // holding read-only. The generic assertions above cover it once it is
+  // scanned; this row is what says it is scanned at all, and that its imports
+  // are still reads.
+  const scanned = await collectSourceFiles(REPO_ROOT);
+  assert.ok(
+    scanned.includes('src/adapters/fs/list.ts'),
+    `the listing adapter is not scanned; found: ${scanned.join(', ')}`,
+  );
+
+  const source = await readFile(join(REPO_ROOT, 'src', 'adapters', 'fs', 'list.ts'), 'utf8');
+  assert.match(source, /from 'node:fs'/, 'the listing adapter must be where fs is imported');
+  assert.match(source, /readdirSync/);
+  assert.deepEqual(await findImportViolations(REPO_ROOT), []);
+  assert.deepEqual(await findMutatingOperations(REPO_ROOT), []);
+});
+
+/**
+ * Repo-relative files under the scanned roots whose imports name `suffix`.
+ *
+ * Uses the gate's own tokenizer rather than a regex over raw source. The
+ * hand-rolled version this replaces matched `/['"][^'"]*\bsuggest\.ts['"]/`
+ * against the file text, which both over- and under-reported: a doc comment
+ * merely *mentioning* the filename counted as an import, and a computed
+ * specifier counted as nothing. `scanSource` blanks comments while keeping
+ * string literals, which is exactly the view an import scan wants, and
+ * `findUnanalysable` already denies the computed-specifier escape separately.
+ *
+ * **Scoped to `SCANNED_ROOTS`** — `src`, `web`, `scripts`. `test/` is ungated
+ * by design and does import both of these modules; the rule is about what
+ * *ships*, not about what the suite is allowed to reach.
+ */
+async function importersOf(root: string, target: string): Promise<string[]> {
+  const importers: string[] = [];
+  for (const file of await collectSourceFiles(root)) {
+    if (file === target) continue;
+    const scanned = scanSource(await readFile(join(root, file), 'utf8'));
+    for (const match of scanned.withLiterals.matchAll(SPECIFIER_PATTERN)) {
+      const specifier = match[2];
+      if (specifier === undefined) continue;
+      // Resolved against the importing file, because that is the only way a
+      // relative specifier answers "which module is this". Comparing suffixes
+      // instead reported nothing at all for `'./suggest.ts'`, which is how
+      // every real importer in this repository spells it.
+      if (!specifier.startsWith('.')) continue;
+      const resolved = join(dirname(file), specifier).split(sep).join('/');
+      if (resolved === target) {
+        importers.push(file);
+        break;
+      }
+    }
+  }
+  return importers.sort();
+}
+
+test('the unconfined listing capability is importable only by the suggestion scan', async () => {
+  // Demonstrated as a hole: `import { listChildDirectories } from
+  // '../adapters/fs/list.ts'` added to `src/render/page.ts` left the whole
+  // suite green, so any module could enumerate any directory on the machine —
+  // bypassing `ConfinedReader` entirely — with all four gate layers passing.
+  //
+  // This is the enforcement AD-10's scoped exception names. The exception is
+  // only as narrow as the importer set, so the set is asserted exactly rather
+  // than as a prefix rule: a second importer is a widening of the carve-out
+  // and has to be a deliberate edit here.
+  assert.deepEqual(
+    await importersOf(REPO_ROOT, 'src/adapters/fs/list.ts'),
+    ['src/cli/suggest.ts'],
+    'only the suggestion scan may import the unconfined listing adapter',
+  );
+});
+
+test('the suggestion scan is importable only by the composition root', async () => {
+  // AD-9 rule 2 says the scan "returns nothing the domain consumes". The
+  // behavioural half is asserted below; this is the structural half, and it is
+  // the cheaper of the two to keep true — a render module or an adapter
+  // importing this file is the first step of it becoming a resolution path,
+  // and it would fail no other rule here.
+  assert.deepEqual(
+    await importersOf(REPO_ROOT, 'src/cli/suggest.ts'),
+    ['src/cli/index.ts'],
+    'the suggestion scan may only be imported by the composition root',
+  );
+});
+
+test('substituting the scan changes the suggestions and nothing about serving', async (t) => {
+  // The rule made observable, which the frozen intent requires: "at least one
+  // test must show that substituting the scan for something inert changes the
+  // suggestions and changes nothing about which root gets served."
+  //
+  // Three halves, not two, because two did not hold. A reviewer added
+  // `void suggest(invocation.projectRoot);` to the *successful* resolution path
+  // and the suite stayed green at 436: this test compared only the served root
+  // and stderr, and every scan-recording test used a refusal target, so
+  // nothing anywhere counted invocations on the success path. The fence has to
+  // face both directions.
+  const { makeProjectDir } = await import('./support/project.ts');
+  const { observeRun } = await import('./support/cli.ts');
+
+  const project = await makeProjectDir(t, 'bmad-dash-ad9-');
+  const inside = join(project, '_bmad-output');
+  const inert = (): readonly string[] => [];
+
+  // Refused: the suggestions are the only thing that moves.
+  const refusedReal = await observeRun([inside]);
+  const refusedInert = await observeRun([inside], { suggest: inert });
+  assert.equal(refusedReal.code, refusedInert.code, 'the exit code must not depend on the scan');
+  assert.deepEqual(refusedReal.served, [], 'a refused target must never reach the server');
+  assert.deepEqual(refusedInert.served, []);
+  assert.notEqual(
+    refusedReal.err,
+    refusedInert.err,
+    'replacing the scan with a stub changed no output — the suggestions are not observable',
+  );
+  // Keyed on the indented invocation line rather than on the path appearing
+  // somewhere: the refused target is `<project>/_bmad-output`, so the Story 1.5
+  // message contains `project` as a substring whatever the scan does.
+  const pasteable = (text: string): string[] =>
+    text.split('\n').filter((line) => line.startsWith('    '));
+  assert.ok(
+    pasteable(refusedReal.err).some((line) => line.endsWith(project)),
+    `the real scan suggested nothing:\n${refusedReal.err}`,
+  );
+  assert.deepEqual(
+    pasteable(refusedInert.err),
+    [],
+    `the inert scan still suggested something:\n${refusedInert.err}`,
+  );
+
+  // Served: the root is identical, the message is identical, and the scan is
+  // not called at all — resolution succeeding is precisely when it must not be.
+  const servedReal = await observeRun([project]);
+  const servedInert = await observeRun([project], { suggest: inert });
+  assert.equal(servedReal.code, 0, servedReal.err);
+  assert.equal(servedInert.code, 0, servedInert.err);
+  assert.deepEqual(servedReal.served, [project], 'the resolved root is what gets served');
+  assert.deepEqual(
+    servedReal.served,
+    servedInert.served,
+    'the root that gets served must not depend on the suggestion scan',
+  );
+  assert.equal(servedReal.err, servedInert.err, 'a served run must produce no suggestions at all');
+  assert.deepEqual(
+    servedReal.scans,
+    [],
+    'a successful resolution must not consult the suggestion scan even once',
+  );
+  assert.deepEqual(servedInert.scans, []);
 });

@@ -15,6 +15,7 @@ import { startServer, type ServerHandle } from '../adapters/http/server.ts';
 import { resolveRealPath } from '../adapters/fs/realpath.ts';
 import { openBrowser, type LaunchResult } from '../adapters/browser/open.ts';
 import { resolveLocation } from './location.ts';
+import { suggestInvocations } from './suggest.ts';
 import { toPlatform } from '../adapters/fs/paths.ts';
 
 const USAGE = 'Usage: bmad-dash [path] [options]';
@@ -337,6 +338,21 @@ export interface RunDependencies {
    * passes `openBrowser`; that is the single place the side effect is chosen.
    */
   readonly launch: (url: string) => Promise<LaunchResult>;
+  /**
+   * The bounded suggestion scan, for the `not-a-project` refusal only.
+   *
+   * A seam because AD-9 rule 2 — "must never become a resolution path" — is
+   * worth nothing as an intention. Injecting it lets a test substitute
+   * something inert and observe that the *suggestions* change, that the root
+   * reaching `start` does not, and that a **successful** resolution calls this
+   * zero times — which is the only form of that rule anything can check. It
+   * returns lines of text and its return value is written to stderr and
+   * dropped; nothing below reads it.
+   *
+   * `flags` are the options the invocation already carried, so the suggested
+   * command keeps them instead of silently asking the reader to retype.
+   */
+  readonly suggest?: (target: string, flags: readonly string[]) => readonly string[];
 }
 
 /** Returns the process exit code. `0` means the server is up. */
@@ -396,7 +412,29 @@ export async function run(
   // the first thing in the run that touches the filesystem.
   const location = resolveLocation(invocation.projectRoot);
   if (!location.ok) {
-    stderr(`${location.message}\n`);
+    // FR-7: hand over the command rather than describe the problem — but only
+    // for the one refusal a command answers. `absent`, `not-a-directory` and
+    // `unreadable` are a typo, a file and a permissions problem respectively,
+    // and "try running it over there" answers none of them. Branching on the
+    // `Refusal` code rather than on the message text, so rewording a sentence
+    // cannot silently switch the scan on or off.
+    // Reconstructed from the parsed invocation rather than replayed from argv:
+    // argv also holds the path being replaced, and `--port 3000 --port 4000`
+    // last-wins means the raw text is not what the tool acted on anyway.
+    const flags: string[] = [];
+    if (!invocation.open) flags.push('--no-open');
+    if (invocation.port !== 0) flags.push('--port', String(invocation.port));
+
+    const suggest =
+      dependencies.suggest ??
+      ((target: string, carried: readonly string[]) =>
+        suggestInvocations(target, { flags: carried }));
+    const suggestions =
+      location.reason === 'not-a-project' ? suggest(invocation.projectRoot, flags) : [];
+    // A blank line between the refusal and the suggestions: the layout is the
+    // caller's, so the scan itself returns content and no spacing.
+    const detail = suggestions.length > 0 ? `\n\n${suggestions.join('\n')}` : '';
+    stderr(`${location.message}${detail}\n`);
     // A permissions failure is not a usage error. The CLI separates 2 — "you
     // typed it wrong" — from 1 — "it could not start" — and a directory the
     // tool is denied is the second kind: the invocation was fine and the

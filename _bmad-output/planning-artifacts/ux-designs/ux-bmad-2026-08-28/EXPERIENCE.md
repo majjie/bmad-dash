@@ -103,6 +103,11 @@ Terse and technical, matching the fluent-practitioner default. This is load-bear
 | Story location outside the project | `Story location points outside the project: <path>. Not read.` |
 | Valid project, no artifacts yet | `A BMAD project, with no artifacts yet.` |
 | Evidence tier labels | `Commit` · `Uncommitted` · `Day only` · `File time` · `None` |
+| One BMAD project found near a non-project target | `A BMAD project is nearby. Run this instead.` |
+| Several BMAD projects found near a non-project target | `<n> BMAD projects are nearby. Run one of these instead.` |
+| No BMAD project within the suggestion scan's bounds | `No directory holding <markers> is in the ancestors of <path>, or within <n> levels below it.` |
+| Suggestion scan stopped before it finished | `The scan did not finish, so a project may be missing: <reasons>.` |
+| More candidates found than the refusal prints | `<n> more not listed.` |
 
 ## Component patterns
 

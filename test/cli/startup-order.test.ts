@@ -18,7 +18,6 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createServer } from 'node:http';
 import { spawn } from 'node:child_process';
 import { readFile } from 'node:fs/promises';
 import { join, dirname } from 'node:path';
@@ -26,16 +25,14 @@ import { fileURLToPath } from 'node:url';
 
 import { run } from '../../src/cli/index.ts';
 import { makeProjectDir } from '../support/project.ts';
-import { canonical } from '../../src/adapters/fs/paths.ts';
-import type { ServerHandle } from '../../src/adapters/http/server.ts';
+import { exitCodeDeps, stubHandle, STUB_PROJECT_ROOT } from '../support/cli.ts';
 
 /**
- * A synthetic absolute root. Fixed rather than `process.cwd()` so a test's
- * expectations do not change with the directory it is run from, and chosen to
- * look nothing like this repository so a path leaking from the real filesystem
- * into an assertion is visible.
+ * The synthetic absolute root, and the handle that binds nothing, both moved
+ * to `test/support/cli.ts` when Story 1.6 added a third and fourth copy of the
+ * same stub set. Re-exported by name here so the tests below read unchanged.
  */
-const PROJECT_ROOT = '/tmp/bmad-dash-test-project';
+const PROJECT_ROOT = STUB_PROJECT_ROOT;
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const CLI = join(
@@ -46,41 +43,6 @@ const CLI = join(
     }
   ).bin['bmad-dash'] ?? 'dist/cli/index.js',
 );
-
-/** A handle that binds nothing, so ordering can be observed without a socket. */
-function stubHandle(): ServerHandle {
-  const socket = createServer();
-  return {
-    url: 'http://127.0.0.1:1/',
-    address: '127.0.0.1',
-    port: 1,
-    family: 'IPv4',
-    addressInfo: { address: '127.0.0.1', port: 1, family: 'IPv4' },
-    projectRoot: canonical(PROJECT_ROOT),
-    get socketErrorListeners(): number {
-      return socket.listenerCount('error');
-    },
-    socket,
-    close: () => Promise.resolve(),
-  };
-}
-
-/**
- * Dependencies for a run that is only asked for its exit code.
- *
- * Everything observable is stubbed, so the number `run` returns is the whole
- * result — and `start` never fails, which is what makes an exit of 1 evidence
- * about resolution rather than about the socket.
- */
-function exitCodeDeps(): Parameters<typeof run>[1] {
-  return {
-    start: () => Promise.resolve(stubHandle()),
-    launch: () => Promise.resolve({ opened: true as const, command: 'stub' }),
-    stdout: () => {},
-    stderr: () => {},
-    onSignal: () => {},
-  };
-}
 
 test('the signal handler is registered before anything a consumer can observe', async () => {
   const order: string[] = [];

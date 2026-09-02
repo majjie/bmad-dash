@@ -258,6 +258,31 @@ test('every refusal carries a reason code, not only prose', async (t) => {
   }
 });
 
+test('a marker resolving outside its own directory is refused, not thrown', async (t) => {
+  // Reproduced as a crash. `entryAt` refuses a path that escapes the root by
+  // *throwing* — correctly, and deliberately without a non-throwing form — and
+  // a marker can escape: `_bmad` as a symlink to somewhere else resolves
+  // outside the directory holding it. Uncaught, the user got a Node stack
+  // trace and exit 1 instead of a refusal. Reachable in Story 1.5 only by
+  // pointing the tool straight at such a directory; Story 1.6's scan probes
+  // every candidate in bounds, which made it routine.
+  const dir = await bare(t);
+  // Outside `dir` itself, not merely outside the marker: confinement is checked
+  // against the directory that holds the marker.
+  const outside = await bare(t);
+  await mkdir(join(dir, MARKERS[1]), { recursive: true });
+  await symlink(outside, join(dir, MARKERS[0]));
+
+  const result = resolveLocation(dir);
+  assert.ok(!result.ok, 'a marker that leaves the project must not resolve');
+  // Its own code, distinguishable from all four others: the marker is present
+  // and readable, so this is neither `unreadable` nor `not-a-project`, and the
+  // suggestion scan — gated on `not-a-project` — does not run for it.
+  assert.equal(!result.ok && result.reason, 'marker-out-of-tree');
+  assert.match(result.ok ? '' : result.message, /_bmad resolves outside it/);
+  assert.match(result.ok ? '' : result.message, /is not a marker/);
+});
+
 test('the marker names are pinned, not taken on trust from the code under test', () => {
   // Every fixture in the suite builds a project from `MARKERS`, so renaming
   // them would leave all of those green while the tool stopped recognizing any

@@ -33,7 +33,7 @@ This document provides the complete epic and story breakdown for bmad-dash, deco
 - FR-4: Selects an available port automatically and reports the chosen URL on stdout.
 - FR-5: Opens the user's default browser at the served URL on start.
 - FR-6: Browser launch suppressible by flag, with the URL still reported.
-- FR-7: With no recognizable BMAD project, still serves and opens a plain page stating the target path, that no artifacts appear present, and what was looked for.
+- FR-7: With no recognizable BMAD project, the tool does not serve and does not launch a browser. It exits reporting the path examined and what was looked for, plus the exact invocations that would have worked — every candidate a bounded scan finds.
 - FR-45: Distributed for `npx` execution, runnable without prior installation and without adding a dependency to the target project.
 - FR-46: Requires no configuration in the target project to run.
 
@@ -48,7 +48,7 @@ This document provides the complete epic and story breakdown for bmad-dash, deco
 - FR-50: Review outputs located wherever the producing skill writes them — workspace root or a `reviews/` subfolder.
 - FR-51: Epic and story locations resolved from `story_location` in `sprint-status.yaml`, which is per-project configuration.
 - FR-69: An artifact no precedence level resolves is presented as unidentified, naming which levels were attempted.
-- FR-70: Project root discovered by walking up from the target path, so invocation from anywhere inside the project resolves.
+- FR-70: Project root is the target path itself and resolution never walks in either direction, so nested or sibling roots are unresolvable rather than resolved by precedence. A separate bounded scan — the full ancestor chain plus two levels below, skipping dot-directories and `node_modules` — runs only to construct FR-7's suggestions and is never a resolution path.
 - FR-71: A run folder may contain more than one run; four of seven patterns are constant within a day.
 - FR-72: Two run-folder patterns carry no date; ordering for those families falls to the FR-14 hierarchy.
 - FR-73: Where a run folder and a sharded document cannot be distinguished, the ambiguity is presented, not silently resolved.
@@ -188,7 +188,7 @@ From the UX design contract (DESIGN.md + EXPERIENCE.md), both final. 24 colour t
 - FR-4: Epic 1 — auto port selection, URL on stdout
 - FR-5: Epic 1 — opens the default browser
 - FR-6: Epic 1 — launch suppressible by flag
-- FR-7: Epic 1 — honest served page when no project is found
+- FR-7: Epic 1 — no served page; the refusal hands over the invocation that would have worked
 - FR-8: Epic 1 — four-level identification precedence
 - FR-9: Epic 1 — whole and sharded documents handled alike
 - FR-10: Epic 1 — artifact roots from the project's own config
@@ -233,7 +233,7 @@ From the UX design contract (DESIGN.md + EXPERIENCE.md), both final. 24 colour t
 - FR-67: Epic 3 — four timestamp formats normalized
 - FR-68: Epic 3 — memlog coverage is partial; build writes none
 - FR-69: Epic 1 — unidentified artifacts name the levels tried
-- FR-70: Epic 1 — project root found by walking up
+- FR-70: Epic 1 — project root is the target path only, never found by walking
 - FR-71: Epic 1 — a run folder may hold several runs
 - FR-72: Epic 1 — dateless run-folder families
 - FR-73: Epic 1 — run-folder versus sharded-document ambiguity presented
@@ -248,7 +248,7 @@ All 59 active v1 requirements are mapped. Eight retired IDs (FR-28, FR-57 to FR-
 
 ### Epic 1: Point it at a project and see what's there
 
-Run `npx bmad-dash` from anywhere inside any BMAD project and reach a served page that lists every artifact, correctly identified — unrecognized shapes shown as present-but-uninterpreted, ambiguous cases shown as ambiguous, paths displayed — and an honest page when there is no project at all. Establishes the hexagonal skeleton, the read-only invariant with its enforcing test, the token layer, and the global chrome that every later surface inherits.
+Run `npx bmad-dash` at a BMAD project and reach a served page that lists every artifact, correctly identified — unrecognized shapes shown as present-but-uninterpreted, ambiguous cases shown as ambiguous, paths displayed — or, where the target is not a project, be handed the invocation that would have worked rather than a page. Establishes the hexagonal skeleton, the read-only invariant with its enforcing test, the token layer, and the global chrome that every later surface inherits.
 
 **FRs covered:** FR-1, FR-2, FR-3, FR-4, FR-5, FR-6, FR-7, FR-8, FR-9, FR-10, FR-11, FR-12, FR-45, FR-46, FR-49, FR-50, FR-51, FR-69, FR-70, FR-71, FR-72, FR-73, FR-74, FR-75
 

@@ -179,6 +179,31 @@ out of the review round on it and are deferred by decision, not by omission.
   summary: (medium) Roughly twenty `symlink()` calls across seven test files have no `win32` guard and pass no link type, so on Windows without elevation they throw `EPERM` and the tests **error** rather than skip.
   evidence: Counted 2026-09-02 during the second review round, in `test/architecture.test.ts`, `test/adapters/read.test.ts`, `test/adapters/realpath.test.ts`, `test/adapters/paths.test.ts`, `test/cli-entry.test.ts` and `test/cli/location.test.ts`. Pre-existing, and only one instance was in scope for that round — the new characterization test in `paths.test.ts`, which is now guarded and passes `'dir'`. Recorded because the fail-on-skip check landed in the same round and changes what this costs: a skip is now a red build that names what went unchecked, whereas an `EPERM` error is a red build that names the wrong thing. Not urgent — nothing has run this suite on Windows — but it comes due with the OS matrix in "Repository hygiene, consolidated", and it should be one pass over all seven files rather than six separate ones.
 
+## Deferred from: review round 1 of spec-1-6-fail-with-the-command-that-would-have-worked (2026-09-02)
+
+Four findings deferred by decision rather than by omission. Every other finding
+in that round was applied in the round itself.
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-1-6-fail-with-the-command-that-would-have-worked.md`
+  summary: (low) The refusal path canonicalizes the target twice. `resolveLocation` computes the canonical root and discards it on every failure variant, so `suggestInvocations` re-derives it with a second `realpath`.
+  evidence: Confirmed in the round, 2026-09-02. Costs one syscall on a path that is already exiting, so it is not a performance finding. What makes it worth recording is the coupling: the refusal message and the scan's own "ancestors of `<path>`" sentence are built from two independently canonicalized values that agree by coincidence rather than by construction. Carrying the canonical root on the `ok: false` variant would make them agree by definition. Deferred because widening the `Location` failure shape touches Story 1.5's frozen surface and every consumer of it, which is not a review-round patch.
+  triggers: The first story that adds a second consumer of a refusal's path, or any change to `Location`'s failure variant for another reason.
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-1-6-fail-with-the-command-that-would-have-worked.md`
+  summary: (low) `Listing`'s failure carries an untyped `reason: string` holding a raw OS message, against the project's closed-vocabulary convention for states.
+  evidence: Confirmed in the round, 2026-09-02. It was internal when it was written; the honest-skip reporting applied in this same round makes it **user-facing** — an `EACCES` message from `node:fs` now reaches a terminal inside the scan's incompleteness sentence. AD-8's four-state vocabulary (present, absent, unreadable, unchecked) is the shape the rest of the project uses for exactly this, and `ConfinedReader`'s `Entry` already carries the same untyped `reason` beside it. Deferred rather than patched because doing it once, for both, is a different unit of work from doing it for the newer of the two.
+  triggers: Story 1.9, which owns reporting unreadable artifacts in the UI and will have to answer this for `Entry` anyway. Whichever lands first should do both.
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-1-6-fail-with-the-command-that-would-have-worked.md`
+  summary: (low) `readdirSync` materializes every entry before the breadth cap applies, so a directory of millions of entries spikes memory. `opendirSync` plus `readSync` would stream it.
+  evidence: Confirmed in the round, 2026-09-02, and stated in `src/adapters/fs/list.ts`'s own header rather than left implicit. The cap bounds the *directories* the scan probes and descends into, which is where the cost is; it does not bound the entry list `readdir` builds in order to answer at all. Deferred because streaming means owning a `Dir` handle and its close on every failure path, which is more machinery than a bounded failure message justifies today.
+  revisit: If the scan is ever pointed at a directory where this is real — a mail spool, a content-addressed store — or if the listing adapter gains a second caller with a larger appetite.
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-1-6-fail-with-the-command-that-would-have-worked.md`
+  summary: (medium) `scripts/check-tasks.ts` verifies ticked-task -> touched-file but never the reverse, so a diff can touch files that no ticked task names and the check still exits 0.
+  evidence: Confirmed in the round, 2026-09-02, on this story's own diff: eight ticked tasks against an eleven-file diff exited 0 with no `MISS`, and three of those files were edits nothing in the spec accounted for. The tool exists because judgement failed at exactly this step, and it currently catches a tick without work while missing work without a tick — the same class of defect from the other side. Deferred because deciding what counts as an unaccounted file is a policy question (planning artifacts? lockfiles? a fixture?) and guessing it wrong makes the check noisy, which is how a guard gets skipped.
+  triggers: The next change to `scripts/check-tasks.ts` for any reason; it should not gain a third feature before this second half exists.
+
 ## Resolved and closed
 
 Kept verbatim rather than deleted — this file exists so nothing is lost, and a

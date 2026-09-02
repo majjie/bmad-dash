@@ -114,6 +114,42 @@ const URL_PATTERN = /^http:\/\/127\.0\.0\.1:(\d+)\/$/;
 const TIMEOUT_MS = 15_000;
 
 /**
+ * Run `entry` and collect what it printed, for an invocation that refuses.
+ *
+ * `runBuilt` above always runs `BUILT_ENTRY` with this process's environment,
+ * and the suggestion the refusal prints depends on both: the command is spelled
+ * from `argv[1]` and the npm variables, so the only way to observe either
+ * spelling through the real binary is to choose them. Bounded like its sibling
+ * — a refusal that does not exit means the assumption broke, and without the
+ * timer the suite hangs with no diagnostic instead of failing with one.
+ */
+function refuseVia(
+  entry: string,
+  args: readonly string[],
+  env: NodeJS.ProcessEnv = {},
+): Promise<{ readonly code: number | null; readonly stdout: string; readonly stderr: string }> {
+  return new Promise((settle, fail) => {
+    const child = spawn(process.execPath, [entry, '--no-open', ...args], { cwd: REPO_ROOT, env: { ...process.env, ...env } });
+    let stdout = '';
+    let stderr = '';
+    child.stdout.setEncoding('utf8');
+    child.stderr.setEncoding('utf8');
+    child.stdout.on('data', (chunk: string) => (stdout += chunk));
+    child.stderr.on('data', (chunk: string) => (stderr += chunk));
+    child.on('error', fail);
+    const timer = setTimeout(() => {
+      child.kill('SIGKILL');
+      fail(new Error(`refuseVia(${JSON.stringify(args)}) did not exit within ${TIMEOUT_MS}ms`));
+    }, TIMEOUT_MS);
+    timer.unref();
+    child.on('close', (code) => {
+      clearTimeout(timer);
+      settle({ code, stdout, stderr });
+    });
+  });
+}
+
+/**
  * Node flags that change how the main module's identity is reported. Each must
  * leave behaviour identical; historically each has broken a one-sided guard.
  */
@@ -481,6 +517,53 @@ test('a real invocation shows the canonical root, and a non-project binds nothin
   assert.equal(refused.stdout, '', 'a refused target must announce no URL');
   assert.match(refused.stderr, /is not a BMAD project/);
   assert.match(refused.stderr, /_bmad-output is missing/);
+  // And the scan it now traverses reported, rather than passing through mute.
+  assert.match(refused.stderr, /No directory holding _bmad and _bmad-output is in the ancestors of/);
+});
+
+test('the built binary hands over a pasteable npx invocation, and binds nothing', async (t) => {
+  // The suggestion path had no coverage through the bundle at all: this file
+  // already spawned the real binary against a half-project and traversed the
+  // scan while asserting nothing about it. Everything else about the scan is
+  // in-process, so this is the one check that esbuild's output behaves.
+  const project = await makeProjectDir(t, 'bmad-dash-suggest-e2e-');
+
+  // `npm_command=exec` is what `npx` and `npm exec` set, so this is the
+  // primary distribution mode FR-45 names — the one where a bare `bmad-dash`
+  // would be `command not found`.
+  const refused = await refuseVia(BUILT_ENTRY, [join(project, '_bmad-output')], {
+    npm_command: 'exec',
+  });
+
+  assert.equal(refused.code, 2, `expected exit 2, got ${String(refused.code)}`);
+  assert.equal(refused.stdout, '', 'a refused target must announce no URL');
+  assert.match(refused.stderr, /is not a BMAD project\./);
+  assert.ok(
+    refused.stderr.includes(`    npx bmad-dash ${project} --no-open\n`),
+    `no pasteable npx invocation in:\n${refused.stderr}`,
+  );
+  // And `--no-open`, which this helper always passes, comes back in the
+  // suggestion rather than being silently dropped.
+  assert.match(refused.stderr, /--no-open$/m);
+});
+
+test('reached through a node_modules/.bin shim, the built binary suggests the bare name', async (t) => {
+  // The layout a global install and a local install both create. Here the name
+  // *is* on PATH, so `npx` would be noise.
+  const project = await makeProjectDir(t, 'bmad-dash-suggest-bin-');
+  const binDir = join(project, 'node_modules', '.bin');
+  await mkdir(binDir, { recursive: true });
+  const link = join(binDir, 'bmad-dash');
+  await symlink(BUILT_ENTRY, link);
+
+  const refused = await refuseVia(link, [join(project, '_bmad-output')]);
+
+  assert.equal(refused.code, 2);
+  assert.ok(
+    refused.stderr.includes(`    bmad-dash ${project} --no-open\n`),
+    `no bare invocation in:\n${refused.stderr}`,
+  );
+  assert.ok(!refused.stderr.includes('npx bmad-dash'), refused.stderr);
 });
 
 test('a symlinked target is served as its real path, not as the link', async (t) => {

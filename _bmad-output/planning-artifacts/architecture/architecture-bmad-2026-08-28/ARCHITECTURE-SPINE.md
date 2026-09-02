@@ -124,6 +124,7 @@ Arrows are the permitted direction of dependency. `src/domain/` has no outgoing 
 - **Binds:** C1, C2, C4, C5
 - **Prevents:** unsanitized BMAD slugs — which no BMAD component sanitizes — reaching the filesystem or a URL, on either of the two surfaces they touch
 - **Rule:** every path segment derived from project content passes one sanitizer before use, and every resolved filesystem path is confinement-checked against the permitted root set (AD-9) before it is read. Both checks live in the filesystem adapter and run on every read, including reads whose paths were resolved during composition; no caller may opt out and no path bypasses them by arriving early.
+- **Rule (the one scoped exception, and it is narrow by construction):** AD-9 rule 2's suggestion scan enumerates directories *outside* every permitted root — the target's own ancestors are outside it by definition — so it is exempt from the confinement check, and from nothing else. The capability it is granted is one directory's child **directory names**: no file content, no recursion, no read of any kind. It lives in a single filesystem-adapter module, and that module is importable **only** by the suggestion scan, enforced by an importer test rather than by convention. Everything the scan learns becomes display text and is discarded (AD-9 rule 2), so nothing it names can reach a read. Confinement is therefore not weakened for reads: it is unchanged, and enumeration of names is scoped out of it explicitly instead of leaking out of it quietly.
 
 ### AD-11 — Currency mismatch is surfaced on open
 
