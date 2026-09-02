@@ -799,10 +799,22 @@ test('identity is derived in one place, and that place is the pure layer', async
   // Story 1.9's interpretation rule is the second such edit, on the same
   // terms: it reads the shapes a recorded verdict carried to say whether FR-12
   // or FR-69 applies, and derives no family, shape or part of its own.
+  //
+  // Story 1.10's run facts are the third, and the widening it is allowed is the
+  // narrowest of the three: `src/domain/runs.ts` takes a `Verdict` and nothing
+  // else — no path, no listing, no name — so the one question it can answer is
+  // what the recorded reading already said. A module here that took a folder
+  // *name* would be re-deriving identity, which is the failure the exact set
+  // exists to catch.
   assert.deepEqual(
     await importersOf(REPO_ROOT, 'src/domain/identity.ts'),
-    ['src/cli/inventory.ts', 'src/domain/document.ts', 'src/domain/interpretation.ts'],
-    'only the snapshot pass, the document model and the interpretation rule read the authority',
+    [
+      'src/cli/inventory.ts',
+      'src/domain/document.ts',
+      'src/domain/interpretation.ts',
+      'src/domain/runs.ts',
+    ],
+    'only the snapshot pass, the document model, the interpretation rule and the run facts read the authority',
   );
   assert.deepEqual(
     await importersOf(REPO_ROOT, 'src/domain/frontmatter.ts'),
@@ -872,6 +884,26 @@ test('the signal vocabulary and the interpretation rule are pure, with exact imp
   for (const pure of ['src/domain/signal.ts', 'src/domain/interpretation.ts']) {
     assert.ok(scanned.includes(pure), `${pure} is not scanned by the purity gate`);
   }
+});
+
+test('the run facts are pure, with an exact importer set of their own', async () => {
+  // Story 1.10's new domain module, on the same terms as the three beside it.
+  // The exact set is what makes AD-4 mechanical here: FR-71's and FR-72's facts
+  // are derived once, in the pass, from the recorded verdict — a second
+  // importer reaching for them would more likely be a surface asking the
+  // question again than one consuming the answer.
+  assert.deepEqual(
+    await importersOf(REPO_ROOT, 'src/domain/runs.ts'),
+    ['src/cli/inventory.ts'],
+    'only the snapshot pass derives run facts; Story 1.12 and Epic 3 consume what it recorded',
+  );
+
+  // And the purity rule reaches it: every rule in this file is of the form "no
+  // scanned file does X", which passes vacuously over a file the scan never
+  // opened. The frozen constraint has no `import type` exemption, so this
+  // module's only dependency may be the authority beside it.
+  const scanned = await collectSourceFiles(REPO_ROOT);
+  assert.ok(scanned.includes('src/domain/runs.ts'), 'src/domain/runs.ts is not scanned by the purity gate');
 });
 
 test('the inventory pass has a stated importer set, so its first surface is a deliberate edit', async () => {

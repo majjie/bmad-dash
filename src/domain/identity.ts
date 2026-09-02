@@ -48,6 +48,26 @@
  * identified as. `RUN_FOLDER_FAMILIES` is still exactly FR-11's seven and is
  * what the run-folder patterns resolve to; `FAMILIES` is the whole set.
  *
+ * **A slug is never a family signal.** FR-49: `{slug}` in a BMAD filename is a
+ * context-dependent name and not an identifier, and it means something
+ * different in each position. FR-49 itself names **three** — the reviewer's
+ * lens in `review-{slug}.md`, the source input in `reconcile-{slug}.md`, the
+ * subject in a `spec-{slug}` run folder — and `bmad-source-shapes.md`'s
+ * measured table adds a fourth, the topic in `{research_type}-{topic}-{date}`.
+ * One rule covers all four: **the prefix names the kind and the rest is a
+ * slug**, so once a prefix has answered, the rest of the name is not consulted
+ * at all — **at any level**, which is the part the first version of this fix
+ * got wrong: it reached levels 1 and 4 and left a heading or a title free to
+ * name the artifact under review, at `certain`. A fifth position, the forge
+ * bare `{slug}`, is uncoverable by any name rule and is recognizable by
+ * location alone; the limit is pinned by test and recorded in
+ * `deferred-work.md`.
+ *
+ * The measured defects this corrects were FR-49's prohibition in its own
+ * words: `review-design.md` identified as family `ux-design`,
+ * `spec-ux-tokens` gaining a spurious second family, and — found in review —
+ * `review-rubric.md` identified as `prd` at `certain` from its own heading.
+ *
  * **Content is pulled, never pushed.** `Candidate.content` is a function, so a
  * level that does not need a document's text never causes it to be read — and
  * level 1 resolves for nearly everything under an artifact root. The pass
@@ -77,20 +97,42 @@
 import { readFrontmatter } from './frontmatter.ts';
 
 /**
- * Every family an artifact can belong to.
+ * FR-11's seven, as a type of their own.
  *
- * The first seven are FR-11's run-folder families. The last four are what the
- * implementation output root holds, and they exist because the artifact
- * universe is wider than the run-folder one — see the header.
+ * Narrower than `Family` on purpose: a run-folder pattern resolves to one of
+ * these and to nothing else, and `src/domain/runs.ts` keys its facts table on
+ * this union so the typechecker makes that table total — a family added here
+ * without a measured collision fact fails to compile there rather than falling
+ * through a lookup (AD-13's rule, applied the way `interpretation.ts` applies
+ * it).
  */
-export type Family =
+export type RunFolderFamily =
   | 'brief'
   | 'prd'
   | 'architecture'
   | 'ux-design'
   | 'research'
   | 'spec'
-  | 'forge'
+  | 'forge';
+
+/**
+ * Every family an artifact can belong to.
+ *
+ * The first seven are FR-11's run-folder families. The rest are what the
+ * implementation output root holds plus `review`, and they exist because the
+ * artifact universe is wider than the run-folder one — see the header.
+ *
+ * **`review` is a family because a review is a different artifact from the
+ * thing it reviews.** Unowned by any normative document and decided in Story
+ * 1.10: without it, `review-rubric.md` beside a PRD is reported as a PRD, so
+ * FR-50's "review outputs are located wherever the producing skill writes
+ * them" has nothing to resolve *to* and no observable effect. It is not a
+ * run-folder family — no skill writes a `review-…` run folder — so it is
+ * outside `RunFolderFamily` and outside FR-11's seven.
+ */
+export type Family =
+  | RunFolderFamily
+  | 'review'
   | 'epics'
   | 'story'
   | 'sprint-tracking'
@@ -100,7 +142,7 @@ export type Family =
  * FR-11's seven, in FR-11's order. These and only these are what a run-folder
  * pattern resolves to, which is the claim FR-11 actually makes.
  */
-export const RUN_FOLDER_FAMILIES: readonly Family[] = [
+export const RUN_FOLDER_FAMILIES: readonly RunFolderFamily[] = [
   'brief',
   'prd',
   'architecture',
@@ -113,6 +155,7 @@ export const RUN_FOLDER_FAMILIES: readonly Family[] = [
 /** Every family, run-folder families first so a report reads FR-11's order. */
 export const FAMILIES: readonly Family[] = [
   ...RUN_FOLDER_FAMILIES,
+  'review',
   'epics',
   'story',
   'sprint-tracking',
@@ -295,6 +338,107 @@ export const ARTIFACT_ROOTS: readonly { readonly path: string; readonly family: 
 ];
 
 /**
+ * The `{kind}-{slug}` name prefixes: the prefix names the kind, the slug does
+ * not name anything the tool may key on.
+ *
+ * Three of FR-49's slug positions. FR-49 itself (`prd.md:178`) names exactly
+ * these three — `review-{slug}.md`, `reconcile-{slug}.md`, and a `spec-{slug}`
+ * run folder; the **fourth**, `{research_type}-{topic_slug}-{date}`, comes from
+ * `bmad-source-shapes.md`'s measured table and is a run-folder pattern above,
+ * where the same rule covers it because a matched pattern likewise stops the
+ * name being read any further. `slugNames` is quoted from that table's second
+ * column and `test/domain/identity.test.ts` reads the table and compares, so
+ * this is data with one source rather than a comment nobody checks.
+ *
+ * **A fifth position exists and neither table can cover it:** the forge run
+ * folder is a bare `{slug}` with no prefix at all, so a forge run called
+ * `prd-redesign` outside `_bmad-output/forge` still hint-matches `prd` at
+ * level 4. That is the slug-as-family reading this story exists to stop, and it
+ * is unfixable by a name rule — a bare slug matches every directory. Location
+ * is the only signal, which is FR-72's own point; the limit is pinned in the
+ * coverage test and recorded in `deferred-work.md`.
+ *
+ * **`family` is optional, and its absence is the honest answer rather than an
+ * omission.** A reconciliation is its own kind of artifact and the family
+ * vocabulary has no word for it: this story added `review` because a review is
+ * a different artifact from the thing it reviews, and adding a second family
+ * with no surface to render it was left as a decision for whoever needs it
+ * (recorded in `deferred-work.md`). So `reconcile-prd.md` resolves to *no*
+ * family from any level — which is the point, because the alternative on offer
+ * was `prd`, read out of a slug that names the input being reconciled.
+ *
+ * **`aboutAnotherArtifact` marks a document whose subject is a different
+ * artifact**, and that one fact has two consequences, both of which were
+ * needed before this table was right:
+ *
+ *   1. **The prefix outranks the location.** BMAD writes reviews and
+ *      reconciliations into whichever workspace the reviewed artifact lives
+ *      in — FR-50's two shapes, a run folder's own root or a `reviews/`
+ *      subfolder under it — so inside an artifact root the prefix, not the
+ *      root, decides. That is not level 4 in disguise, for the same reason
+ *      `DOCUMENT_ROOTS` is not: the root closes the candidate set to the kinds
+ *      BMAD writes there before any name is consulted.
+ *   2. **Its own prose names its subject, not itself**, so levels 2 and 3 may
+ *      not overrule the prefix either. Measured, and it is the half the first
+ *      version of this fix missed: `review-rubric.md` whose heading reads
+ *      `# PRD Quality Review — BMAD Dashboard CLI` was identified `prd` at
+ *      **`certain`**, which outranks the `likely` level-4 reading the prefix
+ *      rule had just corrected, and a review titled
+ *      `Adversarial review — … PRD` went `ambiguous ['prd', 'review']`. So
+ *      `constrainToKind` filters every level's families to the kind's, which
+ *      keeps a genuine self-declaration (`type: review`) and discards a
+ *      mention of the target.
+ *
+ * `spec-` is the opposite case on both counts: it is a run folder's *own*
+ * prefix and a spec is about itself, so a `spec-…` name inside another family's
+ * root claims nothing and a `spec-1-7-x.md` titled `Story 1.7 — …` is still
+ * read as a story from its declaration. A name must not decide between the two
+ * spellings of `spec-` — that is what level 1 is for.
+ */
+export const KIND_PREFIXES: readonly {
+  readonly prefix: string;
+  readonly family?: Family;
+  /**
+   * What the slug after the prefix names. Quoted from
+   * `bmad-source-shapes.md`'s table, pinned by test, and never a key.
+   */
+  readonly slugNames: string;
+  readonly aboutAnotherArtifact: boolean;
+}[] = [
+  {
+    prefix: 'review-',
+    family: 'review',
+    slugNames: 'the reviewer or lens',
+    aboutAnotherArtifact: true,
+  },
+  {
+    prefix: 'reconcile-',
+    slugNames: 'the source input being reconciled',
+    aboutAnotherArtifact: true,
+  },
+  {
+    prefix: 'spec-',
+    family: 'spec',
+    slugNames: 'the subject, reused deliberately to reopen the folder',
+    aboutAnotherArtifact: false,
+  },
+];
+
+/**
+ * The kinds written into another family's workspace, as level-1 document rules.
+ *
+ * Derived rather than restated: these rows appear in every root's rule list so
+ * that a reader of `DOCUMENT_ROOTS` sees the whole set of things that root
+ * holds, and a second copy of the prefixes would be one belief written twice —
+ * which is the drift this project corrects at three other sites.
+ */
+const WORKSPACE_KIND_RULES: readonly { readonly prefix: string; readonly family?: Family }[] =
+  KIND_PREFIXES.filter((kind) => kind.aboutAnotherArtifact).map((kind) => ({
+    prefix: kind.prefix,
+    ...(kind.family === undefined ? {} : { family: kind.family }),
+  }));
+
+/**
  * A root that holds several families, and how to tell them apart within it.
  *
  * `implementation_artifacts` is a peer of `planning_artifacts` in
@@ -305,6 +449,17 @@ export const ARTIFACT_ROOTS: readonly { readonly path: string; readonly family: 
  * resolves, to the root's `residual` family. That is what makes level 1 total
  * over a declared root, which is the property that stops a third of a real tree
  * reading "not identified".
+ *
+ * **The totality claim has exactly one exception, and it is in the table.** A
+ * rule whose `family` is absent is a kind the vocabulary has no family for —
+ * `reconcile-`, today — and it makes level 1 *decline* rather than assign the
+ * residual. So the property is precisely: every name **no rule matches**
+ * resolves, to the residual. A `reconcile-…` name is not an unmatched name
+ * falling through a hole; it is a recognized kind whose honest answer is no
+ * family, and assigning `note` to it would report a reconciliation of the epics
+ * list as a working note. Stated here because the unqualified claim above was
+ * left standing over the exception once already, and an over-claiming comment
+ * is worse than none.
  *
  * The root's **own directory** deliberately resolves to nothing: it holds
  * several families, so there is no family for it to be, and it is BMAD's output
@@ -317,13 +472,20 @@ export const DOCUMENT_ROOTS: readonly {
   readonly documents: readonly {
     readonly stems?: readonly string[];
     readonly prefix?: string;
-    readonly family: Family;
+    /** Absent for a recognized kind the vocabulary has no family for. */
+    readonly family?: Family;
   }[];
   readonly residual: Family;
 }[] = [
   {
     path: '_bmad-output/implementation-artifacts',
     documents: [
+      // First, and derived from `KIND_PREFIXES` rather than restated: two
+      // BMAD skills write their reviews under `{implementation_artifacts}`
+      // when subagents are unavailable, so this is a real location for them
+      // and not a hypothetical. `review-…` resolves to `review` here;
+      // `reconcile-…` declines, per the exception stated above.
+      ...WORKSPACE_KIND_RULES,
       { stems: ['epics'], family: 'epics' },
       { stems: ['sprint-status'], family: 'sprint-tracking' },
       // `spec-{story}` is what `bmad-build` writes per story. Distinct from the
@@ -390,14 +552,18 @@ export const RESEARCH_TYPES: readonly string[] = [
  */
 export const RUN_FOLDER_PATTERNS: readonly {
   readonly prefix: string;
-  readonly family: Family;
+  readonly family: RunFolderFamily;
   readonly dated: boolean;
 }[] = [
   { prefix: 'brief-', family: 'brief', dated: true },
   { prefix: 'prd-', family: 'prd', dated: true },
   { prefix: 'architecture-', family: 'architecture', dated: true },
   { prefix: 'ux-', family: 'ux-design', dated: true },
-  ...RESEARCH_TYPES.map((type) => ({ prefix: `${type}-`, family: 'research' as Family, dated: true })),
+  ...RESEARCH_TYPES.map((type) => ({
+    prefix: `${type}-`,
+    family: 'research' as RunFolderFamily,
+    dated: true,
+  })),
   { prefix: 'spec-', family: 'spec', dated: false },
 ];
 
@@ -428,6 +594,16 @@ export const NAME_HINTS: readonly { readonly hint: string; readonly family: Fami
   { hint: 'spec', family: 'spec' },
   { hint: 'specs', family: 'spec' },
   { hint: 'forge', family: 'forge' },
+  // Not the `review-` prefix — that is `KIND_PREFIXES`, and it answers before
+  // any hint is consulted. The singular row is for a document that says
+  // `type: review` of itself. The plural is for a directory or document
+  // literally named `reviews`, and it serves the **outside-a-root case only**:
+  // inside any artifact root such a directory is answered by level 1 with the
+  // root's family and never reaches level 4 at all, which the first version of
+  // this comment got wrong. Both rows are pinned in
+  // `test/domain/identity.test.ts`.
+  { hint: 'review', family: 'review' },
+  { hint: 'reviews', family: 'review' },
   { hint: 'epics', family: 'epics' },
   { hint: 'story', family: 'story' },
   { hint: 'stories', family: 'story' },
@@ -568,14 +744,38 @@ function unavailable(level: Level, reason: string): LevelAnswer {
  * Single-family roots are consulted before mixed ones, so the most specific
  * root wins; today they do not overlap, and this keeps that from becoming a
  * silent ordering dependency if one ever does.
+ *
+ * **FR-50 is why a root is not the last word inside itself.** A review is
+ * written wherever the producing skill writes it — a run folder's own root, or
+ * a `reviews/` subfolder under it, at any depth — so a single-family root
+ * holds reviews as well as its own family's documents, and returning the root's
+ * family for all of them reports a review of a PRD *as* a PRD. The prefix
+ * decides within the root, which is `DOCUMENT_ROOTS`'s arrangement applied to
+ * the case FR-50 names, and it is still level 1: position closes the candidate
+ * set to the kinds BMAD writes there before any name is consulted.
  */
 function locationSignal(
   relative: string,
 ): { readonly family: Family; readonly container: boolean } | undefined {
   const lower = relative.toLowerCase();
+  // The kind the name declares, where the name is one a `{kind}-{slug}` rule
+  // can speak about at all — see `declaredKind`. A kind with no family
+  // **declines** the root's answer rather than taking it: the slug is the input
+  // being reconciled, so `prd` would be exactly the reading FR-49 forbids, and
+  // the residual `note` would report a reconciliation as a working note.
+  const kind = declaredKind(lower, { aboutAnotherArtifactOnly: true });
+  // A family, or a declining `undefined` for a rule the vocabulary has no
+  // family for. One helper for both root kinds, so the exception is expressed
+  // once.
+  const resolvedTo = (
+    family: Family | undefined,
+  ): { family: Family; container: boolean } | undefined =>
+    family === undefined ? undefined : { family, container: false };
+
   for (const root of ARTIFACT_ROOTS) {
     if (lower === root.path) return { family: root.family, container: true };
-    if (lower.startsWith(`${root.path}/`)) return { family: root.family, container: false };
+    if (!lower.startsWith(`${root.path}/`)) continue;
+    return resolvedTo(kind === undefined ? root.family : kind.family);
   }
   for (const root of DOCUMENT_ROOTS) {
     // The root's own directory is layout, not an artifact — see DOCUMENT_ROOTS.
@@ -583,9 +783,17 @@ function locationSignal(
     if (!lower.startsWith(`${root.path}/`)) continue;
     const stem = nameStem(baseName(lower));
     for (const rule of root.documents) {
-      if (rule.stems?.includes(stem) === true) return { family: rule.family, container: false };
+      // A workspace-kind row delegates to `declaredKind`, which holds both the
+      // prefix match and the document-name guard — so `review-x.png` beside a
+      // mockup is not a review, and the guard exists in one place rather than
+      // two that could disagree.
+      if (WORKSPACE_KIND_RULES.some((row) => row.prefix === rule.prefix)) {
+        if (kind === undefined || kind.prefix !== rule.prefix) continue;
+        return resolvedTo(kind.family);
+      }
+      if (rule.stems?.includes(stem) === true) return resolvedTo(rule.family);
       if (rule.prefix !== undefined && stem.startsWith(rule.prefix)) {
-        return { family: rule.family, container: false };
+        return resolvedTo(rule.family);
       }
     }
     return { family: root.residual, container: false };
@@ -653,14 +861,16 @@ function frontmatterFamilies(text: string): { readonly families: readonly Family
  * FR-8's field pair: a `type` is a slug (`architecture-spine`) and a `title` is
  * prose (`Product Requirements Document`), and without the fold the hints would
  * answer for the first and never for the second.
+ *
+ * **`KIND_PREFIXES` is deliberately not applied here.** FR-49 is about BMAD
+ * *filenames*; a `title` is prose, and reading `Review of the PRD` as a
+ * `{kind}-{slug}` name would silence the second half of a sentence rather than
+ * a slug. A title that names two families stays ambiguous, which is the answer
+ * AD-4 already requires of this level.
  */
 function declaredFamilies(value: string): readonly Family[] {
   const normalized = value.trim().toLowerCase().replace(/\s+/g, '-');
-  const found: Family[] = [];
-  for (const { hint, family } of NAME_HINTS) {
-    if (matchesHint(normalized, hint)) found.push(family);
-  }
-  return familySet(found);
+  return hintFamilies(normalized);
 }
 
 /**
@@ -678,6 +888,112 @@ function matchesHint(normalized: string, hint: string): boolean {
   if (normalized.startsWith(`${hint}-`)) return true;
   if (normalized.endsWith(`-${hint}`)) return true;
   return normalized.includes(`-${hint}-`);
+}
+
+/** Every family the hint table matches in one normalized name. */
+function hintFamilies(normalized: string): readonly Family[] {
+  const found: Family[] = [];
+  for (const { hint, family } of NAME_HINTS) {
+    if (matchesHint(normalized, hint)) found.push(family);
+  }
+  return familySet(found);
+}
+
+/**
+ * Whether a basename is one a `{kind}-{slug}` rule may speak about at all.
+ *
+ * A directory name, or a markdown document. **Asked through `isMarkdown`**,
+ * which is exported for exactly this reason — two copies of "what counts as
+ * markdown" would let this rule and level 3's structural read disagree about
+ * one listing. Measured need: a `review-mockup.png` inside a UX run folder was
+ * identified family `review`, shape `document`, at `certain` — an image
+ * reported as a review because its filename starts with a word.
+ *
+ * A name with no extension is admitted, because that is what a run folder and
+ * every other directory looks like, and a dotfile with no second extension
+ * (`.memlog`) is a name BMAD writes.
+ */
+function carriesDocumentName(name: string): boolean {
+  const dot = name.lastIndexOf('.');
+  return dot <= 0 || isMarkdown(name);
+}
+
+/**
+ * The `{kind}-{slug}` prefix a name carries, if any.
+ *
+ * An empty slug is deliberately **not** rejected: `review-` names no reviewer,
+ * but it still says the kind, and the alternative was an unobserved branch
+ * whose only effect was an inconsistency — `review-.md` read `review` outside a
+ * root, from the hint table, and the enclosing family inside one.
+ */
+function kindPrefixOf(
+  stem: string,
+  options: { readonly aboutAnotherArtifactOnly?: boolean } = {},
+): (typeof KIND_PREFIXES)[number] | undefined {
+  for (const kind of KIND_PREFIXES) {
+    if (options.aboutAnotherArtifactOnly === true && !kind.aboutAnotherArtifact) continue;
+    if (stem.startsWith(kind.prefix)) return kind;
+  }
+  return undefined;
+}
+
+/**
+ * The kind a candidate's **own basename** declares, guard applied.
+ *
+ * One place, called by three: level 1, the level-2/3 constraint, and level 4.
+ * Takes the whole relative path rather than a stem so that the guard and the
+ * stem are derived the same way at every call site — the earlier version had
+ * each caller do half of it.
+ */
+function declaredKind(
+  relative: string,
+  options: { readonly aboutAnotherArtifactOnly?: boolean } = {},
+): (typeof KIND_PREFIXES)[number] | undefined {
+  const name = baseName(relative).toLowerCase();
+  if (!carriesDocumentName(name)) return undefined;
+  return kindPrefixOf(nameStem(name), options);
+}
+
+/**
+ * The families a `{kind}-{slug}` name resolves to, and nothing from the slug.
+ *
+ * `undefined` means no prefix answered, which is what lets a caller fall
+ * through to the next rule; an **empty array** means a prefix answered and its
+ * kind has no family — a different fact, and the one that keeps
+ * `reconcile-prd.md` from being read as a PRD.
+ */
+function kindPrefixFamilies(relative: string): readonly Family[] | undefined {
+  const kind = declaredKind(relative);
+  if (kind === undefined) return undefined;
+  return kind.family === undefined ? [] : [kind.family];
+}
+
+/**
+ * A level's families, constrained by what the candidate's name says it is.
+ *
+ * **The half the first version of this fix missed, and the more damaging
+ * half.** The prefix rule reached levels 1 and 4; `HEADING_PHRASES` and
+ * `declaredFamilies` were untouched, so outside every artifact root — which
+ * this module's own header calls exactly what a project using its own layout
+ * looks like — a review was still read as the artifact it reviews, and at
+ * `certain`, which outranks the `likely` level-4 reading that had just been
+ * corrected. Measured: `review-rubric.md` with the heading
+ * `# PRD Quality Review — BMAD Dashboard CLI` came back `prd` at `structure`;
+ * `review-adv.md` titled `Adversarial review — BMAD Dashboard CLI PRD` came
+ * back `ambiguous ['prd', 'review']` at `frontmatter`.
+ *
+ * A filter and not a veto: a review that declares `type: review` still resolves
+ * at level 2, at `certain`, because that is the document naming *itself*. What
+ * is discarded is a family that only ever came from the document naming its
+ * **subject** — which is why only `aboutAnotherArtifact` kinds constrain
+ * anything. A `spec-1-7-x.md` titled `Story 1.7 — …` is still read as a story
+ * from its own declaration, because a spec is about itself and because a name
+ * must not decide between `spec-`'s two spellings; that is level 1's job.
+ */
+function constrainToKind(relative: string, families: readonly Family[]): readonly Family[] {
+  const kind = declaredKind(relative, { aboutAnotherArtifactOnly: true });
+  if (kind === undefined) return families;
+  return families.filter((family) => family === kind.family);
 }
 
 /**
@@ -747,14 +1063,25 @@ function childFamilies(names: readonly string[]): readonly Family[] {
   return familySet(found);
 }
 
-/** Level 4 for a directory: the run-folder patterns, then the basename hints. */
+/**
+ * Level 4 for a directory: the kind prefix, then the run-folder patterns, then
+ * the basename hints — **stopping at the first that answers**.
+ *
+ * The stop is the fix, not the order. This ran the patterns and *then*
+ * hint-matched the whole folder name with nothing in between, so a matched
+ * pattern's slug was read as a second signal: `spec-ux-tokens` came back
+ * ambiguous between `ux-design` and `spec`, and a research folder named for a
+ * topic that happens to contain a family word did the same. Once a prefix has
+ * said what kind of thing this is, the rest of the name is a slug and a slug is
+ * never a family signal (FR-49).
+ */
 function directoryNameFamilies(name: string): readonly Family[] {
-  const found: Family[] = [...runFolderFamilies(name)];
-  const stem = name.toLowerCase();
-  for (const { hint, family } of NAME_HINTS) {
-    if (matchesHint(stem, hint)) found.push(family);
-  }
-  return familySet(found);
+  const normalized = name.toLowerCase();
+  const kind = kindPrefixFamilies(name);
+  if (kind !== undefined) return kind;
+  const runs = runFolderFamilies(normalized);
+  if (runs.length > 0) return runs;
+  return hintFamilies(normalized);
 }
 
 /**
@@ -777,14 +1104,17 @@ export function runFolderFamilies(name: string): readonly Family[] {
   return familySet(found);
 }
 
-/** Level 4 for a file: the basename hints, extension removed. */
+/**
+ * Level 4 for a file: the kind prefix, then the basename hints, extension
+ * removed — and the prefix stops the hints for the reason above it.
+ *
+ * The two rows this closes are FR-49's first two positions: `review-design.md`
+ * was identified as family `ux-design`, which is the prohibition in its own
+ * words, and `reconcile-prd.md` as a `prd`. Both now read the position and not
+ * the slug.
+ */
 function fileNameFamilies(name: string): readonly Family[] {
-  const stem = nameStem(name);
-  const found: Family[] = [];
-  for (const { hint, family } of NAME_HINTS) {
-    if (matchesHint(stem, hint)) found.push(family);
-  }
-  return familySet(found);
+  return kindPrefixFamilies(name) ?? hintFamilies(nameStem(name));
 }
 
 /**
@@ -892,9 +1222,11 @@ function frontmatterLevel(candidate: Candidate, textOf: ContentSource): LevelAns
   if (!content.available) return unavailable('frontmatter', content.reason);
   const signal = frontmatterFamilies(content.text);
   if (signal.declined !== undefined) return unavailable('frontmatter', signal.declined);
-  return signal.families.length > 0
-    ? resolved('frontmatter', signal.families)
-    : noSignal('frontmatter');
+  // A declaration that only named this document's *subject* is no signal about
+  // this document — `no-signal` and not `unavailable`, because the level ran
+  // and the frontmatter was read; what it found was a target, not an identity.
+  const families = constrainToKind(candidate.relative, signal.families);
+  return families.length > 0 ? resolved('frontmatter', families) : noSignal('frontmatter');
 }
 
 /** Level 3, as one total answer. */
@@ -904,12 +1236,12 @@ function structureLevel(candidate: Candidate, textOf: ContentSource): LevelAnswe
       return unavailable('structure', 'a layout directory holds families rather than being one');
     }
     if (!candidate.children.available) return unavailable('structure', candidate.children.reason);
-    const families = childFamilies(candidate.children.names);
+    const families = constrainToKind(candidate.relative, childFamilies(candidate.children.names));
     return families.length > 0 ? resolved('structure', families) : noSignal('structure');
   }
   const content = textOf();
   if (!content.available) return unavailable('structure', content.reason);
-  const families = headingFamilies(content.text);
+  const families = constrainToKind(candidate.relative, headingFamilies(content.text));
   return families.length > 0 ? resolved('structure', families) : noSignal('structure');
 }
 

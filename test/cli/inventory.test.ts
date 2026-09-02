@@ -105,6 +105,20 @@ function compositionFor(inventory: Inventory, relative: string): Composition {
   return found.composition;
 }
 
+/**
+ * This repository's own inventory, taken once and shared.
+ *
+ * Five tests assert over the real tree, and each of them used to walk it
+ * again — five walks of the same unchanging directory inside one process.
+ * Lazy rather than eager, so a run of a single unrelated test in this file
+ * still costs nothing, and memoized rather than a fixture, because the tree is
+ * read-only and the pass is pure with respect to it.
+ */
+let repoInventoryCell: Inventory | undefined;
+function repoInventory(): Inventory {
+  return (repoInventoryCell ??= takeInventory(new ConfinedReader(canonical(REPO_ROOT))));
+}
+
 /** Every path the pass reported, so a missing sibling is visible. */
 function paths(inventory: Inventory): readonly string[] {
   return inventory.entries.map((entry) => entry.entry.relative);
@@ -404,7 +418,7 @@ test('every artifact in this repository resolves to a family', async () => {
   // stand in for: the tool's subject is BMAD projects, and its own is the only
   // real one to hand. Before `implementation-artifacts` was a level-1 root,
   // about a third of these rows read "not identified".
-  const inventory = takeInventory(new ConfinedReader(canonical(REPO_ROOT)));
+  const inventory = repoInventory();
   assert.equal(inventory.startEntry.state, 'present');
   assert.ok(inventory.entries.length > 20, `only ${String(inventory.entries.length)} entries found`);
   assert.equal(inventory.complete, true, 'the real tree walks cleanly within the budget');
@@ -456,6 +470,129 @@ test('every artifact in this repository resolves to a family', async () => {
     if (verdict.outcome !== 'identified') continue;
     assert.equal(verdict.family, family, relative);
   }
+});
+
+test('both review shapes in this repository resolve to review, with no assumed path', async () => {
+  // FR-50 over the real tree, which is the only place both shapes exist
+  // together: six reviews sit at a run folder's own workspace root and three
+  // under a `reviews/` subfolder. Enumerated exactly rather than counted, so a
+  // review that stops resolving names itself and a tenth one appearing is a
+  // deliberate edit here.
+  const inventory = repoInventory();
+  const reviews = inventory.entries
+    .filter((entry) => entry.identity.outcome === 'identified' && entry.identity.family === 'review')
+    .map((entry) => entry.entry.relative)
+    .sort();
+  assert.deepEqual(reviews, [
+    '_bmad-output/planning-artifacts/architecture/architecture-bmad-2026-08-28/reviews/review-adversarial-seams.md',
+    '_bmad-output/planning-artifacts/architecture/architecture-bmad-2026-08-28/reviews/review-rubric.md',
+    '_bmad-output/planning-artifacts/architecture/architecture-bmad-2026-08-28/reviews/review-tech-currency.md',
+    '_bmad-output/planning-artifacts/prds/prd-bmad-2026-08-28/review-adversarial.md',
+    '_bmad-output/planning-artifacts/prds/prd-bmad-2026-08-28/review-edge-cases.md',
+    '_bmad-output/planning-artifacts/prds/prd-bmad-2026-08-28/review-rubric.md',
+    '_bmad-output/planning-artifacts/ux-designs/ux-bmad-2026-08-28/review-contrast.md',
+    '_bmad-output/planning-artifacts/ux-designs/ux-bmad-2026-08-28/review-spine-seam.md',
+    '_bmad-output/planning-artifacts/ux-designs/ux-bmad-2026-08-28/review-state-coverage.md',
+  ]);
+
+  // Both shapes are represented. **Derived from the walk's own listings, not
+  // from the array above** — the review round found this pair computed from
+  // the very list the `deepEqual` had just fixed exactly, under a comment
+  // claiming it was an independent check. The independent question is: of the
+  // `review-*.md` names the walk found on disk, how many sit in a `reviews/`
+  // directory and how many at a run folder's own root.
+  const onDisk = inventory.entries
+    .filter((entry) => entry.entry.state === 'present' && entry.entry.kind === 'file')
+    .map((entry) => entry.entry.relative)
+    .filter((relative) => /(^|\/)review-[^/]*\.md$/.test(relative));
+  const nested = onDisk.filter((relative) => relative.includes('/reviews/'));
+  assert.equal(nested.length, 3, 'the `reviews/` subfolder shape');
+  assert.equal(onDisk.length - nested.length, 6, 'the workspace-root shape');
+  assert.deepEqual([...onDisk].sort(), reviews, 'and every one of them resolved to review');
+
+  // And none of them is read as the family of the workspace it sits in, which
+  // is the measured defect: `review-contrast.md` came back `ux-design`,
+  // `review-rubric.md` under `prds/` came back `prd`. The reviewed artifacts
+  // beside them keep their own families, so the fix is not a blanket one.
+  const reviewed: readonly (readonly [string, string])[] = [
+    ['_bmad-output/planning-artifacts/prds/prd-bmad-2026-08-28/prd.md', 'prd'],
+    ['_bmad-output/planning-artifacts/ux-designs/ux-bmad-2026-08-28/DESIGN.md', 'ux-design'],
+    [
+      '_bmad-output/planning-artifacts/architecture/architecture-bmad-2026-08-28/ARCHITECTURE-SPINE.md',
+      'architecture',
+    ],
+  ];
+  for (const [relative, family] of reviewed) {
+    const verdict = verdictFor(inventory, relative);
+    assert.equal(verdict.outcome === 'identified' ? verdict.family : null, family, relative);
+  }
+});
+
+test('every run folder in this repository reports its collision risk and date signal', async () => {
+  // FR-71 and FR-72 through the whole composition, over the four run folders
+  // this project actually has. Enumerated, and asserted on both axes: three
+  // dated `{project_name}` folders whose reuse is accidental, and one dateless
+  // spec folder whose reuse is deliberate — which is the pair of facts a folder
+  // name cannot carry and the reason the derivation exists.
+  const inventory = repoInventory();
+  const withFacts = inventory.entries
+    .filter((entry) => entry.runFacts.length > 0)
+    .map((entry) => {
+      const only = entry.runFacts[0];
+      assert.equal(entry.runFacts.length, 1, entry.entry.relative);
+      assert.ok(only !== undefined && only.outcome === 'measured', entry.entry.relative);
+      return `${entry.entry.relative} ${only.family} ${only.reuse} ${only.dateSignal} ${only.runCount}`;
+    })
+    .sort();
+  assert.deepEqual(withFacts, [
+    '_bmad-output/planning-artifacts/architecture/architecture-bmad-2026-08-28 architecture accidental present unknowable',
+    '_bmad-output/planning-artifacts/prds/prd-bmad-2026-08-28 prd accidental present unknowable',
+    '_bmad-output/planning-artifacts/ux-designs/ux-bmad-2026-08-28 ux-design accidental present unknowable',
+    '_bmad-output/specs/spec-bmad-dash spec deliberate absent unknowable',
+  ]);
+
+  // Nothing else claims run facts — not the family container directories, not
+  // the documents inside a run, not the `reviews/` and `mockups/` subfolders.
+  // An empty list is the answer for those, and a row of falsehoods would be
+  // the thing a surface then rendered.
+  // The sweep reads **every** reading, `ambiguous` included. The review round
+  // demonstrated the narrower version green: replacing `runFactsOf(identity)`
+  // with `identity.outcome === 'identified' ? … : []` dropped FR-71's
+  // disclosure for exactly the FR-73 folders that most need it, and a sweep
+  // that only looked at `identified` entries was satisfied by the result.
+  for (const entry of inventory.entries) {
+    if (entry.runFacts.length > 0) continue;
+    const shapes =
+      entry.identity.outcome === 'identified'
+        ? [entry.identity.shape]
+        : entry.identity.outcome === 'ambiguous'
+          ? entry.identity.readings.map((reading) => reading.shape)
+          : [];
+    assert.equal(
+      shapes.includes('run-folder'),
+      false,
+      `${entry.entry.relative} carries a run-folder reading with no facts`,
+    );
+  }
+});
+
+test('an ambiguous run folder keeps its collision disclosure through the pass', async (t) => {
+  // The fixture the repository cannot supply: it has no directory that is both
+  // a run folder and a sharded document. `PROJECT` does — `prd-bmad-2026-09-01`
+  // holds an `index.md` under the `prds` root — and this is the row that fails
+  // if the derivation is narrowed to `identified` verdicts. `runs.test.ts`
+  // covers the rule; this covers the wiring, which is where the mutation lives.
+  const { inventory } = await inventoried(t);
+  const ambiguous = entryFor(inventory, '_bmad-output/planning-artifacts/prds/prd-bmad-2026-09-01');
+  assert.equal(ambiguous.identity.outcome, 'ambiguous');
+  assert.equal(ambiguous.runFacts.length, 1, 'an ambiguous shape is not a reason to say nothing');
+  const only = ambiguous.runFacts[0];
+  assert.ok(only !== undefined && only.outcome === 'measured');
+  assert.equal(only.family, 'prd');
+  assert.equal(only.canCollide, true);
+  assert.equal(only.reuse, 'accidental');
+  assert.equal(only.dateSignal, 'present');
+  assert.equal(only.runCount, 'unknowable');
 });
 
 // ---------------------------------------------------------------------------
@@ -1114,7 +1251,7 @@ test('every composition over this repository is complete, with no alias anywhere
   // the budget cuts short — so every composition here is over a listing the
   // walk stood behind. A regression that made suppression or unavailability
   // routine would show up as a failure over the project's own artifacts.
-  const inventory = takeInventory(new ConfinedReader(canonical(REPO_ROOT)));
+  const inventory = repoInventory();
   assert.deepEqual(inventory.aliases, []);
   assert.equal(inventory.suppressedNotRecorded, 0);
   assert.equal(inventory.complete, true);
@@ -1438,7 +1575,7 @@ test('over this repository, only what a level read is reported readable', async 
   // project to hand. Every entry level 1 resolved is `unchecked` — nothing
   // opened it, and nothing claims otherwise — and the entries that *are*
   // `present` are exactly the ones a later level had to read.
-  const inventory = takeInventory(new ConfinedReader(canonical(REPO_ROOT)));
+  const inventory = repoInventory();
 
   const readable: string[] = [];
   for (const entry of inventory.entries) {

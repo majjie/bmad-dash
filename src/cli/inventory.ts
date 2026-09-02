@@ -111,6 +111,7 @@ import {
   type PartOmission,
 } from '../domain/document.ts';
 import { interpret, type InterpretationState } from '../domain/interpretation.ts';
+import { runFactsOf, type RunFacts } from '../domain/runs.ts';
 import { LISTING_NOT_TEXT, UNREAD, type Readability } from '../domain/signal.ts';
 
 /**
@@ -225,6 +226,26 @@ export interface InventoryEntry {
    * and on `readability`, typed, which is where it belongs.
    */
   readonly interpretation: InterpretationState | undefined;
+  /**
+   * What a run folder's name cannot carry, per run-folder reading — whether the
+   * pattern can collide within a day, whether that reuse is deliberate, and
+   * whether the name offers a date at all.
+   *
+   * **Derived from the recorded verdict, never a second identification** (AD-4):
+   * `src/domain/runs.ts` receives the `Verdict` above and nothing else, so
+   * there is no path, listing or name for it to re-read. Empty for everything
+   * the verdict did not read as a run folder, which is most entries — a
+   * document, a family's container directory, a subfolder inside a run — and
+   * empty is the answer rather than a row of falsehoods a surface could render.
+   *
+   * Nothing here counts runs. FR-71's "the tool must not assume one folder
+   * equals one run" is honoured as a negative — every fact carries
+   * `runCount: 'unknowable'` and the basis for that is recorded in the domain
+   * module — because the signal that would tell one run from two does not
+   * exist in a run folder. Detecting an actual second run needs git and is
+   * Epic 3's.
+   */
+  readonly runFacts: readonly RunFacts[];
 }
 
 /**
@@ -657,6 +678,12 @@ export function takeInventory(
       // both states are claims about something the tool found, and FR-12's own
       // term begins with the word *present*. See `InventoryEntry`.
       interpretation: entry.state === 'present' ? interpret(identity) : undefined,
+      // The other consequence of the same verdict, and it needs no `present`
+      // guard: an entry the walk did not report present has no `run-folder`
+      // shape to read — its kind is unknown, so the authority claims no shape
+      // at all — and the derivation is therefore empty by the same rule that
+      // makes it empty for a document.
+      runFacts: runFactsOf(identity),
       // One composition per entry, from the verdict and the same listing — the
       // domain decides both; this only hands over what it already holds.
       composition: compose({

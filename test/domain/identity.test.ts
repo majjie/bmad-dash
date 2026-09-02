@@ -23,6 +23,7 @@ import {
   ARTIFACT_ROOTS,
   DOCUMENT_ROOTS,
   FAMILIES,
+  KIND_PREFIXES,
   LEVELS,
   LEVEL_LABELS,
   RESEARCH_TYPES,
@@ -133,6 +134,17 @@ const EXPERIENCE_PATH = join(
   'ux-designs',
   'ux-bmad-2026-08-28',
   'EXPERIENCE.md',
+);
+
+/** The measured record of BMAD's own shapes, including the slug-position table. */
+const SOURCE_SHAPES_PATH = join(
+  dirname(fileURLToPath(import.meta.url)),
+  '..',
+  '..',
+  '_bmad-output',
+  'specs',
+  'spec-bmad-dash',
+  'bmad-source-shapes.md',
 );
 
 // ---------------------------------------------------------------------------
@@ -391,7 +403,15 @@ test('every shipped research type is a run-folder pattern', () => {
   }
 });
 
-test('all four same-day-repeating families are dated patterns, and spec is not', () => {
+test('the four project-name patterns close with a date and the spec pattern does not', () => {
+  // Renamed in Story 1.10, because the old name — "all four same-day-repeating
+  // families are dated patterns" — committed this row to a claim it does not
+  // make and that is not true. What is asserted here is **datedness**: which
+  // patterns `TRAILING_DATE` closes. The *collision surface* is a different
+  // fact and it is seven of seven, not four of seven: the other three reuse
+  // their names too, and BMAD intends them to. That claim lives in
+  // `src/domain/runs.ts` and is pinned in `test/domain/runs.test.ts`, on both
+  // axes, so the two are never conflated again.
   const dated = RUN_FOLDER_PATTERNS.filter((pattern) => pattern.dated).map((pattern) => pattern.prefix);
   for (const prefix of ['brief-', 'prd-', 'architecture-', 'ux-']) {
     assert.equal(dated.includes(prefix), true, prefix);
@@ -428,6 +448,426 @@ test('two of the seven artifact roots sit outside planning-artifacts', () => {
     RUN_FOLDER_FAMILIES.length,
     'one single-family root per run-folder family',
   );
+});
+
+// ---------------------------------------------------------------------------
+// FR-49 and FR-50 — the prefix names the kind, the slug names something else
+//
+// One row per slug position `bmad-source-shapes.md` measured, and each is
+// asserted **negatively as well as positively**: the family the slug would have
+// produced is named in the assertion, because the measured defect was not a
+// missing family but a *spurious* one, and a row that only checks the right
+// answer passes while a second wrong answer stands beside it.
+// ---------------------------------------------------------------------------
+
+test('a reviewer lens is never read as the family it reviews', () => {
+  // The measured defect, in FR-49's own words: `review-design.md` was
+  // identified as family `ux-design` because level 4 hint-matched the whole
+  // stem after the prefix had already said what this is.
+  const verdict = identify(file('_bmad-output/loose/review-design.md'));
+  assert.deepEqual(verdict, {
+    outcome: 'identified',
+    family: 'review',
+    shape: 'document',
+    resolvedAt: 'filename',
+    confidence: 'likely',
+    attempted: [
+      { level: 'location', result: 'no-signal' },
+      { level: 'frontmatter', result: 'no-signal' },
+      { level: 'structure', result: 'no-signal' },
+      { level: 'filename', result: 'resolved' },
+    ],
+  });
+  assert.notEqual(verdict.outcome, 'ambiguous', 'the lens must not add a second reading');
+
+  // Every lens in this repository, so the row cannot pass on one lucky slug.
+  // `rubric` and `edge-cases` name nothing; `design`, `contrast`,
+  // `spine-seam`, `state-coverage`, `adversarial-seams` and `tech-currency`
+  // are the ones a hint table has opinions about.
+  for (const lens of [
+    'design',
+    'contrast',
+    'spine-seam',
+    'state-coverage',
+    'adversarial',
+    'adversarial-seams',
+    'tech-currency',
+    'edge-cases',
+    'rubric',
+    'ux-tokens',
+    'prd',
+    'architecture',
+  ]) {
+    const named = identify(file(`_bmad-output/loose/review-${lens}.md`));
+    assert.equal(named.outcome === 'identified' ? named.family : null, 'review', lens);
+  }
+});
+
+test('a reconcile slug names a source input and contributes no family at all', () => {
+  // `reconcile-{slug}.md` names the input being reconciled, so `prd` is
+  // precisely the reading FR-49 forbids. The family vocabulary has no word for
+  // a reconciliation — adding a second family with no surface to render it was
+  // left as a decision, recorded in `deferred-work.md` — so the honest answer
+  // from the name is *no* family, not a wrong one.
+  const loose = identify(file('_bmad-output/loose/reconcile-prd.md'));
+  assert.equal(loose.outcome, 'unidentified');
+  assert.deepEqual(attempts(loose), [
+    'location:no-signal',
+    'frontmatter:no-signal',
+    'structure:no-signal',
+    'filename:no-signal',
+  ]);
+
+  // And inside a family root, where the location would otherwise answer: the
+  // kind declines the root's family rather than taking it, so level 1 reports
+  // no signal and the levels that read the document get their turn.
+  const inRoot = identify(
+    file('_bmad-output/planning-artifacts/prds/prd-bmad-2026-08-28/reconcile-prd.md'),
+  );
+  assert.equal(inRoot.outcome, 'unidentified', 'a reconciliation of a PRD is not a PRD');
+  assert.deepEqual(attempts(inRoot), [
+    'location:no-signal',
+    'frontmatter:no-signal',
+    'structure:no-signal',
+    'filename:no-signal',
+  ]);
+});
+
+test('a spec subject slug resolves one family and adds no second one', () => {
+  // Measured ambiguity at this story's baseline: `spec-ux-tokens` came back
+  // `[ux-design, spec]`, the `ux-design` half read out of the subject slug.
+  assert.deepEqual(runFolderFamilies('spec-ux-tokens'), ['spec']);
+  const verdict = identify(directory('_bmad-output/loose/spec-ux-tokens'));
+  assert.equal(verdict.outcome, 'identified', 'no spurious ambiguity');
+  if (verdict.outcome !== 'identified') return;
+  assert.equal(verdict.family, 'spec');
+  assert.equal(verdict.shape, 'run-folder');
+});
+
+test('a research topic slug adds no second family either', () => {
+  // The fourth slug position, and the same rule covers it: a matched
+  // run-folder pattern stops the name being read any further, so a topic that
+  // happens to contain a family word contributes nothing.
+  for (const topic of ['ux-tokens', 'prd-tooling', 'architecture', 'design']) {
+    const verdict = identify(directory(`_bmad-output/loose/market-${topic}-2026-08-28`));
+    assert.equal(verdict.outcome, 'identified', topic);
+    if (verdict.outcome !== 'identified') continue;
+    assert.equal(verdict.family, 'research', topic);
+  }
+});
+
+test('four of the five measured slug positions are covered, and the fifth cannot be', () => {
+  // **Attribution corrected in the review round.** FR-49 (`prd.md:178`) names
+  // **three** positions — `review-{slug}.md`, `reconcile-{slug}.md` and a
+  // `spec-{slug}` run folder. The fourth, `{research_type}-{topic_slug}-{date}`,
+  // comes from `bmad-source-shapes.md`, and the old name of this row credited
+  // all four to FR-49.
+  //
+  // Three are prefixes here; the fourth is a run-folder pattern, and the rule
+  // that reads only the prefix is shared — so this row asserts the coverage
+  // rather than the mechanism, and fails if a position is dropped from either
+  // table.
+  assert.deepEqual(
+    KIND_PREFIXES.map((kind) => kind.prefix),
+    ['review-', 'reconcile-', 'spec-'],
+  );
+  assert.equal(
+    KIND_PREFIXES.find((kind) => kind.prefix === 'reconcile-')?.family,
+    undefined,
+    'the vocabulary has no family for a reconciliation, and says so rather than guessing',
+  );
+  assert.deepEqual(
+    KIND_PREFIXES.filter((kind) => kind.aboutAnotherArtifact).map((kind) => kind.prefix),
+    ['review-', 'reconcile-'],
+    'only the kinds BMAD writes into another family workspace outrank the location',
+  );
+  assert.equal(
+    RESEARCH_TYPES.every((type) => runFolderFamilies(`${type}-any-topic-2026-08-28`).length === 1),
+    true,
+    'the research position is covered by the pattern table',
+  );
+  // **The fifth position, and it is uncovered by construction.** A forge run
+  // folder is a bare `{slug}` with no prefix at all, so neither table can hold
+  // a row for it: a rule broad enough to match would match every directory.
+  // The consequence is pinned rather than described, because it is the
+  // slug-as-family reading this story exists to stop and it survives here — a
+  // forge run called `prd-redesign` outside `_bmad-output/forge` reads `prd`
+  // from the hint table, at `likely`. Inside the forge root, location answers
+  // and the name is never consulted, which is FR-72's own point. Recorded in
+  // `deferred-work.md`; this row is what fails if the reading silently changes.
+  assert.deepEqual(
+    KIND_PREFIXES.filter((kind) => kind.prefix === ''),
+    [],
+    'a bare slug has no prefix to hold a row for',
+  );
+  assert.deepEqual(runFolderFamilies('prd-redesign'), [], 'and no pattern matches it either');
+  const outsideForge = identify(directory('_bmad-output/loose/prd-redesign'));
+  assert.equal(
+    outsideForge.outcome === 'identified' ? outsideForge.family : null,
+    'prd',
+    'the known-bad reading, pinned so a change to it is deliberate',
+  );
+  assert.equal(resolvedAt(outsideForge), 'filename');
+  const insideForge = identify(directory('_bmad-output/forge/prd-redesign'));
+  assert.equal(insideForge.outcome === 'identified' ? insideForge.family : null, 'forge');
+  assert.equal(resolvedAt(insideForge), 'location', 'location is the only signal a forge run has');
+});
+
+test('both FR-50 review shapes resolve to review, at any depth and with no assumed path', () => {
+  // FR-50's two locations, measured in this repository: six reviews sit at a
+  // run folder's own root and three under a `reviews/` subfolder. The *locate*
+  // half already held — level 1 matches a root by prefix containment at any
+  // depth — but until `review` was a family there was nothing for it to
+  // resolve to, so both shapes came back as the family of the workspace they
+  // sat in.
+  const shapes: readonly string[] = [
+    '_bmad-output/planning-artifacts/prds/prd-bmad-2026-08-28/review-rubric.md',
+    '_bmad-output/planning-artifacts/ux-designs/ux-bmad-2026-08-28/review-contrast.md',
+    '_bmad-output/planning-artifacts/architecture/architecture-bmad-2026-08-28/reviews/review-rubric.md',
+    // Deeper still, because "at any depth" is the claim and two levels is the
+    // deepest this repository happens to have.
+    '_bmad-output/planning-artifacts/briefs/brief-x-2026-08-28/reviews/round-2/review-rubric.md',
+  ];
+  for (const relative of shapes) {
+    const verdict = identify(file(relative));
+    assert.equal(verdict.outcome, 'identified', relative);
+    if (verdict.outcome !== 'identified') continue;
+    assert.equal(verdict.family, 'review', relative);
+    assert.equal(verdict.resolvedAt, 'location', relative);
+    assert.equal(verdict.confidence, 'certain', relative);
+  }
+
+  // The workspace keeps its own answer for its own documents: the prefix rule
+  // is not a licence for a name to override a location generally, and a
+  // `spec-…` name inside another family root claims nothing.
+  const prd = identify(file('_bmad-output/planning-artifacts/prds/prd-bmad-2026-08-28/prd.md'));
+  assert.equal(prd.outcome === 'identified' ? prd.family : null, 'prd');
+  const named = identify(file('_bmad-output/planning-artifacts/prds/prd-x-2026-08-28/spec-notes.md'));
+  assert.equal(named.outcome === 'identified' ? named.family : null, 'prd');
+});
+
+test('a document that declares itself a review is read as one', () => {
+  // Three of this repository's nine reviews carry `type: review`. Level 1
+  // answers for all of them where they sit, so this is the row that says the
+  // declaration is readable at all — a family the frontmatter can name and the
+  // filename cannot is a family half-added.
+  const verdict = identify(file('_bmad-output/loose/round-2.md', '---\ntype: review\n---\n'));
+  assert.equal(verdict.outcome === 'identified' ? verdict.family : null, 'review');
+  assert.equal(resolvedAt(verdict), 'frontmatter');
+});
+
+test('a kind prefix is not overruled by a heading or a title that names the target', () => {
+  // Review round finding, reproduced before it was fixed: the first version of
+  // this story's fix reached levels 1 and 4 and left `HEADING_PHRASES` and
+  // `declaredFamilies` untouched, so outside every artifact root — which this
+  // module's header calls exactly what a project using its own layout looks
+  // like — a review was still read as the artifact it reviews, at `certain`,
+  // which outranks the `likely` level-4 reading that had just been corrected.
+  //
+  // Both measured rows, with the *real* strings from this repository's own
+  // reviews rather than invented ones.
+  const heading = identify(
+    file('_bmad-output/loose/review-rubric.md', '# PRD Quality Review — BMAD Dashboard CLI\n'),
+  );
+  assert.equal(heading.outcome, 'identified', 'the heading names the target, not this document');
+  if (heading.outcome !== 'identified') return;
+  assert.equal(heading.family, 'review');
+  assert.notEqual(heading.family, 'prd', 'level 3 must not name the reviewed artifact');
+  assert.equal(heading.resolvedAt, 'filename', 'the heading contributed nothing, so level 4 answers');
+  assert.equal(heading.confidence, 'likely');
+  assert.deepEqual(attempts(heading), [
+    'location:no-signal',
+    // The level *ran* and found no family for this document: `no-signal`, not
+    // `unavailable`, because the text was read and what it held was a target.
+    'frontmatter:no-signal',
+    'structure:no-signal',
+    'filename:resolved',
+  ]);
+
+  // The commonest way a review titles itself, and the row that went
+  // `ambiguous ['prd', 'review']` — for the very family the hint rows were
+  // added to serve. A declaration that names *both* keeps the half that names
+  // this document and discards the half that names its subject.
+  const titled = identify(
+    file(
+      '_bmad-output/loose/review-adversarial.md',
+      ['---', 'title: Adversarial review — BMAD Dashboard CLI PRD', '---'].join('\n'),
+    ),
+  );
+  assert.equal(titled.outcome, 'identified', 'a two-family review title is not ambiguous');
+  if (titled.outcome !== 'identified') return;
+  assert.equal(titled.family, 'review');
+  assert.equal(titled.resolvedAt, 'frontmatter', 'the document does declare itself a review');
+  assert.equal(titled.confidence, 'certain');
+
+  // And a review whose frontmatter names only its target resolves from its
+  // name instead, rather than from the target.
+  const target = identify(
+    file('_bmad-output/loose/review-x.md', ['---', 'type: prd', '---'].join('\n')),
+  );
+  assert.equal(target.outcome === 'identified' ? target.family : null, 'review');
+  assert.equal(resolvedAt(target), 'filename');
+
+  // A reconciliation has no family at any level, so a heading naming the input
+  // it reconciles resolves nothing at all — the FR-49 reading, closed on the
+  // level that was reporting it at `certain`.
+  const reconcile = identify(
+    file('_bmad-output/loose/reconcile-epics.md', '# Reconciliation against the epics list\n'),
+  );
+  assert.equal(reconcile.outcome, 'unidentified');
+
+  // The constraint applies only to a document *about another artifact*. A story
+  // spec is about itself, and a name must not decide between `spec-`'s two
+  // spellings — so its own declaration still wins, which is the property the
+  // location test below depends on.
+  const story = identify(
+    file(
+      '_bmad-output/loose/spec-1-7-x.md',
+      ['---', 'title: Story 1.7 — identify what each artifact is', '---'].join('\n'),
+    ),
+  );
+  assert.equal(story.outcome === 'identified' ? story.family : null, 'story');
+  assert.equal(resolvedAt(story), 'frontmatter');
+});
+
+test('the implementation output root resolves reviews, declines reconciliations, and stays total otherwise', () => {
+  // Review round finding: the level-1 rule returned `undefined` for a kind with
+  // no family *anywhere*, which took the `DOCUMENT_ROOTS` residual with it and
+  // regressed the totality property Story 1.7 added — the one whose absence
+  // made a third of a real tree read "not identified". Two BMAD skills write
+  // their reviews under `{implementation_artifacts}` when subagents are
+  // unavailable, so both halves are real locations.
+  const review = identify(file('_bmad-output/implementation-artifacts/review-story-1-10.md'));
+  assert.deepEqual(review, {
+    outcome: 'identified',
+    family: 'review',
+    shape: 'document',
+    resolvedAt: 'location',
+    confidence: 'certain',
+    attempted: [{ level: 'location', result: 'resolved' }],
+  });
+
+  const reconcile = identify(file('_bmad-output/implementation-artifacts/reconcile-epics.md'));
+  assert.equal(reconcile.outcome, 'unidentified', 'a reconciliation is not a working note');
+  assert.equal(
+    reconcile.outcome === 'unidentified' ? null : 'resolved',
+    null,
+    'and it is not resolved to the residual by another route either',
+  );
+
+  // Totality, restated as what it actually claims: every name **no rule
+  // matches** resolves, to the residual. The exception above is a rule
+  // matching and declining, not a hole.
+  for (const name of ['anything-else.md', 'notes.txt', 'epic-1-context.md']) {
+    const verdict = identify(file(`_bmad-output/implementation-artifacts/${name}`));
+    assert.equal(verdict.outcome, 'identified', name);
+    assert.equal(resolvedAt(verdict), 'location', name);
+  }
+  assert.equal(
+    DOCUMENT_ROOTS[0]?.documents.some((rule) => rule.family === undefined),
+    true,
+    'the declining rule is in the table, not a side channel around it',
+  );
+});
+
+test('the review hint rows are both load-bearing, and the plural one only outside a root', () => {
+  // Review round finding: the plural row survived deletion with the whole
+  // suite green. Both rows are pinned here, and the plural one is pinned in
+  // the only place it can act — inside any artifact root, level 1 answers a
+  // directory called `reviews` with the root's own family and level 4 is never
+  // reached.
+  assert.equal(
+    identify(directory('_bmad-output/loose/reviews', [])).outcome === 'identified'
+      ? 'resolved'
+      : null,
+    'resolved',
+  );
+  const dir = identify(directory('_bmad-output/loose/reviews', []));
+  assert.equal(dir.outcome === 'identified' ? dir.family : null, 'review');
+  const doc = identify(file('_bmad-output/loose/reviews.md'));
+  assert.equal(doc.outcome === 'identified' ? doc.family : null, 'review');
+
+  // The singular row, which is what a self-declaration needs.
+  const declared = identify(file('_bmad-output/loose/round-3.md', '---\ntype: review\n---\n'));
+  assert.equal(declared.outcome === 'identified' ? declared.family : null, 'review');
+
+  // Inside a root the plural row is inert: this is the enclosing family, and
+  // the comment that once said otherwise was wrong.
+  const inRoot = identify(
+    directory('_bmad-output/planning-artifacts/architecture/architecture-x-2026-08-28/reviews', [
+      'review-rubric.md',
+    ]),
+  );
+  assert.equal(inRoot.outcome === 'identified' ? inRoot.family : null, 'architecture');
+  assert.equal(resolvedAt(inRoot), 'location');
+});
+
+test('the prefix rule speaks only about document names, so an image beside a mockup is not a review', () => {
+  // Review round finding: `review-mockup.png` in a UX run folder resolved
+  // family `review`, shape `document`, at `certain` — an image reported as a
+  // review because its filename starts with a word. The guard asks
+  // `isMarkdown`, which is exported precisely so two readers of "what counts
+  // as markdown" cannot disagree.
+  const image = identify(
+    file('_bmad-output/planning-artifacts/ux-designs/ux-x-2026-08-28/mockups/review-mockup.png'),
+  );
+  assert.equal(image.outcome === 'identified' ? image.family : null, 'ux-design');
+  assert.equal(resolvedAt(image), 'location');
+
+  // The markdown sibling is still a review, so the guard has not closed the
+  // rule it exists to bound.
+  const document = identify(
+    file('_bmad-output/planning-artifacts/ux-designs/ux-x-2026-08-28/review-contrast.md'),
+  );
+  assert.equal(document.outcome === 'identified' ? document.family : null, 'review');
+
+  // A directory has no extension and is admitted, which is what a `spec-{slug}`
+  // run folder needs.
+  const folder = identify(directory('_bmad-output/loose/spec-ux-tokens'));
+  assert.equal(folder.outcome === 'identified' ? folder.family : null, 'spec');
+});
+
+test('an empty slug names no lens, and reads the same way inside a root and outside one', () => {
+  // The empty-slug guard was removed in the review round: it survived deletion
+  // with the suite green, and its one observable effect was an inconsistency —
+  // `review-.md` read `review` outside a root, from the hint table, and the
+  // enclosing family inside one. Now the prefix answers in both places.
+  const loose = identify(file('_bmad-output/loose/review-.md'));
+  assert.equal(loose.outcome === 'identified' ? loose.family : null, 'review');
+  const inRoot = identify(file('_bmad-output/planning-artifacts/prds/prd-x-2026-08-28/review-.md'));
+  assert.equal(inRoot.outcome === 'identified' ? inRoot.family : null, 'review');
+});
+
+test("the slug meanings are read out of bmad-source-shapes.md, not restated here", async () => {
+  // The mechanism the level labels, the signal labels and the interpretation
+  // definitions already use, applied to the one table this story added: a
+  // measured meaning restated from memory is a second copy of one belief.
+  // Raised in the review round as dead data — documented as measured, read by
+  // nothing, asserted by nothing.
+  const measured = await readFile(SOURCE_SHAPES_PATH, 'utf8');
+  const rows = new Map<string, string>();
+  for (const line of measured.split('\n')) {
+    const cells = /^\|\s*`([^`]+)`\s*\|\s*(.+?)\s*\|$/.exec(line);
+    if (cells === null) continue;
+    const [, position, names] = cells;
+    if (position === undefined || names === undefined) continue;
+    rows.set(position, names);
+  }
+  assert.ok(rows.size >= 4, `the slug table was not found in bmad-source-shapes.md (${String(rows.size)} rows)`);
+
+  const expected: readonly (readonly [string, string])[] = [
+    ['review-', 'review-{slug}.md'],
+    ['reconcile-', 'reconcile-{slug}.md'],
+    ['spec-', 'spec-{slug}/'],
+  ];
+  for (const [prefix, position] of expected) {
+    const kind = KIND_PREFIXES.find((row) => row.prefix === prefix);
+    assert.ok(kind !== undefined, prefix);
+    assert.equal(kind.slugNames, rows.get(position), position);
+  }
+  // The fourth position is the research pattern, and its meaning is measured in
+  // the same table — asserted so the table cannot be trimmed to three.
+  assert.equal(rows.get('{research_type}-{topic_slug}-{date}/'), 'the research topic');
 });
 
 // ---------------------------------------------------------------------------
@@ -631,11 +1071,21 @@ test('the run-folder families are the seven FR-11 requires, and the vocabulary i
       'research',
       'spec',
       'forge',
+      // Story 1.10's addition, and it is deliberately *not* one of FR-11's
+      // seven: no skill writes a `review-…` run folder, and a review is a
+      // different artifact from the thing it reviews — which is what gives
+      // FR-50 something to resolve to.
+      'review',
       'epics',
       'story',
       'sprint-tracking',
       'note',
     ],
+  );
+  assert.equal(
+    (RUN_FOLDER_FAMILIES as readonly string[]).includes('review'),
+    false,
+    'review is a family but never a run-folder family',
   );
   assert.equal(
     RUN_FOLDER_FAMILIES.every((family) => FAMILIES.includes(family)),
