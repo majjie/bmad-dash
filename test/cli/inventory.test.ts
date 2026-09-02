@@ -20,11 +20,15 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile, rename, writeFile } from 'node:fs/promises';
+// Synchronous, and only in this file's fixture: the pass reads inside one
+// synchronous call, so a file can only be made to vanish *between* the walk and
+// the read from inside the read itself.
+import { rmSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { canonical } from '../../src/adapters/fs/paths.ts';
-import { ConfinedReader, ConfinementError } from '../../src/adapters/fs/read.ts';
+import { ConfinedReader, ConfinementError, MAX_READ_BYTES } from '../../src/adapters/fs/read.ts';
 import {
   INVENTORY_BUDGET,
   MAX_RECORDED_SKIPS,
@@ -32,10 +36,14 @@ import {
   SKIPPED_NAMES,
   takeInventory,
   type Inventory,
+  type InventoryEntry,
 } from '../../src/cli/inventory.ts';
 import { MAX_RECORDED_SUPPRESSIONS } from '../../src/adapters/fs/walk.ts';
 import type { Verdict } from '../../src/domain/identity.ts';
+import { interpret } from '../../src/domain/interpretation.ts';
+import { UNREAD, type Readability } from '../../src/domain/signal.ts';
 import { documentsOf, type Composition } from '../../src/domain/document.ts';
+import { makeScratchDir } from '../support/project.ts';
 import {
   deniableDirectories,
   makeTree,
@@ -74,6 +82,13 @@ async function inventoried(
 ): Promise<{ readonly root: string; readonly inventory: Inventory }> {
   const root = await makeTree(t, [...PROJECT, ...extra]);
   return { root, inventory: takeInventory(new ConfinedReader(canonical(root))) };
+}
+
+/** One whole entry, by its project-root-relative path. */
+function entryFor(inventory: Inventory, relative: string): InventoryEntry {
+  const found = inventory.entries.find((entry) => entry.entry.relative === relative);
+  assert.ok(found !== undefined, `no inventory entry for ${relative}`);
+  return found;
 }
 
 /** The verdict for one entry, by its project-root-relative path. */
@@ -219,7 +234,7 @@ test('an unreadable file is identified by path alone and does not stop the pass'
   assert.match(
     String(verdict.attempted[1]?.reason),
     /UTF-8/,
-    'the reason a level could not run is the reader own',
+    "the reason a level could not run is the reader's own",
   );
   // The rest of the tree is still there: an unreadable file is a value, not an
   // abort, which is the whole of AD-7 applied to this pass.
@@ -584,8 +599,22 @@ test('a confinement refusal on one read does not abort the pass', async (t) => {
   const frontmatter = refused.attempted.find((attempt) => attempt.level === 'frontmatter');
   assert.equal(frontmatter?.result, 'unavailable');
   assert.match(String(frontmatter?.reason), /outside/);
+
+  // The signal, not only the verdict. Left unasserted, replacing this branch's
+  // signal with `{state: 'present'}` kept the suite green — the pass then
+  // reported content it had been *refused* as readable, with
+  // `content.available === false` beside it, which is the same shape this story
+  // opened with one layer down. `unchecked` rather than `unreadable`, and at
+  // the same stage the walk uses for the same decision: the filesystem
+  // answered and the answer was declined.
+  const read = failedRead(inventory, '_bmad-output/loose/handover.md');
+  assert.equal(read.state, 'unchecked');
+  assert.equal(read.stage, 'confinement');
+  assert.match(read.reason, /outside/);
+
   // And the rest of the pass is intact.
   assert.equal(paths(inventory).includes('_bmad-output/loose/other.md'), true);
+  assert.equal(entryFor(inventory, '_bmad-output/loose/other.md').readability.state, 'present');
 });
 
 test('a file whose family the location resolves is never opened', async (t) => {
@@ -914,6 +943,25 @@ test('an alias whose winning spelling is not present is not restored as a name',
   );
   assert.match(String(inventory.aliases[0]?.reason), /is not reported as present/);
 
+  // The denied directory's own entry: the walk's state and stage are forwarded
+  // onto the signal rather than being re-derived or defaulted. Unasserted, an
+  // `if (entry.state !== 'absent') return { state: 'present' }` inserted ahead
+  // of the forward left the suite green — a directory the pass could not
+  // enumerate reported readable content.
+  const deniedRead = failedRead(inventory, `${relative}/aaa`);
+  assert.equal(deniedRead.state, 'unreadable');
+  assert.equal(deniedRead.stage, 'read-directory');
+  const deniedEntry = entryFor(inventory, `${relative}/aaa`).entry;
+  assert.notEqual(deniedEntry.state, 'present');
+  if (deniedEntry.state !== 'present') {
+    assert.equal(deniedRead.reason, deniedEntry.reason, 'the reason is carried, not composed');
+  }
+  assert.equal(
+    entryFor(inventory, `${relative}/aaa`).interpretation,
+    undefined,
+    'a directory the pass could not read is not an interpretation of anything',
+  );
+
   const entry = inventory.entries.find((each) => each.entry.relative === relative);
   assert.ok(entry !== undefined);
   assert.deepEqual(entry.children, { available: true, names: [] }, 'neither name is a signal');
@@ -1092,4 +1140,525 @@ test('every composition over this repository is complete, with no alias anywhere
     )
     .map((entry) => entry.entry.relative);
   assert.deepEqual(sharded, [], 'if a sharded document lands here, this story gains a real fixture');
+});
+
+// ---------------------------------------------------------------------------
+// What could not be read or recognized — Story 1.9, one row per matrix line
+//
+// Readability is a **signal**, recorded beside the verdict and never inside it:
+// every row below asserts both, because the defect this story closes was one
+// value being present and honest (the identity) while the other did not exist
+// at all. `assert.notEqual(readability.state, 'present')` appears deliberately
+// often — it is the mutation that reports content nobody read as fine, which is
+// the NFR-3 violation measured at this story's baseline.
+// ---------------------------------------------------------------------------
+
+/**
+ * The readability of one entry, narrowed to the failing variant.
+ *
+ * The return type is the union member itself, not a widened `{state: string}`:
+ * widening it would let a stage outside `ReadStage` satisfy every assertion
+ * beneath it, in the tests for the story whose whole subject is a closed
+ * vocabulary. `assert.ok` narrows, so no second guard is needed.
+ */
+function failedRead(
+  inventory: Inventory,
+  relative: string,
+): Exclude<Readability, { readonly state: 'present' }> {
+  const { readability } = entryFor(inventory, relative);
+  assert.ok(readability.state !== 'present', `${relative} was reported readable`);
+  return readability;
+}
+
+test('an undecodable file a level had to read is unreadable, at the decode stage', async (t) => {
+  // Outside every artifact root, so level 2 actually asks for the text. The
+  // decode is what fails — `readFileSync(path, 'utf8')` would have substituted
+  // U+FFFD and reported success, which is why the reader decodes strictly.
+  const root = await makeTree(t, PROJECT);
+  await writeFile(join(root, '_bmad-output', 'prd.md'), Buffer.from([0xff, 0xfe, 0x00, 0x41]));
+  const inventory = takeInventory(new ConfinedReader(canonical(root)));
+
+  const read = failedRead(inventory, '_bmad-output/prd.md');
+  assert.equal(read.state, 'unreadable');
+  assert.equal(read.stage, 'decode', 'the stage names the read that failed, not the file');
+  assert.match(read.reason, /UTF-8/, "the reason is the reader's own words, beside the typed pair");
+
+  // And the identity verdict is exactly what Story 1.7 produces for this file:
+  // this story records a second signal and re-derives nothing (AD-4).
+  const verdict = verdictFor(inventory, '_bmad-output/prd.md');
+  assert.deepEqual(
+    verdict.attempted.map((attempt) => `${attempt.level}:${attempt.result}`),
+    ['location:no-signal', 'frontmatter:unavailable', 'structure:unavailable', 'filename:resolved'],
+  );
+  assert.equal(verdict.outcome === 'identified' ? verdict.family : null, 'prd');
+  assert.equal(verdict.outcome === 'identified' ? verdict.confidence : null, 'likely');
+  assert.equal(inventory.complete, true, 'an unreadable file is a value, not an abort');
+});
+
+test('an undecodable file under an artifact root is unchecked, never present', async (t) => {
+  // The measured defect, and this story's accepted limit in one row. Level 1
+  // resolves this file's family from its location without opening it, so
+  // nothing read the bytes: the honest report is `unchecked` — the tool saying
+  // it did not look — rather than `present`, which claimed corrupt content was
+  // fine, or `unreadable`, which would claim a read that never happened.
+  const root = await makeTree(t, PROJECT);
+  const under = join(root, '_bmad-output', 'planning-artifacts', 'prds', 'prd.md');
+  await writeFile(under, Buffer.from([0xff, 0xfe, 0x00, 0x41]));
+
+  const reader = new ConfinedReader(canonical(root));
+  const real = reader.readText.bind(reader);
+  const opened: string[] = [];
+  reader.readText = (path: string) => {
+    opened.push(path);
+    return real(path);
+  };
+  const inventory = takeInventory(reader);
+
+  const read = failedRead(inventory, '_bmad-output/planning-artifacts/prds/prd.md');
+  assert.equal(read.state, 'unchecked');
+  assert.equal('stage' in read, false, 'nothing was attempted, so there is no stage to name');
+  assert.match(read.reason, /nothing read it/);
+  assert.equal(
+    opened.some((path) => path.endsWith('prd.md') && path.includes('prds')),
+    false,
+    'the file under a root must never be opened — that is the trade this limit comes from',
+  );
+
+  // Nothing else in the entry claims the content is readable either: the
+  // verdict resolved at level 1 and says so, and its only attempt is that one.
+  const verdict = verdictFor(inventory, '_bmad-output/planning-artifacts/prds/prd.md');
+  assert.deepEqual(
+    verdict.attempted.map((attempt) => `${attempt.level}:${attempt.result}`),
+    ['location:resolved'],
+  );
+  assert.equal(verdict.outcome === 'identified' ? verdict.family : null, 'prd');
+  assert.equal(verdict.outcome === 'identified' ? verdict.confidence : null, 'certain');
+});
+
+test('a file over the read limit is unreadable, naming the size and the limit', async (t) => {
+  const root = await makeTree(t, [
+    { dir: '_bmad' },
+    { file: '_bmad-output/loose/notes.md', text: '# Notes\n' },
+  ]);
+  await writeFile(join(root, '_bmad-output', 'loose', 'huge.md'), Buffer.alloc(MAX_READ_BYTES + 1, 0x61));
+  const inventory = takeInventory(new ConfinedReader(canonical(root)));
+
+  const read = failedRead(inventory, '_bmad-output/loose/huge.md');
+  assert.equal(read.state, 'unreadable');
+  assert.equal(read.stage, 'examine', 'refused before a byte was read, which is the point of the limit');
+  assert.match(read.reason, new RegExp(String(MAX_READ_BYTES)));
+  // Listed, never omitted, and the sibling is untouched.
+  assert.equal(paths(inventory).includes('_bmad-output/loose/huge.md'), true);
+  assert.equal(entryFor(inventory, '_bmad-output/loose/notes.md').readability.state, 'present');
+});
+
+test('a fifo named like a document is unreadable and does not block the pass', async (t) => {
+  if (process.platform === 'win32') {
+    t.skip('no fifos on Windows');
+    return;
+  }
+  const root = await makeTree(t, [
+    { dir: '_bmad' },
+    { file: '_bmad-output/loose/real.md', text: '# Real\n' },
+  ]);
+  const { execFileSync } = await import('node:child_process');
+  try {
+    execFileSync('mkfifo', [join(root, '_bmad-output', 'loose', 'notes.md')]);
+  } catch {
+    t.skip('no mkfifo on this box; nothing to assert');
+    return;
+  }
+
+  // If this hangs, the pass opened it: `readFileSync` on a fifo waits for a
+  // writer that never comes, and in the server that means the request never
+  // returns and the process never exits.
+  const inventory = takeInventory(new ConfinedReader(canonical(root)));
+
+  const read = failedRead(inventory, '_bmad-output/loose/notes.md');
+  assert.equal(read.state, 'unreadable');
+  assert.equal(read.stage, 'examine', 'refused on its kind, before anything opened it');
+  assert.match(read.reason, /not a regular file/);
+  assert.equal(entryFor(inventory, '_bmad-output/loose/notes.md').entry.state, 'present');
+  assert.equal(entryFor(inventory, '_bmad-output/loose/real.md').readability.state, 'present');
+});
+
+test('one malformed artifact leaves every sibling intact and the pass complete', async (t) => {
+  // NFR-4 through the composition: a single unparseable artifact degrades to an
+  // explicit state for that artifact only. Asserted over *every* other entry
+  // rather than one spot check, because "the rest of the tool remains usable"
+  // is a claim about all of them.
+  const root = await makeTree(t, PROJECT);
+  await writeFile(join(root, '_bmad-output', 'broken.md'), Buffer.from([0xc3, 0x28, 0xa0, 0xa1]));
+  const inventory = takeInventory(new ConfinedReader(canonical(root)));
+
+  assert.equal(failedRead(inventory, '_bmad-output/broken.md').state, 'unreadable');
+  assert.equal(inventory.complete, true, 'one bad artifact must not make the pass incomplete');
+  assert.deepEqual(inventory.truncations, []);
+
+  for (const entry of inventory.entries) {
+    assert.equal(entry.entry.state, 'present', entry.entry.relative);
+    if (entry.entry.relative === '_bmad-output/broken.md') continue;
+    if (entry.entry.relative === '_bmad-output/unremarkable.txt') continue;
+    if (['_bmad-output', '_bmad-output/planning-artifacts'].includes(entry.entry.relative)) continue;
+    assert.notEqual(entry.identity.outcome, 'unidentified', entry.entry.relative);
+    assert.notEqual(
+      entry.readability.state,
+      'unreadable',
+      `${entry.entry.relative} was made unreadable by a sibling`,
+    );
+  }
+});
+
+test('a frontmatter block that is never closed is unavailable, not an empty success', async (t) => {
+  // AD-13's rule applied where this story can apply it: a parser reading a
+  // convention-defined source validates that it extracted something, and an
+  // empty extraction is never returned as a successful empty result. The block
+  // opens, declares `type: prd`, and never closes — so the declaration is not
+  // authoritative, and level 2 says it could not run rather than reporting no
+  // declaration over one that is there.
+  const root = await makeTree(t, [
+    { dir: '_bmad' },
+    { file: '_bmad-output/loose/opened.md', text: '---\ntype: prd\n\n# Something\n' },
+  ]);
+  const inventory = takeInventory(new ConfinedReader(canonical(root)));
+
+  // The bytes read perfectly well: this is an interpretation failure, not a
+  // readability one, and keeping the two apart is the point of the two fields.
+  assert.equal(entryFor(inventory, '_bmad-output/loose/opened.md').readability.state, 'present');
+
+  const verdict = verdictFor(inventory, '_bmad-output/loose/opened.md');
+  const frontmatter = verdict.attempted.find((attempt) => attempt.level === 'frontmatter');
+  assert.equal(frontmatter?.result, 'unavailable');
+  assert.match(String(frontmatter?.reason), /never closed/);
+  assert.equal(verdict.outcome, 'unidentified', 'an unclosed block must not resolve a family');
+  assert.equal(
+    entryFor(inventory, '_bmad-output/loose/opened.md').interpretation,
+    'unidentified',
+  );
+});
+
+test('an artifact truncated mid-write is reported, never presented as valid', async (t) => {
+  // NFR-3's own words: BMAD agents write these files while the tool reads them,
+  // and a partially written one must be handled without crashing and without
+  // presenting corrupt data as valid. The cut lands inside a multi-byte
+  // character, which is what a real truncation does — the frontmatter above it
+  // is intact and is still not treated as a declaration, because the file it
+  // came from could not be decoded.
+  const root = await makeTree(t, [
+    { dir: '_bmad' },
+    { file: '_bmad-output/loose/other.md', text: '# Other\n' },
+  ]);
+  await writeFile(
+    join(root, '_bmad-output', 'loose', 'partial.md'),
+    Buffer.concat([
+      Buffer.from('---\ntype: prd\n---\n\n# Product Requirements\n\ncaf', 'utf8'),
+      Buffer.from([0xc3]),
+    ]),
+  );
+  const inventory = takeInventory(new ConfinedReader(canonical(root)));
+
+  const read = failedRead(inventory, '_bmad-output/loose/partial.md');
+  assert.equal(read.state, 'unreadable');
+  assert.equal(read.stage, 'decode');
+
+  const verdict = verdictFor(inventory, '_bmad-output/loose/partial.md');
+  assert.equal(verdict.outcome, 'unidentified', 'a file nobody could decode must claim no family');
+  assert.deepEqual(
+    verdict.attempted.map((attempt) => attempt.result),
+    ['no-signal', 'unavailable', 'unavailable', 'no-signal'],
+  );
+  assert.equal(entryFor(inventory, '_bmad-output/loose/other.md').readability.state, 'present');
+  assert.equal(inventory.complete, true);
+});
+
+test('the state and the stage stay typed, and no reason is a sentence about them', async (t) => {
+  if (!(await symlinksAvailable())) {
+    t.skip('symlinks are unavailable here, so a dangling entry cannot be built');
+    return;
+  }
+  // The pin against the flattening this story removed. `unusable` used to
+  // compose `${state} at the ${stage} stage: ${reason}` — three values in one
+  // string nothing can branch on — while the state and the stage were already
+  // typed on the walk entry. Both are now on the readability signal too, in
+  // AD-8's vocabulary, and the reason is the platform's own words and only
+  // those.
+  const { inventory } = await inventoried(t, [
+    { link: '_bmad-output/loose/gone.md', to: '_bmad-output/nowhere.md', type: 'file' },
+  ]);
+  const entry = entryFor(inventory, '_bmad-output/loose/gone.md');
+  assert.equal(entry.entry.state, 'absent');
+  // `assert.equal` narrows the state, and with it the entry, so `reason` below
+  // is reachable without a second guard the typechecker would call impossible.
+  const read = failedRead(inventory, '_bmad-output/loose/gone.md');
+  assert.equal(read.state, 'absent', "the walk's own state, forwarded rather than re-derived");
+  assert.equal(read.stage, 'resolve');
+  assert.equal(read.reason, entry.entry.reason, 'the reason is carried, not composed');
+
+  for (const attempt of entry.identity.attempted) {
+    if (attempt.reason === undefined) continue;
+    assert.equal(attempt.reason, entry.entry.reason, 'a level reason is the raw one');
+    assert.doesNotMatch(
+      attempt.reason,
+      /at the \w+ stage/,
+      'the typed state and stage must not be folded back into prose',
+    );
+  }
+});
+
+test('FR-12 and FR-69 arrive as distinct states on the entry', async (t) => {
+  const { inventory } = await inventoried(t, [
+    // Recognized by name, with no shape anything can interpret: a directory of
+    // markdown with no `index.md` and no run-folder signal.
+    { file: '_bmad-output/loose/research/a.md', text: '# Notes\n' },
+  ]);
+
+  const uninterpreted = entryFor(inventory, '_bmad-output/loose/research');
+  assert.equal(uninterpreted.identity.outcome, 'identified');
+  assert.equal(uninterpreted.interpretation, 'present-but-uninterpreted');
+
+  const unidentified = entryFor(inventory, '_bmad-output/unremarkable.txt');
+  assert.equal(unidentified.identity.outcome, 'unidentified');
+  assert.equal(unidentified.interpretation, 'unidentified');
+  assert.deepEqual(
+    unidentified.identity.attempted.map((attempt) => attempt.level),
+    ['location', 'frontmatter', 'structure', 'filename'],
+    "FR-69 names the levels attempted, and that half is the verdict's own",
+  );
+
+  const interpreted = entryFor(inventory, '_bmad-output/specs/spec-bmad-dash/SPEC.md');
+  assert.equal(interpreted.interpretation, 'interpreted');
+
+  // Distinct, not two spellings of one state: no entry is both, and the two
+  // rows above disagree with each other.
+  assert.notEqual(uninterpreted.interpretation, unidentified.interpretation);
+});
+
+test('over this repository, only what a level read is reported readable', async () => {
+  // The accepted limit and the fix, both measured against the only real BMAD
+  // project to hand. Every entry level 1 resolved is `unchecked` — nothing
+  // opened it, and nothing claims otherwise — and the entries that *are*
+  // `present` are exactly the ones a later level had to read.
+  const inventory = takeInventory(new ConfinedReader(canonical(REPO_ROOT)));
+
+  const readable: string[] = [];
+  for (const entry of inventory.entries) {
+    const { identity, readability } = entry;
+    // Deliberately **not** "nothing here is unreadable": that is a claim about
+    // what happens to be committed, and it breaks the day someone adds a
+    // binary or an over-limit file under `_bmad-output`. The property that is
+    // actually wanted is that an unreadable one says where and why.
+    if (readability.state !== 'present' && readability.state !== 'unchecked') {
+      assert.notEqual(readability.stage, undefined, entry.entry.relative);
+      assert.ok(readability.reason.length > 0, entry.entry.relative);
+    }
+    if (identity.outcome !== 'unidentified' && identity.resolvedAt === 'location') {
+      assert.equal(
+        readability.state,
+        'unchecked',
+        `${entry.entry.relative} claims a readability nothing established`,
+      );
+      continue;
+    }
+    if (readability.state === 'present') readable.push(entry.entry.relative);
+  }
+
+  // Not vacuous from either side: some artifacts here really are read, and
+  // `epics.md` is one — it sits directly under BMAD's planning layout rather
+  // than inside a family root, so level 1 finds nothing and level 2 opens it.
+  assert.ok(readable.length > 0, 'no artifact in the real tree was read at all');
+  assert.ok(
+    readable.includes('_bmad-output/planning-artifacts/epics.md'),
+    `expected epics.md among the artifacts actually read: ${readable.join(', ')}`,
+  );
+
+  // And every interpretation over the real tree is one of the three, with the
+  // layout directories the only rows FR-69 applies to — the same three the
+  // family assertion above enumerates, arrived at from the other side.
+  const byState = new Map<string, string[]>();
+  for (const entry of inventory.entries) {
+    // Every entry in this tree is `present`, so every one has an
+    // interpretation; a `?? 'none'` bucket would hide it if that stopped being
+    // true, so the absence is asserted instead.
+    assert.notEqual(entry.interpretation, undefined, entry.entry.relative);
+    const state = entry.interpretation ?? 'none';
+    const held = byState.get(state) ?? [];
+    held.push(entry.entry.relative);
+    byState.set(state, held);
+    // The pairing, checked rather than trusted: `interpretation` is a cached
+    // derivation of `identity` sitting beside it, and nothing else would notice
+    // the two drifting apart.
+    assert.equal(state, interpret(entry.identity), entry.entry.relative);
+  }
+  assert.deepEqual(
+    (byState.get('unidentified') ?? []).sort(),
+    ['_bmad-output', '_bmad-output/implementation-artifacts', '_bmad-output/planning-artifacts'],
+  );
+});
+
+test('an escaping link and a denied directory forward the walk state onto the signal', async (t) => {
+  if (!(await symlinksAvailable()) || !deniableDirectories()) {
+    t.skip('needs symlinks and a non-root POSIX user');
+    return;
+  }
+  // Two of the three non-present states, which the dangling-file row above
+  // does not reach: it pins `absent`/`resolve` alone, so inserting
+  // `if (entry.state !== 'absent') return { state: 'present' };` ahead of the
+  // forward left the suite green — an escaping link and an unreadable
+  // directory both reporting readable content.
+  const outside = await makeScratchDir(t, 'bmad-dash-inventory-outside-');
+  await writeFile(join(outside, 'secret.md'), '# not yours\n');
+
+  const root = await makeTree(t, [
+    { dir: '_bmad' },
+    { file: '_bmad-output/loose/real.md', text: '# Real\n' },
+    { dir: '_bmad-output/loose/denied' },
+    { link: '_bmad-output/loose/away.md', to: join(outside, 'secret.md'), type: 'file' },
+  ]);
+  const inventory = await whileDenied(join(root, '_bmad-output', 'loose', 'denied'), () =>
+    takeInventory(new ConfinedReader(canonical(root))),
+  );
+
+  const escaped = failedRead(inventory, '_bmad-output/loose/away.md');
+  assert.equal(escaped.state, 'unchecked', 'a refused path was never read, and never will be');
+  assert.equal(escaped.stage, 'confinement');
+  assert.match(escaped.reason, /outside the project/);
+  assert.equal(entryFor(inventory, '_bmad-output/loose/away.md').interpretation, undefined);
+
+  const denied = failedRead(inventory, '_bmad-output/loose/denied');
+  assert.equal(denied.state, 'unreadable');
+  assert.equal(denied.stage, 'read-directory');
+  assert.equal(entryFor(inventory, '_bmad-output/loose/denied').interpretation, undefined);
+
+  // Neither one stops the pass, and the sibling is read normally.
+  assert.equal(entryFor(inventory, '_bmad-output/loose/real.md').readability.state, 'present');
+  assert.equal(inventory.complete, false, 'entries that are not present are not a complete pass');
+});
+
+test('a file denied to the process is unreadable at the read stage', async (t) => {
+  if (!deniableDirectories()) {
+    t.skip('needs a non-root POSIX user: root is not denied by a 0o000 mode');
+    return;
+  }
+  // The most ordinary unreadable artifact there is, and the only case that
+  // reaches `stage: 'read'` — the stat succeeds, so everything `examine` asks
+  // about is answered, and the open is what fails. Unasserted, changing that
+  // stage to `examine` left the suite green: every other stage assertion in
+  // this story lands on `examine` or `decode`.
+  const root = await makeTree(t, [
+    { dir: '_bmad' },
+    { file: '_bmad-output/loose/readable.md', text: '# Readable\n' },
+    { file: '_bmad-output/loose/locked.md', text: '# Locked\n' },
+  ]);
+  const inventory = await whileDenied(join(root, '_bmad-output', 'loose', 'locked.md'), () =>
+    takeInventory(new ConfinedReader(canonical(root))),
+  );
+
+  const read = failedRead(inventory, '_bmad-output/loose/locked.md');
+  assert.equal(read.state, 'unreadable', 'a file that is there and cannot be opened is not absent');
+  assert.equal(read.stage, 'read');
+  assert.match(read.reason, /permission|EACCES/i);
+
+  // Present as an entry, listed, and identified by what needs no content — a
+  // denied file is a value, not an omission and not an abort.
+  assert.equal(entryFor(inventory, '_bmad-output/loose/locked.md').entry.state, 'present');
+  assert.equal(entryFor(inventory, '_bmad-output/loose/readable.md').readability.state, 'present');
+  assert.equal(inventory.complete, true);
+});
+
+test('an artifact that is not there is not present-but-uninterpreted', async (t) => {
+  if (!(await symlinksAvailable())) {
+    t.skip('symlinks are unavailable here, so a dangling entry cannot be built');
+    return;
+  }
+  // The defect this guard closes, measured: a dangling `gone.md` under an
+  // artifact root came back `walk: absent | readability: absent |
+  // interpretation: present-but-uninterpreted` — a term whose first word is
+  // *present*, quoted verbatim from FR-12 in this project's own module, said
+  // of an artifact the same entry reports as not there. Both directions are
+  // asserted, because the unconditional version was satisfied by any value at
+  // all: nothing observed it.
+  const { inventory } = await inventoried(t, [
+    {
+      link: '_bmad-output/specs/spec-bmad-dash/gone.md',
+      to: '_bmad-output/nowhere.md',
+      type: 'file',
+    },
+    { file: '_bmad-output/loose/research/a.md', text: '# Notes\n' },
+  ]);
+
+  const missing = entryFor(inventory, '_bmad-output/specs/spec-bmad-dash/gone.md');
+  assert.equal(missing.entry.state, 'absent');
+  assert.equal(missing.identity.outcome, 'identified', 'location needs no content, so it answers');
+  assert.equal(missing.interpretation, undefined, 'nothing is claimed about an artifact not there');
+
+  // The other direction: a present entry does carry one, and it is the state
+  // the rule produces for its verdict rather than whatever was convenient.
+  const uninterpreted = entryFor(inventory, '_bmad-output/loose/research');
+  assert.equal(uninterpreted.entry.state, 'present');
+  assert.equal(uninterpreted.interpretation, 'present-but-uninterpreted');
+  assert.equal(uninterpreted.interpretation, interpret(uninterpreted.identity));
+
+  const identified = entryFor(inventory, '_bmad-output/specs/spec-bmad-dash/SPEC.md');
+  assert.equal(identified.interpretation, 'interpreted');
+});
+
+test('a file that vanishes between the walk and the read is absent, not unreadable', async (t) => {
+  // One physical fact, one answer, asserted through the whole pass rather than
+  // only at the adapter. The pass used to hardcode `unreadable` for every read
+  // failure, so this file — gone by the time it was opened — reported
+  // `unreadable` while the identical condition noticed one step earlier, by the
+  // walk, reported `absent`. Which state a consumer saw depended on who
+  // noticed first, which is exactly what a closed vocabulary is meant to stop.
+  //
+  // Deterministic rather than a race: the walk finishes before any read
+  // happens, so deleting the file from inside the first read of it reproduces
+  // the window exactly.
+  const root = await makeTree(t, [
+    { dir: '_bmad' },
+    { file: '_bmad-output/loose/staying.md', text: '# Staying\n' },
+    { file: '_bmad-output/loose/vanishing.md', text: '# Vanishing\n' },
+  ]);
+  const reader = new ConfinedReader(canonical(root));
+  const real = reader.readText.bind(reader);
+  let removed = false;
+  reader.readText = (path: string) => {
+    if (!removed && path.endsWith(`vanishing.md`)) {
+      rmSync(path);
+      removed = true;
+    }
+    return real(path);
+  };
+
+  const inventory = takeInventory(reader);
+  assert.equal(removed, true, 'the fixture never opened the file it was built around');
+
+  const read = failedRead(inventory, '_bmad-output/loose/vanishing.md');
+  assert.equal(read.state, 'absent', "the reader's own state, forwarded rather than hardcoded");
+  assert.equal(read.stage, 'resolve', 'the stat never answered, so nothing was examined');
+  assert.match(read.reason, /ENOENT|no such file/i);
+
+  // It is still an entry — the walk saw it, so it is reported — and the pass
+  // finished with the sibling read normally.
+  assert.equal(entryFor(inventory, '_bmad-output/loose/vanishing.md').entry.state, 'present');
+  assert.equal(entryFor(inventory, '_bmad-output/loose/staying.md').readability.state, 'present');
+});
+
+test('a directory says its listing was read, not that nothing was', async (t) => {
+  // `UNREAD`'s reason — "nothing read it" — is false of a directory: its
+  // listing is its content, as the `read-directory` stage says, and the
+  // listing usually was read. Two `unchecked` signals with two true reasons.
+  const { inventory } = await inventoried(t);
+
+  const directory = entryFor(inventory, '_bmad-output/specs/spec-bmad-dash');
+  assert.deepEqual(directory.children, { available: true, names: ['SPEC.md'] });
+  const listing = failedRead(inventory, '_bmad-output/specs/spec-bmad-dash');
+  assert.equal(listing.state, 'unchecked', 'a directory holds no text, so none was read');
+  assert.doesNotMatch(listing.reason, /nothing read it/, 'its listing was read, and this said so');
+  assert.match(listing.reason, /listing/);
+
+  // And the file that genuinely was not read says the other thing.
+  const unopened = failedRead(inventory, '_bmad-output/planning-artifacts/prds/prd-bmad-2026-08-28/prd.md');
+  assert.equal(unopened.state, 'unchecked');
+  const reasonOf = (signal: Readability): string => (signal.state === 'present' ? '' : signal.reason);
+  assert.equal(unopened.reason, reasonOf(UNREAD), 'the file signal is the shared unread one');
 });

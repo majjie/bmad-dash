@@ -99,8 +99,14 @@ test('a directory that cannot be read is unreadable, not absent', async (t) => {
 
   await whileDenied(denied, () => {
     const result = reader.readText('denied/x.txt');
-    assert.equal(result.ok, false);
-    assert.ok(!result.ok && /permission|EACCES/i.test(result.reason), result.ok ? '' : result.reason);
+    assert.ok(!result.ok, 'a file inside a denied directory must not read');
+    assert.match(result.reason, /permission|EACCES/i);
+    // The state and the stage as well as the reason. `resolve`, not `examine`:
+    // the denial is on the *parent*, so the stat never answered and nothing
+    // about the file itself was ever examined. `unreadable`, not `absent`:
+    // being unable to look is not evidence that nothing is there.
+    assert.equal(result.state, 'unreadable');
+    assert.equal(result.stage, 'resolve');
   });
 });
 
@@ -198,9 +204,14 @@ test('a file that is not valid UTF-8 is a failure, not replacement characters', 
   await writeFile(join(root, 'binary.bin'), Buffer.from([0x00, 0xff, 0xfe, 0x41, 0xc3, 0x28]));
 
   const result = reader.readText('binary.bin');
-  assert.equal(result.ok, false, 'malformed bytes must not decode as text');
-  assert.ok(!result.ok && /UTF-8/.test(result.reason), result.ok ? '' : result.reason);
-  assert.ok(!result.ok && !result.reason.includes('\uFFFD'), 'and must not report the substitution');
+  assert.ok(!result.ok, 'malformed bytes must not decode as text');
+  assert.match(result.reason, /UTF-8/);
+  assert.equal(result.reason.includes('\uFFFD'), false, 'and must not report the substitution');
+  // `decode` is its own stage rather than a flavour of `read`, because this is
+  // the row Story 1.9 reports as unreadable and a consumer must be able to tell
+  // it from an over-limit refusal without parsing the English in `reason`.
+  assert.equal(result.state, 'unreadable');
+  assert.equal(result.stage, 'decode');
 });
 
 test('valid UTF-8 beyond ASCII still reads, so the check is not just a byte filter', async (t) => {
@@ -216,8 +227,9 @@ test('a directory is refused before being read, naming what it is', async (t) =>
   const { root, reader } = await fixture(t);
   await mkdir(join(root, 'adir'));
   const result = reader.readText('adir');
-  assert.equal(result.ok, false);
-  assert.ok(!result.ok && result.reason.includes('directory'), result.ok ? '' : result.reason);
+  assert.ok(!result.ok, 'a directory has no text to read');
+  assert.ok(result.reason.includes('directory'), result.reason);
+  assert.equal(result.stage, 'examine', 'the stat answered, and the kind was refused');
 });
 
 test('a fifo is refused rather than blocking the process forever', async (t) => {
@@ -239,8 +251,49 @@ test('a fifo is refused rather than blocking the process forever', async (t) => 
   }
 
   const result = reader.readText('pipe');
-  assert.equal(result.ok, false, 'a fifo must be refused, not opened');
-  assert.ok(!result.ok && result.reason.includes('fifo'), result.ok ? '' : result.reason);
+  assert.ok(!result.ok, 'a fifo must be refused, not opened');
+  assert.ok(result.reason.includes('fifo'), result.reason);
+  assert.equal(result.stage, 'examine', 'the stat answered, and the kind was refused');
+});
+
+test('a file denied to the process fails at the read stage, not the examine one', async (t) => {
+  // The stage split, from the side that distinguishes it: here the stat
+  // succeeds — the file's kind and size are both known and both fine — and the
+  // open is what fails. Reporting it as `examine` would claim the refusal
+  // arrived before anything about the file had been established, and it is the
+  // most ordinary unreadable artifact a project can hold.
+  if (!deniableDirectories()) {
+    t.skip('needs a non-root POSIX user: root is not denied by a 0o000 mode');
+    return;
+  }
+  const { root, reader } = await fixture(t);
+  const locked = join(root, 'locked.txt');
+  await writeFile(locked, 'secret\n');
+
+  await whileDenied(locked, () => {
+    const result = reader.readText('locked.txt');
+    assert.ok(!result.ok, 'a denied file must not read');
+    assert.equal(result.state, 'unreadable', 'unopenable is not the same as not there');
+    assert.equal(result.stage, 'read');
+    assert.match(result.reason, /permission|EACCES/i);
+  });
+});
+
+test('a file that is gone by the time it is read is absent, not unreadable', async (t) => {
+  // One physical fact, one answer. The walk reports a vanished path as
+  // `absent`; before this, the same condition arriving a moment later — during
+  // the read — came back `unreadable`, so which state a consumer saw depended
+  // on who noticed first. Provoked here rather than waited for, since in the
+  // wild it is a race.
+  const { root, reader } = await fixture(t);
+  const doomed = join(root, 'doomed.txt');
+  await writeFile(doomed, 'here for now\n');
+  await rm(doomed);
+
+  const result = reader.readText('doomed.txt');
+  assert.ok(!result.ok);
+  assert.equal(result.state, 'absent');
+  assert.equal(result.stage, 'resolve', 'the stat never answered, so nothing was examined');
 });
 
 test('a file over the read limit is refused, naming the size and the limit', async (t) => {
@@ -248,8 +301,11 @@ test('a file over the read limit is refused, naming the size and the limit', asy
   const big = join(root, 'big.bin');
   await writeFile(big, Buffer.alloc(MAX_READ_BYTES + 1, 0x61));
   const result = reader.readText('big.bin');
-  assert.equal(result.ok, false);
-  assert.ok(!result.ok && result.reason.includes(String(MAX_READ_BYTES)), result.ok ? '' : result.reason);
+  assert.ok(!result.ok, 'a file over the limit must be refused');
+  assert.ok(result.reason.includes(String(MAX_READ_BYTES)), result.reason);
+  // Also `examine`: the stat succeeded and the size was refused, so nothing was
+  // read and the decode was never reached.
+  assert.equal(result.stage, 'examine');
 });
 
 // ---------------------------------------------------------------------------

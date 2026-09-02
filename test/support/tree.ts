@@ -173,6 +173,12 @@ export async function makeTree(
 /**
  * Run `body` with `path` denied, and restore the mode whatever happens.
  *
+ * `path` is any path, not only a directory: Story 1.9 denies a *file* with it,
+ * which is how the read stage that distinguishes "could not look at it" from
+ * "could not open it" is reached at all. `deniableDirectories` is still the
+ * right question to ask first — it is about the platform and the user, not
+ * about the kind of thing being denied.
+ *
  * Restored in a `finally` rather than an `after` hook for the reason
  * `read.test.ts` records at its own copy of this: the scratch directory
  * registered its cleanup first, so a hook here would run *after* the recursive

@@ -795,10 +795,14 @@ test('identity is derived in one place, and that place is the pure layer', async
   // what an artifact is made of, and derives no identity of its own. A render
   // module or an adapter appearing in this list is the failure the exact set
   // exists to catch.
+  //
+  // Story 1.9's interpretation rule is the second such edit, on the same
+  // terms: it reads the shapes a recorded verdict carried to say whether FR-12
+  // or FR-69 applies, and derives no family, shape or part of its own.
   assert.deepEqual(
     await importersOf(REPO_ROOT, 'src/domain/identity.ts'),
-    ['src/cli/inventory.ts', 'src/domain/document.ts'],
-    'only the snapshot pass and the document model read the authority directly',
+    ['src/cli/inventory.ts', 'src/domain/document.ts', 'src/domain/interpretation.ts'],
+    'only the snapshot pass, the document model and the interpretation rule read the authority',
   );
   assert.deepEqual(
     await importersOf(REPO_ROOT, 'src/domain/frontmatter.ts'),
@@ -827,6 +831,45 @@ test('the document model has a stated importer set, and the gate reads it as pur
   // authority next to it.
   const scanned = await collectSourceFiles(REPO_ROOT);
   for (const pure of ['src/domain/document.ts', 'src/domain/identity.ts']) {
+    assert.ok(scanned.includes(pure), `${pure} is not scanned by the purity gate`);
+  }
+});
+
+test('the signal vocabulary and the interpretation rule are pure, with exact importer sets', async () => {
+  // Story 1.9's two domain modules, held to the same exact-set rule as the
+  // authority and the document model beside them. An exact set is what makes
+  // each widening deliberate: AD-8 calls its four states "the single
+  // vocabulary used by the model, the conventions table, and the UI", so the
+  // interesting failure is not an import that is refused — it is a *fifth*
+  // copy of the four states appearing somewhere with nothing importing this
+  // module at all, which is the state the project was in before it existed.
+  //
+  // `src/adapters/fs/read.ts` is in the signal set on purpose and is the one
+  // adapter that belongs there: it returns a stage from this vocabulary rather
+  // than spelling a fourth copy of it, and a port depending on the domain is
+  // the permitted direction (the reverse is what the purity rule forbids).
+  assert.deepEqual(
+    await importersOf(REPO_ROOT, 'src/domain/signal.ts'),
+    ['src/adapters/fs/read.ts', 'src/cli/inventory.ts'],
+    'the signal vocabulary is shared by the reading adapter and the pass; a third importer is a decision',
+  );
+  assert.deepEqual(
+    await importersOf(REPO_ROOT, 'src/domain/interpretation.ts'),
+    ['src/cli/inventory.ts'],
+    'FR-12 and FR-69 are decided once, in the pass; Story 1.12 consumes what it recorded',
+  );
+
+  // And the purity rule actually reaches them: every rule in this file is of
+  // the form "no scanned file does X", which passes vacuously over a file the
+  // scan never opened. The frozen constraint has no `import type` exemption, so
+  // `signal.ts` may import nothing at all and `interpretation.ts` only the
+  // authority beside it.
+  // `findDomainViolations` over the real tree has its own test above, with a
+  // better failure message; re-running it here would only make this row slower
+  // and its failures ambiguous. What is missing, and all that is missing, is
+  // that the scan opens these two files at all.
+  const scanned = await collectSourceFiles(REPO_ROOT);
+  for (const pure of ['src/domain/signal.ts', 'src/domain/interpretation.ts']) {
     assert.ok(scanned.includes(pure), `${pure} is not scanned by the purity gate`);
   }
 });

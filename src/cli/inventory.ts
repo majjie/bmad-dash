@@ -21,6 +21,17 @@
  *      again would probe the whole tree twice and could disagree with the list
  *      the inventory is actually built from.
  *
+ * **Reading is lazy, so what a read learned is recorded rather than
+ * discarded.** The three above are what this pass owns; the fourth thing it now
+ * keeps is the *result* of item 2. `Candidate.content` is memoized inside
+ * `identify`'s closure, so before Story 1.9 the pass performed a read, learned
+ * that a file's bytes were unusable, handed the domain a reason for one level,
+ * and kept nothing on the entry — a file of invalid UTF-8 under an artifact
+ * root was reported `identified`, `certain`, with no reason anywhere. Every
+ * entry now carries a `readability` signal in AD-8's four states, and `unchecked`
+ * where no level needed the content, which is the honest report for a file this
+ * pass deliberately never opened.
+ *
  * It decides nothing about identity, and nothing about composition either. AD-4
  * puts identity in exactly one domain module and the spine puts the model in
  * `src/domain/` beside it; `test/architecture.test.ts` asserts the importer sets
@@ -99,6 +110,8 @@ import {
   type PartListing,
   type PartOmission,
 } from '../domain/document.ts';
+import { interpret, type InterpretationState } from '../domain/interpretation.ts';
+import { LISTING_NOT_TEXT, UNREAD, type Readability } from '../domain/signal.ts';
 
 /**
  * BMAD's output folder, and the only child of the project root this pass looks
@@ -170,6 +183,48 @@ export interface InventoryEntry {
   readonly children: Listing;
   /** What it is made of, under every reading its verdict carried. */
   readonly composition: Composition;
+  /**
+   * Whether this artifact's content could be read — AD-8's four states,
+   * recorded as its own signal beside the identity rather than inside it.
+   *
+   * Story 1.9's measured defect was that this fact existed and was thrown
+   * away: the pass hands `identify` a lazy `ContentSource`, the domain
+   * memoizes the result inside its own closure, and nothing survived onto the
+   * entry — so a file of invalid UTF-8 named `prd.md` under an artifact root
+   * came back `identified`, `prd`, `certain`, with `attempted:
+   * [location:resolved]` and no reason anywhere, which is corrupt data
+   * presented as valid (NFR-3).
+   *
+   * **`unchecked` is the honest answer for most files, and it is the point.**
+   * Level 1 resolves a family from an artifact's location without opening it,
+   * so nothing read the content; saying so is what stops a consumer reading
+   * "identified" as "the content is fine". The accepted limit that comes with
+   * it: a malformed file *under* an artifact root reports `unchecked` rather
+   * than `unreadable`, because establishing otherwise means reading eagerly —
+   * the trade this pass took deliberately the other way (see the header).
+   */
+  readonly readability: Readability;
+  /**
+   * FR-12 or FR-69 or neither, decided once from the recorded verdict — and
+   * **`undefined` for an artifact that is not there.**
+   *
+   * Kept distinct — `present-but-uninterpreted` is a recognized artifact whose
+   * shape nothing can interpret, `unidentified` is identification itself
+   * failing — with both definitions recorded in
+   * `src/domain/interpretation.ts`, which is where the reasoning for keeping
+   * them apart lives too.
+   *
+   * The `undefined` is the correction of a real defect rather than a
+   * convenience: applied unconditionally, a dangling `gone.md` under an
+   * artifact root came back `state: absent` and
+   * `interpretation: present-but-uninterpreted` on the same entry — a term
+   * whose first word is *present*, quoted verbatim from FR-12, said of an
+   * artifact this very entry reports as not there. FR-12 and FR-69 are both
+   * claims about an artifact the tool found; neither has anything to say about
+   * one it did not, so nothing is claimed. What happened to it is on `entry`
+   * and on `readability`, typed, which is where it belongs.
+   */
+  readonly interpretation: InterpretationState | undefined;
 }
 
 /**
@@ -541,11 +596,6 @@ function unfinishedListings(
   return unfinished;
 }
 
-/** Why an entry the walk could not use has no text and no children. */
-function unusable(entry: Exclude<WalkEntry, { readonly state: 'present' }>): string {
-  return `${entry.state} at the ${entry.stage} stage: ${entry.reason}`;
-}
-
 /**
  * Take the inventory of `reader`'s root.
  *
@@ -581,16 +631,32 @@ export function takeInventory(
 
     const kind = kindOf(entry);
     const children = childrenFor(entry, kind, listings.namesByParent, unfinished);
+    // One read at most, in a cell of the pass's own, so the signal is *derived
+    // after* identification rather than written into a variable from inside the
+    // closure. The earlier version was correct only because `identify` happens
+    // to call `content()` synchronously before it returns — a fact no type and
+    // no test pins, and the kind of correctness that survives until someone
+    // makes a level lazy.
+    let read: Read | undefined;
     const identity = identify({
       relative: entry.relative,
       kind,
-      content: () => contentFor(reader, entry, kind),
+      content: () => (read ??= contentFor(reader, entry, kind)).content,
       children,
     });
     entries.push({
       entry,
       identity,
       children,
+      readability: read?.readability ?? initialReadability(entry, kind),
+      // The verdict's own consequence, decided once here rather than by each
+      // surface: FR-12's present-but-uninterpreted, FR-69's unidentified, or
+      // neither. It reads the recorded verdict and re-derives no identity.
+      //
+      // Withheld entirely for an artifact the walk did not report present:
+      // both states are claims about something the tool found, and FR-12's own
+      // term begins with the word *present*. See `InventoryEntry`.
+      interpretation: entry.state === 'present' ? interpret(identity) : undefined,
       // One composition per entry, from the verdict and the same listing — the
       // domain decides both; this only hands over what it already holds.
       composition: compose({
@@ -665,20 +731,93 @@ function kindOf(entry: WalkEntry): Candidate['kind'] {
 }
 
 /**
- * A file's text, or the reason there is none.
+ * What one read produced: what the domain gets, and what the entry records.
+ *
+ * Two values from one attempt, because they answer different questions and
+ * neither can be derived from the other. `content` is the domain's own
+ * vocabulary — available, or a reason a level could not run — and `readability`
+ * is AD-8's, which is what survives onto the entry for a consumer that never
+ * sees the levels at all.
+ */
+interface Read {
+  readonly content: Content;
+  readonly readability: Readability;
+}
+
+/**
+ * The readability of an entry no level asked to read.
+ *
+ * Three cases, and each is a different honest answer:
+ *
+ *   - **A present file** is `unchecked`: the pass reads only where a level
+ *     asks, so until one does, the truthful answer is that nothing looked.
+ *   - **A present directory** is `unchecked` too, with its own reason. Nothing
+ *     read it *as text*, and saying "nothing read it" would be false — its
+ *     listing usually was read, and the listing is what a directory's content
+ *     is. What the listing turned out to be is on `children`, in the
+ *     vocabulary that answers it.
+ *   - **Anything the walk did not report present** takes the walk's own state
+ *     and stage, forwarded rather than re-derived: a dangling link is `absent`
+ *     at `resolve`, an escaping one `unchecked` at `confinement`, a denied
+ *     directory `unreadable` at `read-directory`. An entry the walk could not
+ *     reach is an artifact whose content could not be read, whether or not a
+ *     level ever asked for it.
+ *
+ * The forward in the third case is also the tool's one mechanical check that
+ * `ReadStage` still covers the walk's three stages: those are inline literals
+ * in `WalkEntry`, so dropping a name from `ReadStage` fails to compile *here*.
+ * Measured, after an earlier version of this comment put the pin in the wrong
+ * place (on `ChildStage`, which is `Extract`ed and narrows silently).
+ */
+function initialReadability(entry: WalkEntry, kind: Candidate['kind']): Readability {
+  if (entry.state !== 'present') {
+    return { state: entry.state, stage: entry.stage, reason: entry.reason };
+  }
+  return kind === 'directory' ? LISTING_NOT_TEXT : UNREAD;
+}
+
+/**
+ * A file's text, or the reason there is none, and the readability either way.
  *
  * Called by the domain, at most once per candidate, and only when a level
  * actually needs it — see the header.
  */
-function contentFor(reader: ConfinedReader, entry: WalkEntry, kind: Candidate['kind']): Content {
-  if (entry.state !== 'present') return { available: false, reason: unusable(entry) };
-  if (kind !== 'file') return { available: false, reason: `not a regular file (${entry.kind})` };
+function contentFor(reader: ConfinedReader, entry: WalkEntry, kind: Candidate['kind']): Read {
+  if (entry.state !== 'present') {
+    // The platform's own words and nothing else. The state and the stage are
+    // not folded in: they are typed on the entry, and on the signal beside it.
+    return {
+      content: { available: false, reason: entry.reason },
+      readability: initialReadability(entry, kind),
+    };
+  }
+  if (kind !== 'file') {
+    // A FIFO, a socket, a device — refused on its kind, before anything opens
+    // it, which is what keeps the pass from blocking forever on a pipe nobody
+    // writes to. A directory never reaches here: no level asks a directory for
+    // text.
+    const reason = `not a regular file (${entry.kind})`;
+    return {
+      content: { available: false, reason },
+      readability: { state: 'unreadable', stage: 'examine', reason },
+    };
+  }
   try {
     // The resolved real path, not the relative spelling: it is already
     // canonical, so `resolveWithin` re-confines it without re-deriving it, and
     // no `/`-versus-`\` question arises on the way.
     const read = reader.readText(toPlatform(entry.path));
-    return read.ok ? { available: true, text: read.text } : { available: false, reason: read.reason };
+    if (read.ok) return { content: { available: true, text: read.text }, readability: { state: 'present' } };
+    // The reader's own state and stage — carried through rather than re-guessed
+    // from its message. Invalid UTF-8 arrives as `unreadable` at `decode`, the
+    // row this story's acceptance names; a file that vanished between the walk
+    // and the read arrives as `absent`, which is the same answer the walk would
+    // have given had it noticed first. Hardcoding `unreadable` here was one
+    // physical fact with two answers depending on who saw it.
+    return {
+      content: { available: false, reason: read.reason },
+      readability: { state: read.state, stage: read.stage, reason: read.reason },
+    };
   } catch (error: unknown) {
     // `readText` *throws* on a confinement failure, by design — there is no
     // sensible way for a caller to continue reading that path. There is a
@@ -686,8 +825,20 @@ function contentFor(reader: ConfinedReader, entry: WalkEntry, kind: Candidate['k
     // path must not abort an inventory. Reachable only if a path the walk
     // resolved inside the root resolves outside it moments later, which is a
     // race rather than a shape, so it is reported as this entry's own failure.
-    if (error instanceof ConfinementError) return { available: false, reason: error.message };
-    return { available: false, reason: error instanceof Error ? error.message : String(error) };
+    const reason = error instanceof Error ? error.message : String(error);
+    if (error instanceof ConfinementError) {
+      // `unchecked`, not `unreadable`, and at the same stage the walk uses for
+      // the same decision: the filesystem answered and the answer was refused,
+      // so nothing was read and nothing will be.
+      return {
+        content: { available: false, reason },
+        readability: { state: 'unchecked', stage: 'confinement', reason },
+      };
+    }
+    return {
+      content: { available: false, reason },
+      readability: { state: 'unreadable', stage: 'read', reason },
+    };
   }
 }
 
@@ -698,7 +849,8 @@ function childrenFor(
   byParent: ReadonlyMap<string, readonly string[]>,
   unfinished: ReadonlyMap<string, string>,
 ): Listing {
-  if (entry.state !== 'present') return { available: false, reason: unusable(entry) };
+  // The raw reason again, for the reason `contentFor` gives above it.
+  if (entry.state !== 'present') return { available: false, reason: entry.reason };
   if (kind !== 'directory') return { available: false, reason: `not a directory (${entry.kind})` };
   const bound = unfinished.get(entry.relative);
   if (bound !== undefined) return { available: false, reason: bound };

@@ -60,6 +60,9 @@ import {
   toPlatform,
   type CanonicalPath,
 } from './paths.ts';
+// AD-8's stage vocabulary, shared rather than re-spelled here. A port may
+// depend on the domain; the reverse is what the purity gate forbids.
+import type { ReadStage, SignalState } from '../../domain/signal.ts';
 
 /**
  * The largest file this will read into memory.
@@ -130,8 +133,17 @@ function describeKind(stats: {
  *     this stage has no trustworthy identity. See `Child`.
  *   - `read-directory` — the path resolved and is in bounds, and `readdir`
  *     still refused it.
+ *
+ * Derived from `src/domain/signal.ts`'s `ReadStage` rather than restated, so
+ * this cannot name a stage that vocabulary lacks. What that does **not** do is
+ * tie the entry types to it: `Child` below and `WalkEntry` in `walk.ts` spell
+ * their stages as inline literals and neither references this alias, so the
+ * only mechanical check is one level further out — `src/cli/inventory.ts`
+ * assigns a walk entry's stage into a `ReadStage`, and dropping a name from
+ * `ReadStage` fails to compile there. Measured, after an earlier version of
+ * this comment claimed the pin was here.
  */
-export type ChildStage = 'confinement' | 'resolve' | 'read-directory';
+export type ChildStage = Extract<ReadStage, 'confinement' | 'resolve' | 'read-directory'>;
 
 /**
  * A path refused for resolving outside the permitted root.
@@ -496,8 +508,47 @@ export class ConfinedReader {
    * Refuses anything that is not a regular file *before* reading it. A FIFO is
    * the reason: `readFileSync` on one blocks until something writes, which in a
    * server means the request never returns and the process never exits.
+   *
+   * **A failure names a typed state and a typed stage as well as its reason**,
+   * in the same shape `Child` above already uses and for the same reason: a raw
+   * OS message does not say which question was being asked when it arrived, or
+   * whether the thing is missing or merely unusable. Without them the only way
+   * to tell an over-limit refusal from a decode failure was to pattern-match
+   * the English in `reason`, which is what the untyped-`reason` finding in
+   * `deferred-work.md` (summary: "`Listing`'s failure carries an untyped
+   * `reason: string`") says not to build on.
+   *
+   * The two closed vocabularies are **narrowed to what this path can actually
+   * produce**, rather than restating the whole of either:
+   *
+   *   - `absent` for `ENOENT`/`ENOTDIR` and `unreadable` for everything else,
+   *     which is the same rule `#child` applies one method up. Deciding it here
+   *     matters: a file the walk saw and that vanished before the read arrives
+   *     as `absent`, the same state the walk itself would have reported, rather
+   *     than as `unreadable` — one physical fact with one answer.
+   *   - `resolve` when the stat itself failed (a dangling link's `ENOENT`,
+   *     `ELOOP`, `ENAMETOOLONG`, `EACCES` through a denied parent — the path
+   *     never resolved, so nothing was examined), `examine` when the stat
+   *     succeeded and the file was refused on its kind or its size, `read` for
+   *     the bytes, `decode` for bytes that are not UTF-8. Never `confinement`,
+   *     which *throws* (see `resolveWithin`), and never `read-directory`, which
+   *     belongs to enumeration.
+   *
+   * The vocabulary comes from `src/domain/signal.ts` rather than from a fourth
+   * copy of it here. That direction is the permitted one — a port may depend on
+   * the domain, never the reverse — and it is what makes the state and stage
+   * this returns the same closed values the model and the UI use.
    */
-  readText(path: string): { readonly ok: true; readonly text: string } | { readonly ok: false; readonly reason: string } {
+  readText(
+    path: string,
+  ):
+    | { readonly ok: true; readonly text: string }
+    | {
+        readonly ok: false;
+        readonly state: Extract<SignalState, 'absent' | 'unreadable'>;
+        readonly stage: Extract<ReadStage, 'resolve' | 'examine' | 'read' | 'decode'>;
+        readonly reason: string;
+      } {
     const target = this.resolveWithin(path);
     const platform = toPlatform(target);
 
@@ -505,16 +556,32 @@ export class ConfinedReader {
     try {
       const stats = statSync(platform);
       if (!stats.isFile()) {
-        return { ok: false, reason: `not a regular file (${describeKind(stats)})` };
+        return {
+          ok: false,
+          state: 'unreadable',
+          stage: 'examine',
+          reason: `not a regular file (${describeKind(stats)})`,
+        };
       }
       size = stats.size;
     } catch (error: unknown) {
-      return { ok: false, reason: error instanceof Error ? error.message : String(error) };
+      // The stat failed, so the path was never resolved to something to look
+      // at: `resolve`, not `examine`. `ENOENT`/`ENOTDIR` is the file being
+      // gone, which is `absent` — the walk's own answer for the same fact.
+      const code = (error as { code?: string }).code;
+      return {
+        ok: false,
+        state: code === 'ENOENT' || code === 'ENOTDIR' ? 'absent' : 'unreadable',
+        stage: 'resolve',
+        reason: error instanceof Error ? error.message : String(error),
+      };
     }
 
     if (size > MAX_READ_BYTES) {
       return {
         ok: false,
+        state: 'unreadable',
+        stage: 'examine',
         reason: `file is ${String(size)} bytes, over the ${String(MAX_READ_BYTES)}-byte read limit`,
       };
     }
@@ -523,13 +590,22 @@ export class ConfinedReader {
     try {
       bytes = readFileSync(platform);
     } catch (error: unknown) {
-      return { ok: false, reason: error instanceof Error ? error.message : String(error) };
+      // The stat succeeded and the open did not: a file denied `0o000` inside a
+      // readable directory is the ordinary case, and it is `read` rather than
+      // `examine` because everything `examine` asks about was answered.
+      const code = (error as { code?: string }).code;
+      return {
+        ok: false,
+        state: code === 'ENOENT' || code === 'ENOTDIR' ? 'absent' : 'unreadable',
+        stage: 'read',
+        reason: error instanceof Error ? error.message : String(error),
+      };
     }
 
     try {
       return { ok: true, text: new TextDecoder('utf8', { fatal: true }).decode(bytes) };
     } catch {
-      return { ok: false, reason: 'not valid UTF-8 text' };
+      return { ok: false, state: 'unreadable', stage: 'decode', reason: 'not valid UTF-8 text' };
     }
   }
 }

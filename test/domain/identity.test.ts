@@ -515,7 +515,12 @@ test('an unreadable file records the content levels as unavailable and carries o
 });
 
 test('an entry the walk did not report present is identified by path alone', () => {
-  const reason = 'absent at the resolve stage: ENOENT';
+  // The reason the pass actually hands over: the platform's own words, and
+  // only those. It used to be `'absent at the resolve stage: ENOENT'` here,
+  // because the pass composed that sentence; Story 1.9 removed the composition
+  // — the state and the stage are typed on the entry and on its readability
+  // signal — so a fixture in that shape would test a format nothing produces.
+  const reason = "ENOENT: no such file or directory, lstat '/p/_bmad-output/specs/spec-x/gone.md'";
   const under = identify(unexamined('_bmad-output/specs/spec-x/gone.md', reason));
   assert.equal(under.outcome, 'identified');
   if (under.outcome !== 'identified') return;
@@ -981,7 +986,7 @@ test('every verdict records one attempt per level it reached, and never zero', (
     directory('_bmad-output/loose/empty'),
     directory('_bmad-output/loose/run', ['prd.md']),
     unreadable('_bmad-output/loose/x.md', 'not valid UTF-8 text'),
-    unexamined('_bmad-output/loose/gone.md', 'absent at the resolve stage'),
+    unexamined('_bmad-output/loose/gone.md', 'ENOENT: no such file or directory'),
     neither('_bmad-output/loose/fifo'),
   ];
   for (const candidate of every) {
