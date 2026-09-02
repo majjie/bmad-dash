@@ -33,8 +33,16 @@ import {
   takeInventory,
   type Inventory,
 } from '../../src/cli/inventory.ts';
+import { MAX_RECORDED_SUPPRESSIONS } from '../../src/adapters/fs/walk.ts';
 import type { Verdict } from '../../src/domain/identity.ts';
-import { makeTree, symlinksAvailable, type TreeNode } from '../support/tree.ts';
+import { documentsOf, type Composition } from '../../src/domain/document.ts';
+import {
+  deniableDirectories,
+  makeTree,
+  symlinksAvailable,
+  whileDenied,
+  type TreeNode,
+} from '../support/tree.ts';
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 
@@ -73,6 +81,13 @@ function verdictFor(inventory: Inventory, relative: string): Verdict {
   const found = inventory.entries.find((entry) => entry.entry.relative === relative);
   assert.ok(found !== undefined, `no inventory entry for ${relative}`);
   return found.identity;
+}
+
+/** What one entry is made of, by its project-root-relative path. */
+function compositionFor(inventory: Inventory, relative: string): Composition {
+  const found = inventory.entries.find((entry) => entry.entry.relative === relative);
+  assert.ok(found !== undefined, `no inventory entry for ${relative}`);
+  return found.composition;
 }
 
 /** Every path the pass reported, so a missing sibling is visible. */
@@ -598,4 +613,483 @@ test('a file whose family the location resolves is never opened', async (t) => {
     ['_bmad-output/loose/handover.md'],
     'only the file no location resolved was opened',
   );
+});
+
+// ---------------------------------------------------------------------------
+// What each entry is made of — Story 1.8, composed through the real pass
+// ---------------------------------------------------------------------------
+
+test('the document model is attached per entry, over both shapes at once', async (t) => {
+  const { inventory } = await inventoried(t, [
+    { file: '_bmad-output/loose/handover/prd/index.md', text: '# A sharded PRD\n' },
+    { file: '_bmad-output/loose/handover/prd/requirements.md', text: '# Requirements\n' },
+    { file: '_bmad-output/loose/handover/prd/appendix.md', text: '# Appendix\n' },
+  ]);
+
+  // A whole document: one part, itself.
+  const whole = compositionFor(
+    inventory,
+    '_bmad-output/planning-artifacts/prds/prd-bmad-2026-08-28/prd.md',
+  );
+  assert.deepEqual(documentsOf(whole), [
+    {
+      relative: '_bmad-output/planning-artifacts/prds/prd-bmad-2026-08-28/prd.md',
+      shape: 'document',
+      parts: {
+        state: 'complete',
+        paths: ['_bmad-output/planning-artifacts/prds/prd-bmad-2026-08-28/prd.md'],
+      },
+    },
+  ]);
+
+  // And a sharded one: the same interface, the same identity rule, its parts
+  // taken from the listing the walk already reported — index first.
+  const sharded = compositionFor(inventory, '_bmad-output/loose/handover/prd');
+  assert.deepEqual(documentsOf(sharded), [
+    {
+      relative: '_bmad-output/loose/handover/prd',
+      shape: 'sharded-document',
+      parts: {
+        state: 'complete',
+        paths: [
+          '_bmad-output/loose/handover/prd/index.md',
+          '_bmad-output/loose/handover/prd/appendix.md',
+          '_bmad-output/loose/handover/prd/requirements.md',
+        ],
+      },
+    },
+  ]);
+
+  // The ambiguous directory in the shared fixture offers both readings, and the
+  // pass chooses neither: the run-folder reading is still there beside it.
+  const both = compositionFor(
+    inventory,
+    '_bmad-output/planning-artifacts/prds/prd-bmad-2026-09-01',
+  );
+  assert.deepEqual(
+    both.readings.map((reading) =>
+      reading.reading === 'document' ? reading.document.shape : `not:${reading.shape}`,
+    ),
+    ['not:run-folder', 'sharded-document'],
+  );
+});
+
+test('the child listing is surfaced on every entry rather than discarded', async (t) => {
+  // The alternative this exists to prevent is a second enumeration: the model
+  // needs the very names identification saw, and re-deriving them through
+  // `childrenOf` would probe the whole tree twice and could disagree.
+  const { inventory } = await inventoried(t);
+
+  const run = inventory.entries.find(
+    (entry) => entry.entry.relative === '_bmad-output/planning-artifacts/prds/prd-bmad-2026-08-28',
+  );
+  assert.ok(run !== undefined);
+  assert.deepEqual(run.children, { available: true, names: ['prd.md'] });
+
+  const document = inventory.entries.find(
+    (entry) => entry.entry.relative === '_bmad-output/handover.md',
+  );
+  assert.ok(document !== undefined);
+  assert.equal(document.children.available, false, 'a file has no listing to surface');
+});
+
+test('a directory whose listing a bound stopped has parts unavailable, not empty', async (t) => {
+  const root = await makeTree(t, [
+    { dir: '_bmad' },
+    { file: '_bmad-output/loose/prd-bmad-2026-09-01/aaa.md', text: '# a\n' },
+    { file: '_bmad-output/loose/prd-bmad-2026-09-01/index.md', text: '# i\n' },
+  ]);
+  const cut = takeInventory(new ConfinedReader(canonical(root)), {
+    budget: { maxDepth: INVENTORY_BUDGET.maxDepth, maxEntries: 5 },
+  });
+
+  const composition = compositionFor(cut, '_bmad-output/loose/prd-bmad-2026-09-01');
+  const documents = documentsOf(composition);
+  assert.equal(documents.length, 1, 'the sharded reading stays open rather than refuted');
+  assert.equal(documents[0]?.parts.state, 'unavailable');
+  const parts = documents[0]?.parts;
+  assert.match(
+    parts?.state === 'unavailable' ? parts.reason : '',
+    /entry budget/,
+    'parts are unavailable for the reason the walk gave, not silently empty',
+  );
+
+  // The larger budget lists it, and the parts arrive — so a mutation that
+  // shrank the bound would fail here as well as above.
+  const whole = takeInventory(new ConfinedReader(canonical(root)), {
+    budget: { maxDepth: INVENTORY_BUDGET.maxDepth, maxEntries: 8 },
+  });
+  const listed = documentsOf(compositionFor(whole, '_bmad-output/loose/prd-bmad-2026-09-01'));
+  assert.deepEqual(listed[0]?.parts, {
+    state: 'complete',
+    paths: [
+      '_bmad-output/loose/prd-bmad-2026-09-01/index.md',
+      '_bmad-output/loose/prd-bmad-2026-09-01/aaa.md',
+    ],
+  });
+});
+
+test('a skipped name that could never be a part leaves the parts authoritative', async (t) => {
+  // The `Listing` hole carried into the model — and then *filtered by the
+  // model*, which is the half worth pinning here. The only name the policy
+  // removes below the output folder is `node_modules`, which is neither
+  // markdown nor an index, so the parts genuinely are all of them and saying
+  // otherwise would put a permanent "may be short" on every artifact directory
+  // that happens to contain a dependency directory.
+  const { inventory } = await inventoried(t, [
+    { file: '_bmad-output/loose/handover/prd/index.md', text: '# i\n' },
+    { file: '_bmad-output/loose/handover/prd/node_modules/pkg/part.md', text: '# no\n' },
+  ]);
+
+  const documents = documentsOf(compositionFor(inventory, '_bmad-output/loose/handover/prd'));
+  assert.deepEqual(documents[0]?.parts, {
+    state: 'complete',
+    paths: ['_bmad-output/loose/handover/prd/index.md'],
+  });
+
+  // The exclusion is still recorded, and the safety above is a property of the
+  // policy holding exactly one non-markdown name rather than of the design —
+  // asserted together, so adding a markdown-capable name makes this row's own
+  // premise visibly false.
+  assert.equal(
+    inventory.skipped.some(
+      (skip) => skip.relative === '_bmad-output/loose/handover/prd/node_modules',
+    ),
+    true,
+  );
+  assert.deepEqual(SKIPPED_NAMES, ['node_modules']);
+});
+
+test('past the skip cap the omission arrives as a count, and the parts say so', async (t) => {
+  // Finding 5's fixture. `omissionsByParent` read only the *recorded* skips, so
+  // past `MAX_RECORDED_SKIPS` a filtered listing composed `complete` — the cap
+  // quietly undoing the report it exists to bound, exactly as the suppression
+  // cap did one layer down. The noise fills the record during the root's own
+  // enumeration, so the `node_modules` deeper in the tree lands in the
+  // overflow with its name gone and only the tally left.
+  const noise = Array.from({ length: MAX_RECORDED_SKIPS + 5 }, (_unused, index) => ({
+    dir: `noise-${String(index).padStart(4, '0')}`,
+  }));
+  const root = await makeTree(t, [
+    { dir: '_bmad' },
+    ...noise,
+    { file: '_bmad-output/loose/handover/prd/index.md', text: '# i\n' },
+    { file: '_bmad-output/loose/handover/prd/node_modules/pkg/part.md', text: '# no\n' },
+  ]);
+  const inventory = takeInventory(new ConfinedReader(canonical(root)));
+
+  assert.equal(inventory.skipped.length, MAX_RECORDED_SKIPS);
+  assert.ok(inventory.skippedNotRecorded > 0, 'the fixture must overflow the record');
+  assert.equal(
+    inventory.skipped.some((skip) => skip.relative.endsWith('/node_modules')),
+    false,
+    'and the deep skip must be one of the ones it could not name',
+  );
+
+  const parts = documentsOf(compositionFor(inventory, '_bmad-output/loose/handover/prd'))[0]?.parts;
+  assert.equal(parts?.state, 'possibly-incomplete');
+  if (parts?.state !== 'possibly-incomplete') return;
+  assert.deepEqual(parts.paths, ['_bmad-output/loose/handover/prd/index.md']);
+  assert.match(String(parts.reasons[0]), /1 name\(s\) the skip policy left out were not recorded/);
+});
+
+test('an aliased index.md is restored, so the directory is not silently a plain run folder', async (t) => {
+  if (!(await symlinksAvailable())) {
+    t.skip('symlinks are unavailable here, so an alias cannot be built');
+    return;
+  }
+  // The inherited defect, closed. The link's name sorts after its target's, so
+  // the walk reports `aaa.md` and suppresses `index.md` — and before Story 1.8
+  // the suppression left no trace at all: this directory read as an
+  // `identified`, `certain` run folder over a listing that was short by exactly
+  // the one name that makes it ambiguous.
+  const root = await makeTree(t, [
+    { dir: '_bmad' },
+    { file: '_bmad-output/loose/prd-bmad-2026-09-01/aaa.md', text: '# a\n' },
+    { link: '_bmad-output/loose/prd-bmad-2026-09-01/index.md', to: '_bmad-output/loose/prd-bmad-2026-09-01/aaa.md', type: 'file' },
+  ]);
+  const inventory = takeInventory(new ConfinedReader(canonical(root)));
+  const relative = '_bmad-output/loose/prd-bmad-2026-09-01';
+
+  // Reported, not consumed silently, and the disposition is on the record.
+  assert.deepEqual(
+    inventory.aliases.map((alias) => `${alias.relative} -> ${alias.reportedAt} (${String(alias.restored)})`),
+    [`${relative}/index.md -> ${relative}/aaa.md (true)`],
+  );
+  assert.match(String(inventory.aliases[0]?.reason), /restored as a name its parent holds/);
+  assert.equal(inventory.suppressedNotRecorded, 0);
+  assert.equal(inventory.complete, false, 'a shortened listing is not a complete pass');
+
+  // Restored into the listing, because the name is one the directory holds: the
+  // verdict is FR-73 ambiguous rather than a plain run folder.
+  const entry = inventory.entries.find((each) => each.entry.relative === relative);
+  assert.ok(entry !== undefined);
+  assert.deepEqual(entry.children, { available: true, names: ['aaa.md', 'index.md'] });
+  assert.equal(entry.identity.outcome, 'ambiguous');
+  if (entry.identity.outcome !== 'ambiguous') return;
+  assert.deepEqual(
+    entry.identity.readings.map((reading) => reading.shape),
+    ['run-folder', 'sharded-document'],
+  );
+
+  // One file is one part. The alias is a name this directory holds — which is
+  // the whole signal — and it is a second spelling of `aaa.md`, so the sharded
+  // reading lists the spelling the walk reported and not both: two parts for
+  // one file would have Epic 2 render it twice.
+  assert.deepEqual(documentsOf(entry.composition)[0]?.parts, {
+    state: 'complete',
+    paths: [`${relative}/aaa.md`],
+  });
+  assert.match(String(inventory.aliases[0]?.reason), /excluded from parts as a second spelling of aaa\.md/);
+
+  // Nothing is duplicated: the artifact at that identity appears once.
+  assert.equal(paths(inventory).filter((each) => each.startsWith(`${relative}/`)).length, 1);
+});
+
+test('a restored name does not disturb the listing order the walk reported', async (t) => {
+  if (!(await symlinksAvailable())) {
+    t.skip('symlinks are unavailable here, so an alias cannot be built');
+    return;
+  }
+  // `InventoryEntry.children` is a surfaced value now, so its order is part of
+  // the contract. Appending restored names left it depending on which spelling
+  // the walk happened to meet first: this fixture put `bbb.md` last where a
+  // sorted listing puts it second.
+  const relative = '_bmad-output/loose/prd-bmad-2026-09-01';
+  const root = await makeTree(t, [
+    { dir: '_bmad' },
+    { file: `${relative}/aaa.md`, text: '# a\n' },
+    { link: `${relative}/bbb.md`, to: `${relative}/aaa.md`, type: 'file' },
+    { file: `${relative}/index.md`, text: '# i\n' },
+    { file: `${relative}/zzz.md`, text: '# z\n' },
+  ]);
+  const inventory = takeInventory(new ConfinedReader(canonical(root)));
+
+  const entry = inventory.entries.find((each) => each.entry.relative === relative);
+  assert.ok(entry !== undefined);
+  assert.deepEqual(entry.children, {
+    available: true,
+    names: ['aaa.md', 'bbb.md', 'index.md', 'zzz.md'],
+  });
+  // The general shape, so a fixture that happens to sort correctly proves
+  // nothing: whatever the tree, the names come back sorted.
+  for (const each of inventory.entries) {
+    if (!each.children.available) continue;
+    assert.deepEqual([...each.children.names].sort(), [...each.children.names], each.entry.relative);
+  }
+  // And the duplicate spelling is still one part.
+  assert.deepEqual(documentsOf(entry.composition)[0]?.parts, {
+    state: 'complete',
+    paths: [`${relative}/index.md`, `${relative}/aaa.md`, `${relative}/zzz.md`],
+  });
+});
+
+test('an alias whose winning spelling is not present is not restored as a name', async (t) => {
+  if (!(await symlinksAvailable()) || !deniableDirectories()) {
+    t.skip('needs symlinks and a non-root POSIX user');
+    return;
+  }
+  // The hole the first version of the restore opened. `aaa` is a directory the
+  // pass cannot enumerate, so it is reported `unreadable` and — by the rule
+  // above — kept out of its parent's listing; `index.md` aliases it and was
+  // restored unconditionally, so the listing held the alias and not the real
+  // name, the verdict flipped to ambiguous, and the sharded reading's one part
+  // was a denied directory reported `complete`. "Resolved and confined like any
+  // other" says the name is real; it does not say the winner is usable.
+  const relative = '_bmad-output/loose/prd-bmad-2026-09-01';
+  const denied = join(await makeTree(t, [
+    { dir: '_bmad' },
+    { dir: `${relative}/aaa` },
+    { link: `${relative}/index.md`, to: `${relative}/aaa`, type: 'dir' },
+  ]), '_bmad-output', 'loose', 'prd-bmad-2026-09-01', 'aaa');
+  const root = denied.slice(0, denied.length - '/_bmad-output/loose/prd-bmad-2026-09-01/aaa'.length);
+
+  const inventory = await whileDenied(denied, () =>
+    takeInventory(new ConfinedReader(canonical(root))),
+  );
+
+  assert.deepEqual(
+    inventory.aliases.map((alias) => `${alias.relative} restored=${String(alias.restored)}`),
+    [`${relative}/index.md restored=false`],
+  );
+  assert.match(String(inventory.aliases[0]?.reason), /is not reported as present/);
+
+  const entry = inventory.entries.find((each) => each.entry.relative === relative);
+  assert.ok(entry !== undefined);
+  assert.deepEqual(entry.children, { available: true, names: [] }, 'neither name is a signal');
+  assert.notEqual(entry.identity.outcome, 'ambiguous', 'no sharded reading is invented from it');
+  assert.deepEqual(documentsOf(entry.composition), [], 'and no document over a denied directory');
+
+  // The denied directory is still reported, with its own state — nothing
+  // disappears, which is the rule the restore must not be allowed to bend.
+  const inner = inventory.entries.find((each) => each.entry.relative === `${relative}/aaa`);
+  assert.ok(inner !== undefined);
+  assert.equal(inner.entry.state, 'unreadable');
+});
+
+test('a suppressed directory alias is not restored, even when it is named index.md', async (t) => {
+  if (!(await symlinksAvailable())) {
+    t.skip('symlinks are unavailable here, so an alias cannot be built');
+    return;
+  }
+  // `WalkSuppression.kind` is carried precisely so this decision can be made
+  // where the fact is known. The listing being names-only is a limitation the
+  // model states; it is not a licence for the pass to add a name it knows is a
+  // directory, which would flip the parent to sharded with a directory as a
+  // part.
+  const relative = '_bmad-output/loose/prd-bmad-2026-09-01';
+  const root = await makeTree(t, [
+    { dir: '_bmad' },
+    { file: `${relative}/aaa/one.md`, text: '# o\n' },
+    { link: `${relative}/index.md`, to: `${relative}/aaa`, type: 'dir' },
+  ]);
+  const inventory = takeInventory(new ConfinedReader(canonical(root)));
+
+  assert.deepEqual(
+    inventory.aliases.map((alias) => `${alias.relative} restored=${String(alias.restored)}`),
+    [`${relative}/index.md restored=false`],
+  );
+  assert.match(String(inventory.aliases[0]?.reason), /a directory is not a document or a part of one/);
+
+  const entry = inventory.entries.find((each) => each.entry.relative === relative);
+  assert.ok(entry !== undefined);
+  assert.deepEqual(entry.children, { available: true, names: ['aaa'] });
+  assert.equal(entry.identity.outcome, 'identified');
+  assert.equal(entry.identity.outcome === 'identified' ? entry.identity.shape : null, 'run-folder');
+  assert.deepEqual(documentsOf(entry.composition), []);
+});
+
+test('a suppression the walk could not record leaves its listing unavailable, not short', async (t) => {
+  if (!(await symlinksAvailable())) {
+    t.skip('symlinks are unavailable here, so aliases cannot be built');
+    return;
+  }
+  // Finding 1's fixture, and the reason the cap is not allowed to be quiet: the
+  // restore can only put back names the walk recorded, so past
+  // `MAX_RECORDED_SUPPRESSIONS` an aliased `index.md` in the overflow was
+  // dropped exactly as it was before this story — `identified`, `certain` run
+  // folder, no document, `parts` claiming to be complete over a listing 24
+  // names short. The walk's per-directory tally is what makes the shortfall
+  // knowable, and an unknowable name makes the listing unavailable rather than
+  // authoritative.
+  const relative = '_bmad-output/loose/prd-bmad-2026-09-01';
+  const aliases = MAX_RECORDED_SUPPRESSIONS + 24;
+  const root = await makeTree(t, [
+    { dir: '_bmad' },
+    { file: `${relative}/aaa.md`, text: '# a\n' },
+    // `index.md` sorts after every `b*` link, so it lands in the overflow.
+    ...Array.from({ length: aliases }, (_unused, index) => ({
+      link: `${relative}/b${String(index).padStart(4, '0')}.md`,
+      to: `${relative}/aaa.md`,
+      type: 'file' as const,
+    })),
+    { link: `${relative}/index.md`, to: `${relative}/aaa.md`, type: 'file' },
+  ]);
+  const inventory = takeInventory(new ConfinedReader(canonical(root)));
+
+  assert.equal(inventory.aliases.length, MAX_RECORDED_SUPPRESSIONS);
+  assert.equal(inventory.suppressedNotRecorded, aliases + 1 - MAX_RECORDED_SUPPRESSIONS);
+  assert.equal(
+    inventory.aliases.some((alias) => alias.relative.endsWith('/index.md')),
+    false,
+    'the fixture must actually push the index into the overflow',
+  );
+
+  const entry = inventory.entries.find((each) => each.entry.relative === relative);
+  assert.ok(entry !== undefined);
+  assert.equal(entry.children.available, false, 'a listing short by unknowable names is unavailable');
+  assert.match(
+    entry.children.available ? '' : entry.children.reason,
+    /could not be recorded individually/,
+  );
+
+  // So the sharded reading stays open rather than being refuted by a listing
+  // the pass could not account for, and the parts say they are unknown.
+  assert.equal(entry.identity.outcome, 'ambiguous');
+  const document = documentsOf(entry.composition)[0];
+  assert.equal(document?.shape, 'sharded-document');
+  assert.equal(document?.parts.state, 'unavailable');
+
+  // The same tree one alias below the cap restores everything and claims
+  // nothing unknown, so a mutation that shrank the cap fails here too.
+  const under = await makeTree(t, [
+    { dir: '_bmad' },
+    { file: `${relative}/aaa.md`, text: '# a\n' },
+    ...Array.from({ length: MAX_RECORDED_SUPPRESSIONS - 1 }, (_unused, index) => ({
+      link: `${relative}/b${String(index).padStart(4, '0')}.md`,
+      to: `${relative}/aaa.md`,
+      type: 'file' as const,
+    })),
+    { link: `${relative}/index.md`, to: `${relative}/aaa.md`, type: 'file' },
+  ], 'bmad-dash-tree-under-');
+  const restored = takeInventory(new ConfinedReader(canonical(under)));
+  assert.equal(restored.suppressedNotRecorded, 0);
+  const whole = restored.entries.find((each) => each.entry.relative === relative);
+  assert.equal(whole?.children.available, true);
+  assert.equal(
+    whole?.children.available === true ? whole.children.names.includes('index.md') : false,
+    true,
+  );
+});
+
+test('an alias inside a directory a bound already stopped changes nothing about it', async (t) => {
+  if (!(await symlinksAvailable())) {
+    t.skip('symlinks are unavailable here, so an alias cannot be built');
+    return;
+  }
+  // Two shortenings at once, which is the combination neither row covered: the
+  // entry budget cuts the listing short *and* a name in it was suppressed. The
+  // listing is unavailable either way and one reason is reported, so the two
+  // do not compound into a claim about which of them bit.
+  const relative = '_bmad-output/loose/prd-bmad-2026-09-01';
+  const root = await makeTree(t, [
+    { dir: '_bmad' },
+    { file: `${relative}/aaa.md`, text: '# a\n' },
+    { link: `${relative}/bbb.md`, to: `${relative}/aaa.md`, type: 'file' },
+    { file: `${relative}/ccc.md`, text: '# c\n' },
+    { file: `${relative}/index.md`, text: '# i\n' },
+  ]);
+  const inventory = takeInventory(new ConfinedReader(canonical(root)), {
+    budget: { maxDepth: INVENTORY_BUDGET.maxDepth, maxEntries: 5 },
+  });
+
+  const entry = inventory.entries.find((each) => each.entry.relative === relative);
+  assert.ok(entry !== undefined);
+  assert.equal(entry.children.available, false);
+  assert.equal(entry.identity.outcome, 'ambiguous', 'the sharded reading stays open');
+  assert.equal(documentsOf(entry.composition)[0]?.parts.state, 'unavailable');
+  assert.equal(inventory.complete, false);
+});
+
+test('every composition over this repository is complete, with no alias anywhere', async () => {
+  // The real tree, which has no symlinks in its output folder and no directory
+  // the budget cuts short — so every composition here is over a listing the
+  // walk stood behind. A regression that made suppression or unavailability
+  // routine would show up as a failure over the project's own artifacts.
+  const inventory = takeInventory(new ConfinedReader(canonical(REPO_ROOT)));
+  assert.deepEqual(inventory.aliases, []);
+  assert.equal(inventory.suppressedNotRecorded, 0);
+  assert.equal(inventory.complete, true);
+
+  for (const entry of inventory.entries) {
+    for (const document of documentsOf(entry.composition)) {
+      // The stricter claim, asserted once rather than as a `notEqual` and an
+      // `ok` that say the same thing: every part list here is authoritative.
+      assert.equal(document.parts.state, 'complete', entry.entry.relative);
+      if (document.parts.state !== 'complete') continue;
+      assert.ok(document.parts.paths.length >= 1, entry.entry.relative);
+    }
+  }
+
+  // Every `.md` artifact in the tree is a whole document of exactly one part,
+  // because there is no sharded document anywhere in this repository to measure
+  // against — a stated limit of this story rather than an oversight, recorded
+  // in `deferred-work.md`. Compared as *paths*, so a failure names the artifact
+  // instead of dumping an inventory entry.
+  const sharded = inventory.entries
+    .filter((entry) =>
+      documentsOf(entry.composition).some((document) => document.shape === 'sharded-document'),
+    )
+    .map((entry) => entry.entry.relative);
+  assert.deepEqual(sharded, [], 'if a sharded document lands here, this story gains a real fixture');
 });

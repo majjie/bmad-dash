@@ -790,16 +790,45 @@ test('identity is derived in one place, and that place is the pure layer', async
   // exact importer set, like the walk and the unconfined lister, and the
   // frontmatter reader — which is level 2's whole implementation — is
   // importable only by the authority itself.
+  // The document model is the deliberate edit Story 1.8 makes here, and it is
+  // the one widening the rule permits: it *consumes* a recorded verdict to say
+  // what an artifact is made of, and derives no identity of its own. A render
+  // module or an adapter appearing in this list is the failure the exact set
+  // exists to catch.
   assert.deepEqual(
     await importersOf(REPO_ROOT, 'src/domain/identity.ts'),
-    ['src/cli/inventory.ts'],
-    'only the snapshot pass asks the authority; everything else consumes the verdict',
+    ['src/cli/inventory.ts', 'src/domain/document.ts'],
+    'only the snapshot pass and the document model read the authority directly',
   );
   assert.deepEqual(
     await importersOf(REPO_ROOT, 'src/domain/frontmatter.ts'),
     ['src/domain/identity.ts'],
     'level 2 is part of the authority, not a reader anything else may key identity on',
   );
+});
+
+test('the document model has a stated importer set, and the gate reads it as pure', async () => {
+  // Story 1.8's new domain module, held to the same exact-set rule as the
+  // authority beside it: composition is derived once, in the pass, and every
+  // later surface consumes the recorded `Composition` rather than rebuilding it
+  // from a listing it would have to re-enumerate to get.
+  assert.deepEqual(
+    await importersOf(REPO_ROOT, 'src/domain/document.ts'),
+    ['src/cli/inventory.ts'],
+    'only the snapshot pass composes; Epic 2 consumes what it recorded',
+  );
+
+  // And the purity rule actually reaches it. `findDomainViolations` over the
+  // real tree is already asserted above with its own diagnostics, so what is
+  // missing — and all that is missing — is that the scan the rule runs over
+  // sees these two files at all: a rule of the form "no scanned file does X"
+  // passes vacuously over a file it never opened. The frozen constraint has no
+  // `import type` exemption, so the model's only dependency may be the
+  // authority next to it.
+  const scanned = await collectSourceFiles(REPO_ROOT);
+  for (const pure of ['src/domain/document.ts', 'src/domain/identity.ts']) {
+    assert.ok(scanned.includes(pure), `${pure} is not scanned by the purity gate`);
+  }
 });
 
 test('the inventory pass has a stated importer set, so its first surface is a deliberate edit', async () => {

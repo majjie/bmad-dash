@@ -476,6 +476,28 @@ const TRAILING_DATE = /-\d{4}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12]\d|3[01])$/;
 /** The document naming a sharded document, per FR-9 and BMAD's own glob. */
 export const SHARD_INDEX = 'index.md';
 
+/**
+ * Whether a child name is a markdown document.
+ *
+ * Exported, and the two callers are the point: level 3's structural read asks
+ * it of a directory's children, and Story 1.8's document model asks it of the
+ * same names to decide what a part is. Two copies of "what counts as markdown"
+ * would let composition and identification disagree about one listing — the
+ * model would compose parts from names the authority had not read as documents,
+ * or the reverse, with nothing failing.
+ *
+ * Case-insensitive for the reason every layout name here is: this tool never
+ * writes, and a volume can hand back a spelling BMAD did not create.
+ */
+export function isMarkdown(name: string): boolean {
+  return name.toLowerCase().endsWith('.md');
+}
+
+/** Whether a child name is the shard index. Shared for the same reason. */
+export function isShardIndex(name: string): boolean {
+  return name.toLowerCase() === SHARD_INDEX;
+}
+
 /** A byte-order mark is invisible and would hide the first line of a document. */
 function withoutMark(text: string): string {
   return text.startsWith('\uFEFF') ? text.slice(1) : text;
@@ -716,7 +738,7 @@ function headingFamilies(text: string): readonly Family[] {
 function childFamilies(names: readonly string[]): readonly Family[] {
   const found: Family[] = [];
   for (const name of names) {
-    if (!name.toLowerCase().endsWith('.md')) continue;
+    if (!isMarkdown(name)) continue;
     const stem = nameStem(name);
     for (const { hint, family } of NAME_HINTS) {
       if (stem === hint) found.push(family);
@@ -788,7 +810,7 @@ function directoryShapes(candidate: Candidate, container: boolean): readonly Sha
   // have made it ambiguous.
   if (!candidate.children.available) return runFolder ? ['run-folder', 'sharded-document'] : ['unknown'];
 
-  const sharded = candidate.children.names.some((name) => name.toLowerCase() === SHARD_INDEX);
+  const sharded = candidate.children.names.some(isShardIndex);
   if (sharded && runFolder) return ['run-folder', 'sharded-document'];
   if (sharded) return ['sharded-document'];
   if (runFolder) return ['run-folder'];

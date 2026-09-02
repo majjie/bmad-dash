@@ -21,9 +21,16 @@
  *      again would probe the whole tree twice and could disagree with the list
  *      the inventory is actually built from.
  *
- * It decides nothing about identity. AD-4 puts that in exactly one domain
- * module, and `test/architecture.test.ts` asserts the importer sets on both
- * sides so a second derivation cannot appear quietly.
+ * It decides nothing about identity, and nothing about composition either. AD-4
+ * puts identity in exactly one domain module and the spine puts the model in
+ * `src/domain/` beside it; `test/architecture.test.ts` asserts the importer sets
+ * on every side, so a second derivation cannot appear quietly.
+ *
+ * **The listing is surfaced rather than discarded.** It used to be built here,
+ * handed to `identify`, and thrown away — so Story 1.8's document model, which
+ * needs exactly those names to say what a sharded document is made of, would
+ * have had to enumerate the tree again. It is now on every `InventoryEntry`
+ * next to the verdict and the composition derived from both.
  *
  * **Why it starts at the project root and then keeps only one child.** The
  * measured artifact roots all sit under `_bmad-output`, so starting the walk
@@ -39,23 +46,33 @@
  * outside the output folder are already gone by the rule above, so a dot rule
  * would only ever have cost something.
  *
- * **Two known holes in "the children are what the directory holds", both
- * recorded rather than papered over:**
+ * **Two known holes in "the children are what the directory holds". One is
+ * still open and recorded; the other is closed, with what closing it cost:**
  *
  *   - A child the **skip policy removed** does not appear in the listing handed
  *     to the domain, and the listing is still reported `available`. Today the
  *     only such child below the output folder is a `node_modules`, so no family
  *     document and no `index.md` can be lost that way — but the listing is a
- *     *filtered* one and the domain is not told so. Making it `unavailable`
+ *     *filtered* one and identification is not told so. Making it `unavailable`
  *     instead would silence level 3 for a whole run folder because it happened
- *     to contain a dependency directory, which is the worse trade.
- *   - A child the walk **suppressed as a symlink alias** likewise vanishes,
- *     with `complete: true` and no truncation, because a second spelling of an
- *     already-seen real path is dropped by design (`walk.ts` explains why). An
- *     `index.md` that is an alias therefore does not make its directory read as
- *     a sharded document. The walk cannot report it without reintroducing the
- *     duplicate its cycle set exists to prevent, so this is stated here and in
- *     `deferred-work.md` rather than fixed.
+ *     to contain a dependency directory, which is the worse trade. What the
+ *     *document model* is told is the omission itself, so composition can
+ *     report its parts as possibly-incomplete where identification cannot.
+ *   - A child the walk **suppressed as a symlink alias** used to vanish the same
+ *     way, with `complete: true` and no truncation, so an `index.md` that was a
+ *     second spelling of an already-seen path did not make its directory read
+ *     as a sharded document. Story 1.8 closed that: the walk reports every
+ *     suppression, and `listingsFor` **restores** the name here — under three
+ *     conditions stated there, because "the walk resolved and confined it"
+ *     establishes that the *name* is real and not that the spelling it aliases
+ *     is usable, is a file, or is even known. Every decision the restore takes
+ *     is on `Inventory.aliases`.
+ *
+ * What the restore costs, stated because a later story pays it: a part path can
+ * name a spelling that has no entry of its own — the artifact is reported under
+ * the other spelling — so a consumer opening a part by path may be opening a
+ * name it never saw in `entries`. `deferred-work.md` carries it as an entry
+ * against Story 1.9 and Epic 2.
  */
 
 import { ConfinedReader, ConfinementError } from '../adapters/fs/read.ts';
@@ -65,8 +82,10 @@ import {
   walk,
   type WalkBudget,
   type WalkEntry,
+  type WalkSuppression,
   type WalkTruncation,
 } from '../adapters/fs/walk.ts';
+import { isMarkdown } from '../domain/identity.ts';
 import {
   identify,
   type Candidate,
@@ -74,6 +93,12 @@ import {
   type Listing,
   type Verdict,
 } from '../domain/identity.ts';
+import {
+  compose,
+  type Composition,
+  type PartListing,
+  type PartOmission,
+} from '../domain/document.ts';
 
 /**
  * BMAD's output folder, and the only child of the project root this pass looks
@@ -137,6 +162,14 @@ export interface Skip {
 export interface InventoryEntry {
   readonly entry: WalkEntry;
   readonly identity: Verdict;
+  /**
+   * The child listing handed to the domain — the same value both the identity
+   * and the composition were derived from, so a consumer can see the evidence
+   * rather than re-enumerate to guess at it.
+   */
+  readonly children: Listing;
+  /** What it is made of, under every reading its verdict carried. */
+  readonly composition: Composition;
 }
 
 /**
@@ -153,25 +186,73 @@ export interface Inventory {
   readonly entries: readonly InventoryEntry[];
   readonly truncations: readonly WalkTruncation[];
   /**
-   * True when no bound was reached and every entry the walk reported was
-   * `present`.
+   * True when no bound was reached, every entry the walk reported was
+   * `present`, and the walk suppressed no name.
+   *
+   * The walk's own answer, forwarded rather than recomputed — including its
+   * suppression clause, which is Story 1.8's and is the reason this is no
+   * longer only about bounds and entry states.
    *
    * **It says nothing about `skipped`.** The skip policy is the caller's own
    * instruction, so a pass that deliberately left five subtrees out is still
    * complete in this sense; `skipped` is where that is answered. Spelled out
    * because the walk's own `complete` was added precisely to stop a caller
-   * reading a narrower claim as a wider one.
+   * reading a narrower claim as a wider one — and the asymmetry with
+   * suppression is deliberate and explained in `walk.ts`'s header: an exclusion
+   * is what this pass asked for, a suppression is what the walk decided, and a
+   * caller can only be surprised by the second.
    */
   readonly complete: boolean;
   readonly skipped: readonly Skip[];
   /** Skips beyond `MAX_RECORDED_SKIPS`, counted rather than listed. */
   readonly skippedNotRecorded: number;
+  /**
+   * Names the walk dropped as second spellings of already-reported paths, and
+   * what this pass did with each.
+   *
+   * Surfaced rather than consumed silently: the difference between a directory
+   * holding one `index.md` and holding two names for one file is a fact about
+   * the project, not an implementation detail — and so is the pass declining to
+   * restore one, which is why `restored` is on the record rather than implied.
+   */
+  readonly aliases: readonly Alias[];
+  /**
+   * Suppressions beyond the walk's own record cap, counted rather than listed.
+   *
+   * These are the ones this pass could not act on at all, so the directories
+   * they came from have their listings reported **unavailable** rather than
+   * short — see `unfinishedListings`. Kept here as the total, because a count
+   * of what could not be named is still an answer to "was anything withheld".
+   */
+  readonly suppressedNotRecorded: number;
 }
 
-/** The skip policy's own tally, so the cap is applied in one place. */
+/** One suppressed spelling, and what the pass did about it. */
+export interface Alias {
+  /** The spelling with no entry of its own, project-root-relative. */
+  readonly relative: string;
+  /** Where the artifact at that identity is reported instead. */
+  readonly reportedAt: string;
+  /** Whether the name was put back into its parent's listing. */
+  readonly restored: boolean;
+  /** How it was treated, and where it was not restored, why not. */
+  readonly reason: string;
+}
+
+/**
+ * The skip policy's own tally, so the cap is applied in one place.
+ *
+ * `countsByParent` counts **every** skip, recorded or not, for the same reason
+ * the walk counts every suppression per directory: past `MAX_RECORDED_SKIPS`
+ * the names are gone, and without the tally a filtered listing past the cap
+ * would compose as authoritative — the cap quietly undoing the honesty the
+ * record exists for. One entry per directory that lost a child, so it is
+ * bounded by the directories walked rather than by the names skipped.
+ */
 interface SkipLog {
   readonly recorded: Skip[];
   overflow: number;
+  readonly countsByParent: Map<string, number>;
 }
 
 /**
@@ -182,18 +263,19 @@ interface SkipLog {
  * always going to discard.
  */
 function skipPolicy(log: SkipLog): (name: string, parentRelative: string) => boolean {
-  const note = (relative: string, reason: string): void => {
+  const note = (parentRelative: string, relative: string, reason: string): void => {
+    log.countsByParent.set(parentRelative, (log.countsByParent.get(parentRelative) ?? 0) + 1);
     if (log.recorded.length < MAX_RECORDED_SKIPS) log.recorded.push({ relative, reason });
     else log.overflow += 1;
   };
   return (name: string, parentRelative: string): boolean => {
     if (parentRelative === '.') {
       if (name.toLowerCase() === OUTPUT_DIRECTORY) return false;
-      note(childRelative(parentRelative, name), 'outside the artifact output tree');
+      note(parentRelative, childRelative(parentRelative, name), 'outside the artifact output tree');
       return true;
     }
     if (SKIPPED_NAMES.includes(name.toLowerCase())) {
-      note(childRelative(parentRelative, name), 'dependency directory');
+      note(parentRelative, childRelative(parentRelative, name), 'dependency directory');
       return true;
     }
     return false;
@@ -216,14 +298,183 @@ function split(relative: string): { readonly parent: string; readonly name: stri
  * document at `certain` confidence. The dangling entry is still reported in
  * `entries` with its own state; it just is not a structural signal.
  */
-function childNamesByParent(entries: readonly WalkEntry[]): Map<string, string[]> {
-  const byParent = new Map<string, string[]>();
+/** Everything `listingsFor` works out in one pass over the walk's output. */
+interface Listings {
+  /** Child names per directory, sorted, with restorable aliases put back. */
+  readonly namesByParent: Map<string, string[]>;
+  /** Restored names that duplicate another name in the same listing. */
+  readonly aliasesByParent: Map<string, string[]>;
+  /** How many suppressions the walk counted but could not name, per directory. */
+  readonly unnamedByParent: Map<string, number>;
+  /** One record per suppression the walk did name, and its disposition. */
+  readonly aliases: Alias[];
+}
+
+/**
+ * The listing handed to the domain for each directory, and what shaped it.
+ *
+ * **Only `present` children count.** A dangling `index.md` is a name with
+ * nothing behind it, and level 3's question is what the directory *contains* —
+ * so admitting it would let a broken link make a run folder read as a sharded
+ * document at `certain` confidence. The dangling entry is still reported in
+ * `entries` with its own state; it just is not a structural signal.
+ *
+ * **A suppressed alias is restored, under three conditions.** It is a name the
+ * directory really holds — the walk resolved and confined it exactly like a
+ * reported child and dropped it only because its *identity* was already
+ * accounted for — and left out, an `index.md` reached by a second spelling made
+ * its directory read as a plain run folder, which is the hole
+ * `deferred-work.md` recorded against this story. What "resolved like any
+ * other" does *not* establish is that the name is usable as a structural
+ * signal, so each condition is checked rather than assumed:
+ *
+ *   1. **The spelling it aliases is `present`.** Otherwise the winner was
+ *      dropped by the rule above and restoring the alias would put the name
+ *      back through the side door — a symlink to a directory the pass could not
+ *      enumerate became an `index.md` this directory "contains", so its one
+ *      part was a denied directory reported `complete`. That is the dangling
+ *      case wearing a different hat, and it is checked first because it is the
+ *      more precise diagnosis of the two.
+ *   2. **It is a file.** The walk knows the kind here, and a directory is
+ *      neither a document nor a part of one. The listing being names-only is a
+ *      limitation the model states; it is not a licence for this pass to add a
+ *      name it *knows* is a directory. Reached by an alias to a directory that
+ *      *was* enumerable, which rule 1 has no quarrel with.
+ *   3. **The walk could name it.** Past `MAX_RECORDED_SUPPRESSIONS` only a
+ *      count survives, and a count cannot be restored — so those directories
+ *      get an unavailable listing instead (see `unfinishedListings`), which is
+ *      the honest report of a listing whose missing names are unknown.
+ *
+ * A restored name that duplicates another name in the same listing — a symlink
+ * beside its target — is recorded in `aliasesByParent` so the model can list
+ * one part for one file while identification still sees both names.
+ *
+ * Everything the restore declines is on the returned `aliases`, with
+ * `restored: false` and the reason, so no rule here is silent.
+ */
+function listingsFor(
+  entries: readonly WalkEntry[],
+  suppressed: readonly WalkSuppression[],
+  suppressedByDirectory: ReadonlyMap<string, number>,
+): Listings {
+  const namesByParent = new Map<string, string[]>();
+  const aliasesByParent = new Map<string, string[]>();
+  const unnamedByParent = new Map<string, number>();
+  const aliases: Alias[] = [];
+  const present = new Set<string>();
+
+  const push = (into: Map<string, string[]>, parent: string, name: string): void => {
+    const held = into.get(parent);
+    if (held === undefined) into.set(parent, [name]);
+    else held.push(name);
+  };
+
   for (const entry of entries) {
-    if (entry.relative === '.' || entry.state !== 'present') continue;
+    if (entry.state !== 'present') continue;
+    present.add(entry.relative);
+    if (entry.relative === '.') continue;
     const { parent, name } = split(entry.relative);
-    const names = byParent.get(parent);
-    if (names === undefined) byParent.set(parent, [name]);
-    else names.push(name);
+    push(namesByParent, parent, name);
+  }
+
+  const named = new Map<string, number>();
+  for (const alias of suppressed) {
+    const { parent, name } = split(alias.relative);
+    named.set(parent, (named.get(parent) ?? 0) + 1);
+    if (!present.has(alias.reportedAt)) {
+      aliases.push({
+        relative: alias.relative,
+        reportedAt: alias.reportedAt,
+        restored: false,
+        reason: `not restored: ${alias.reportedAt} is not reported as present, so the name has nothing usable behind it`,
+      });
+      continue;
+    }
+    if (alias.kind !== 'file') {
+      aliases.push({
+        relative: alias.relative,
+        reportedAt: alias.reportedAt,
+        restored: false,
+        reason: `not restored: a ${alias.kind} is not a document or a part of one`,
+      });
+      continue;
+    }
+    push(namesByParent, parent, name);
+    // A second spelling of a sibling: kept as a name, excluded from parts.
+    const duplicate = split(alias.reportedAt).parent === parent;
+    if (duplicate) push(aliasesByParent, parent, name);
+    aliases.push({
+      relative: alias.relative,
+      reportedAt: alias.reportedAt,
+      restored: true,
+      reason: duplicate
+        ? `restored as a name its parent holds, and excluded from parts as a second spelling of ${split(alias.reportedAt).name}`
+        : 'restored as a name its parent holds',
+    });
+  }
+
+  // What the walk counted but could not name, per directory.
+  for (const [parent, total] of suppressedByDirectory) {
+    const unnamed = total - (named.get(parent) ?? 0);
+    if (unnamed > 0) unnamedByParent.set(parent, unnamed);
+  }
+
+  // Sorted, because the listing is now a surfaced value: the walk reports
+  // children in sorted name order, and appending restored names left
+  // `InventoryEntry.children` in an order that depended on which spelling the
+  // walk happened to meet first. One order, whatever the tree does.
+  for (const names of namesByParent.values()) names.sort();
+
+  return { namesByParent, aliasesByParent, unnamedByParent, aliases };
+}
+
+/**
+ * What each directory's listing does not include, keyed by the directory.
+ *
+ * The skip policy is the only rule that produces one: a name it removed is
+ * absent from the listing while the listing still reports itself `available`,
+ * which is the trade this file's header records. The document model takes these
+ * as `omissions` and reports parts as possibly-incomplete rather than
+ * authoritative; identification is deliberately left alone, because marking the
+ * whole listing unavailable would silence level 3 for a run folder that merely
+ * contained a dependency directory.
+ *
+ * A suppressed alias is **not** an omission — a restored one is not missing at
+ * all, and one the restore declined is reported on `Inventory.aliases` with its
+ * reason. What is genuinely unaccounted for, past the walk's own record cap,
+ * makes the listing unavailable instead: see `unfinishedListings`.
+ *
+ * Skips beyond `MAX_RECORDED_SKIPS` arrive as a **count**, because the names are
+ * gone by then and a count is what the tally kept. Omitting them entirely was
+ * the earlier defect: a filtered listing past the cap composed as authoritative
+ * and the cap silently undid the report it is meant to bound.
+ */
+function omissionsByParent(log: SkipLog): Map<string, PartOmission[]> {
+  const byParent = new Map<string, PartOmission[]>();
+  const push = (parent: string, omission: PartOmission): void => {
+    const held = byParent.get(parent);
+    if (held === undefined) byParent.set(parent, [omission]);
+    else held.push(omission);
+  };
+
+  const recorded = new Map<string, number>();
+  for (const skip of log.recorded) {
+    const { parent, name } = split(skip.relative);
+    recorded.set(parent, (recorded.get(parent) ?? 0) + 1);
+    push(parent, {
+      omitted: 'name',
+      name,
+      reason: `${name} was left out of the listing: ${skip.reason}`,
+    });
+  }
+  for (const [parent, total] of log.countsByParent) {
+    const unnamed = total - (recorded.get(parent) ?? 0);
+    if (unnamed === 0) continue;
+    push(parent, {
+      omitted: 'count',
+      count: unnamed,
+      reason: `${String(unnamed)} name(s) the skip policy left out were not recorded individually, so this listing may be short by a part`,
+    });
   }
   return byParent;
 }
@@ -252,6 +503,7 @@ function childNamesByParent(entries: readonly WalkEntry[]): Map<string, string[]
 function unfinishedListings(
   entries: readonly WalkEntry[],
   truncations: readonly WalkTruncation[],
+  unnamedByParent: ReadonlyMap<string, number>,
 ): Map<string, string> {
   const reported = new Set(entries.map((entry) => entry.relative));
   const unfinished = new Map<string, string>();
@@ -273,6 +525,19 @@ function unfinishedListings(
       ancestor = split(ancestor).parent;
     }
   }
+
+  // A suppression the walk could not name is the same kind of loss as a bound:
+  // the names this directory holds are not knowable from what the pass was
+  // given, so nothing may be concluded from the short list it *can* see. The
+  // alternative was to report the list as available anyway, which past the
+  // record cap reinstated the exact defect this story closed — a run folder
+  // reading `certain` over a listing an `index.md` had been dropped from.
+  for (const [parent, unnamed] of unnamedByParent) {
+    note(
+      parent,
+      `${String(unnamed)} name(s) the walk suppressed as second spellings could not be recorded individually, so this listing is short by names nobody can name`,
+    );
+  }
   return unfinished;
 }
 
@@ -292,13 +557,18 @@ export function takeInventory(
   reader: ConfinedReader,
   options: { readonly budget?: WalkBudget } = {},
 ): Inventory {
-  const log: SkipLog = { recorded: [], overflow: 0 };
+  const log: SkipLog = { recorded: [], overflow: 0, countsByParent: new Map() };
   const result = walk(reader, options.budget ?? INVENTORY_BUDGET, {
     exclude: skipPolicy(log),
   });
 
-  const byParent = childNamesByParent(result.entries);
-  const unfinished = unfinishedListings(result.entries, result.truncations);
+  const listings = listingsFor(result.entries, result.suppressed, result.suppressedByDirectory);
+  const unfinished = unfinishedListings(
+    result.entries,
+    result.truncations,
+    listings.unnamedByParent,
+  );
+  const omissions = omissionsByParent(log);
 
   const entries: InventoryEntry[] = [];
   let startEntry: WalkEntry | undefined;
@@ -310,13 +580,27 @@ export function takeInventory(
     }
 
     const kind = kindOf(entry);
+    const children = childrenFor(entry, kind, listings.namesByParent, unfinished);
+    const identity = identify({
+      relative: entry.relative,
+      kind,
+      content: () => contentFor(reader, entry, kind),
+      children,
+    });
     entries.push({
       entry,
-      identity: identify({
+      identity,
+      children,
+      // One composition per entry, from the verdict and the same listing — the
+      // domain decides both; this only hands over what it already holds.
+      composition: compose({
         relative: entry.relative,
-        kind,
-        content: () => contentFor(reader, entry, kind),
-        children: childrenFor(entry, kind, byParent, unfinished),
+        identity,
+        children: partsListing(
+          children,
+          omissions.get(entry.relative) ?? [],
+          listings.aliasesByParent.get(entry.relative) ?? [],
+        ),
       }),
     });
   }
@@ -340,7 +624,32 @@ export function takeInventory(
     complete: result.complete,
     skipped: log.recorded,
     skippedNotRecorded: log.overflow,
+    aliases: listings.aliases,
+    suppressedNotRecorded: result.suppressedNotRecorded,
   };
+}
+
+/**
+ * The listing again, in the document model's own vocabulary.
+ *
+ * A translation and not a second derivation: the names and the reason are the
+ * ones identification saw, and all that is added is what the pass knows and the
+ * domain cannot — that a name was withheld from an otherwise available listing,
+ * and that a name is a second spelling of a sibling.
+ *
+ * Exported so the model's own tests compose through *this* translation rather
+ * than a copy of it. A private helper here plus a lookalike in the test file is
+ * two spellings of one contract, and the copy is the one that keeps passing
+ * after this one changes.
+ */
+export function partsListing(
+  children: Listing,
+  omissions: readonly PartOmission[],
+  aliases: readonly string[],
+): PartListing {
+  return children.available
+    ? { available: true, names: children.names, omissions, aliases }
+    : { available: false, reason: children.reason };
 }
 
 /** What the walk learned about the kind, in the domain's three-way vocabulary. */

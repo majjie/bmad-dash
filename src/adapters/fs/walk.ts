@@ -48,14 +48,33 @@
  * symlink alias collapses; a hard link does not.** Pinned by test in both
  * directions so the decision is visible rather than incidental.
  *
- * **What a suppressed alias leaves behind: nothing, deliberately.** When two
- * spellings resolve to one path the second is dropped with no entry and no
- * truncation. That is not an omission in Story 1.9's sense — nothing became
- * unavailable, and the artifact at that identity *is* reported, once. Emitting
- * a second entry to say "this is the same thing you already have" would put a
- * duplicate into the inventory whose whole point is that there is not one. The
- * spelling reported is the first the walk meets in its order (sorted names,
- * depth-first), which Story 1.7 inherits.
+ * **What a suppressed alias leaves behind: a record, not an entry.** When two
+ * spellings resolve to one path the second becomes no entry and no truncation —
+ * emitting a second entry to say "this is the same thing you already have"
+ * would put a duplicate into the inventory whose whole point is that there is
+ * not one. The spelling reported is the first the walk meets in its order
+ * (sorted names, depth-first), which Story 1.7 inherits.
+ *
+ * It used to leave behind *nothing*, and Story 1.8 is where that stopped being
+ * acceptable: an `index.md` that is a second spelling of an already-reported
+ * path vanished from its directory's listing with `complete: true` and no
+ * truncation, so the one signal that distinguishes a sharded document from a
+ * plain run folder could disappear in silence (`deferred-work.md`, the
+ * alias-suppression entry). So a suppression is now reported in `suppressed`,
+ * naming both spellings, and it counts against `complete` — the walk shortened
+ * a directory's listing, and a caller drawing a structural conclusion from that
+ * listing is entitled to know. That is the whole of the decision: an alias is
+ * **not** an entry, and it is **not** invisible either.
+ *
+ * **Why a suppression counts against `complete` and an exclusion does not.**
+ * The two shorten a listing the same way and are answered oppositely on
+ * purpose: `exclude` is the *caller's own instruction*, so a walk that obeyed
+ * it did exactly what it was asked and reports nothing back (see
+ * `WalkOptions`), while a suppression is the *walk's own* decision, taken for
+ * its cycle set rather than for the caller, and a caller cannot ask about a
+ * rule it did not set. So the exclusion is answered by the caller's own record
+ * — `src/cli/inventory.ts` keeps one — and the suppression by this result. The
+ * asymmetry is between whose decision it was, not between how much was lost.
  *
  * It does not import `list.ts`. That module is the unconfined lister and
  * AD-10's exception is scoped to names-only, no-recursion, no-read; a recursing
@@ -186,6 +205,57 @@ export interface WalkTruncation {
   readonly reason: string;
 }
 
+/**
+ * A name the walk dropped because its resolved path was already reported.
+ *
+ * Both spellings are named, because either alone is useless: `relative` is the
+ * name that has no entry of its own, and `reportedAt` is where the artifact at
+ * that identity actually appears. A consumer that wants to restore the name to
+ * its parent's listing — Story 1.8's pass does, so an aliased `index.md` still
+ * counts as a name the directory holds — needs the first; one that wants to
+ * point a reader at the artifact needs the second.
+ *
+ * Only children the reader resolved and confined can be suppressed, so this
+ * always carries a `path` and a `kind`. An unresolvable child has no identity
+ * to collide with and is reported as its own `WalkEntry` instead.
+ */
+export interface WalkSuppression {
+  /** The spelling that was dropped, relative to the starting directory. */
+  readonly relative: string;
+  /** Walk depth of the dropped spelling, on the same footing as `WalkEntry`. */
+  readonly depth: number;
+  /** The resolved real path the two spellings share. */
+  readonly path: CanonicalPath;
+  readonly kind: 'directory' | 'file' | 'other';
+  /** The `relative` this resolved path was first reported at. */
+  readonly reportedAt: string;
+  readonly reason: string;
+}
+
+/**
+ * The most suppressions recorded individually.
+ *
+ * The lesson `src/cli/inventory.ts` learned about its skip log, applied before
+ * it is paid for a second time: a suppressed child costs nothing against
+ * `maxEntries` — it never becomes an entry — so a directory of ten thousand
+ * links to one file would produce ten thousand records under a budget that
+ * thinks it is bounding the result. Beyond this cap the count is kept and the
+ * paths are not, which answers "was a name withheld" without letting the answer
+ * grow without limit.
+ *
+ * `suppressedByDirectory` below is what keeps the cap from hiding anything: it
+ * counts **every** suppression per directory, recorded or not, so a consumer
+ * can always tell which listings are short even where it cannot be told which
+ * names are missing.
+ *
+ * The value equals `src/cli/inventory.ts`'s `MAX_RECORDED_SKIPS` and is
+ * deliberately a second constant rather than a shared one: an adapter cannot
+ * import the pass (AD-1's layering, and the pass is this module's consumer),
+ * and the two bound different lists whose owners are different — one the caller
+ * asked for, one this walk decided. Equal today, and free to diverge.
+ */
+export const MAX_RECORDED_SUPPRESSIONS = 200;
+
 /** Everything the walk found, plus every place it stopped short. */
 export interface WalkResult {
   readonly root: CanonicalPath;
@@ -196,13 +266,43 @@ export interface WalkResult {
   /** Empty exactly when no bound was reached. Not a completeness flag. */
   readonly truncations: readonly WalkTruncation[];
   /**
-   * True when no bound was reached **and** every entry is `present`.
+   * Every name dropped as a second spelling of an already-reported path, up to
+   * `MAX_RECORDED_SUPPRESSIONS`.
+   */
+  readonly suppressed: readonly WalkSuppression[];
+  /** Suppressions beyond that cap, counted rather than listed. */
+  readonly suppressedNotRecorded: number;
+  /**
+   * How many names each directory's reported listing is short by — **every**
+   * suppression, whether or not it was recorded individually above.
+   *
+   * The cap's escape hatch, and the reason it is a tally rather than a second
+   * list: one entry per directory that lost a name, so it is bounded by the
+   * directories the walk visits and therefore by `maxEntries`, which the
+   * per-name list is not. A consumer comparing a directory's count here against
+   * the names it can see in `suppressed` knows exactly how many it was not told
+   * about, which is what stops the cap from silently reinstating the defect the
+   * suppression report exists to remove.
+   *
+   * Keyed by the *parent* directory's `relative`, so `.` appears for a name
+   * dropped from the starting directory's own listing.
+   */
+  readonly suppressedByDirectory: ReadonlyMap<string, number>;
+  /**
+   * True when no bound was reached, every entry is `present`, **and** no name
+   * was suppressed.
    *
    * The question a caller actually wants, computed once here rather than
    * rebuilt from `truncations` — which used to be documented as answering it
    * and does not. This story's own acceptance tree has an empty `truncations`
    * and a denied directory in it, so a caller trusting that doc would have
    * called an incomplete walk complete.
+   *
+   * The suppression clause is Story 1.8's, and it is the narrow claim rather
+   * than the wide one: it does **not** say an artifact went missing — a
+   * suppressed alias resolves to a path this result reports — it says a
+   * directory's listing here is shorter than the directory is, which is
+   * precisely what a structural read over that listing needs to know.
    */
   readonly complete: boolean;
 }
@@ -289,10 +389,15 @@ export function walk(
 
   const entries: WalkEntry[] = [];
   const truncations: WalkTruncation[] = [];
-  // Resolved real paths already accounted for. The starting directory is
-  // seeded so a link pointing back at it is a repeat rather than a fresh
-  // subtree — see the note on cycles above.
-  const seen = new Set<string>([start]);
+  const suppressed: WalkSuppression[] = [];
+  let suppressedNotRecorded = 0;
+  const suppressedByDirectory = new Map<string, number>();
+  // Resolved real paths already accounted for, each mapped to the `relative` it
+  // was first reported at — a set until Story 1.8, and the value is what lets a
+  // suppression name the spelling that won rather than only the one that lost.
+  // The starting directory is seeded so a link pointing back at it is a repeat
+  // rather than a fresh subtree — see the note on cycles above.
+  const seen = new Map<string, string>([[start, '.']]);
   const stack: Job[] = [{ job: 'visit', path: start, relative: '.', depth: 0 }];
 
   while (stack.length > 0) {
@@ -430,11 +535,32 @@ export function walk(
         continue;
       }
       // Only a resolved path reaches here, so only a resolved path becomes an
-      // identity. A repeat is dropped rather than reported again: appearing
-      // once is the contract, and see the header for why a suppressed alias
-      // leaves no trace.
-      if (seen.has(child.path)) continue;
-      seen.add(child.path);
+      // identity. A repeat is dropped rather than reported again — appearing
+      // once is the contract — but it is *recorded*, because the name is one
+      // this directory really holds and the listing above is short without it.
+      const first = seen.get(child.path);
+      if (first !== undefined) {
+        // Counted first and unconditionally: the tally is what the cap below
+        // must not be able to hide.
+        suppressedByDirectory.set(job.relative, (suppressedByDirectory.get(job.relative) ?? 0) + 1);
+        if (suppressed.length < MAX_RECORDED_SUPPRESSIONS) {
+          suppressed.push({
+            relative,
+            depth: childDepth,
+            path: child.path,
+            kind: child.kind,
+            reportedAt: first,
+            reason:
+              first === '.'
+                ? 'a second spelling of the directory the walk started from'
+                : `a second spelling of ${first}, which is already reported`,
+          });
+        } else {
+          suppressedNotRecorded += 1;
+        }
+        continue;
+      }
+      seen.set(child.path, relative);
       if (child.kind === 'directory') {
         pending.push({ job: 'visit', path: child.path, relative, depth: childDepth });
         continue;
@@ -466,7 +592,13 @@ export function walk(
     start,
     entries,
     truncations,
+    suppressed,
+    suppressedNotRecorded,
+    suppressedByDirectory,
     complete:
-      truncations.length === 0 && entries.every((entry) => entry.state === 'present'),
+      truncations.length === 0 &&
+      suppressed.length === 0 &&
+      suppressedNotRecorded === 0 &&
+      entries.every((entry) => entry.state === 'present'),
   };
 }

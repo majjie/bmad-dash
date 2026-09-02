@@ -24,7 +24,13 @@ import {
   ConfinementError,
   type ChildListing,
 } from '../../src/adapters/fs/read.ts';
-import { walk, type WalkBudget, type WalkEntry, type WalkResult } from '../../src/adapters/fs/walk.ts';
+import {
+  MAX_RECORDED_SUPPRESSIONS,
+  walk,
+  type WalkBudget,
+  type WalkEntry,
+  type WalkResult,
+} from '../../src/adapters/fs/walk.ts';
 import { makeScratchDir } from '../support/project.ts';
 import {
   deniableDirectories,
@@ -642,7 +648,7 @@ test('two names differing only in case are whatever the running volume says', as
 // The whole acceptance criterion, in one tree
 // ---------------------------------------------------------------------------
 
-test('a tree with a cycle, a dangling link, an escape and a denial walks completely', async (t) => {
+test('a tree with a cycle, a dangling link, an escape and a denial reports every one', async (t) => {
   if (!(await symlinksAvailable()) || !deniableDirectories()) {
     t.skip('needs symlinks and a non-root POSIX user');
     return;
@@ -677,6 +683,22 @@ test('a tree with a cycle, a dangling link, an escape and a denial walks complet
     'plain.md file',
   ]);
   assert.deepEqual(result.truncations, [], 'and it saw the whole tree it was allowed to see');
+
+  // The two shortenings this tree also holds, which Story 1.8 made reportable
+  // and this row asserted neither of: `cycle` and `one.md` are both second
+  // spellings of paths already reported, so `artifacts`' listing is two names
+  // shorter than the directory — and a walk over a listing it shortened is not
+  // a complete one, which is why the title no longer says "completely".
+  assert.deepEqual(
+    result.suppressed.map((alias) => `${alias.relative} -> ${alias.reportedAt} (${alias.kind})`),
+    [
+      'artifacts/cycle -> artifacts (directory)',
+      'artifacts/one.md -> artifacts/alias (file)',
+    ],
+  );
+  assert.deepEqual([...result.suppressedByDirectory], [['artifacts', 2]]);
+  assert.equal(result.suppressedNotRecorded, 0);
+  assert.equal(result.complete, false, 'two names were dropped from one listing');
 
   // One appearance per resolved identity, across the whole result.
   const identities = result.entries.flatMap((entry) =>
@@ -996,4 +1018,132 @@ test('completeness is a single derived answer, not truncations being empty', asy
   const dangling = await walked(t, [{ file: 'a.md' }, { link: 'gone', to: 'nowhere', type: 'file' }]);
   assert.deepEqual(dangling.result.truncations, []);
   assert.equal(dangling.result.complete, false, 'an unusable entry is an incomplete walk');
+});
+
+// ---------------------------------------------------------------------------
+// Suppressed aliases — the trace that used to be left behind, deliberately
+// ---------------------------------------------------------------------------
+
+test('a suppressed alias is reported, naming both spellings', async (t) => {
+  if (!(await symlinksAvailable())) {
+    t.skip('needs symlinks: unelevated Windows cannot create them');
+    return;
+  }
+  // Story 1.8's inherited fix. The alias is still not an entry — appearing once
+  // per resolved identity is the contract — but it is no longer invisible: it
+  // vanished before with `complete: true` and no truncation, so an `index.md`
+  // reached by a second spelling silently stopped being a signal that its
+  // directory might be a sharded document rather than a plain run folder.
+  //
+  // The link's name sorts *after* its target's, so the alias is the spelling
+  // that loses — which is the direction that matters here. The other way round
+  // (`index.md` met first) reports the index and suppresses the target, and
+  // there was never a signal to lose in that case.
+  const { result } = await walked(t, [
+    { file: 'run/aaa.md' },
+    { link: 'run/index.md', to: 'run/aaa.md', type: 'file' },
+  ]);
+
+  // The listing the walk reports for `run` is short by exactly that name, which
+  // is the fact a structural read over it needs to know.
+  assert.deepEqual(shape(result), ['. directory', 'run directory', 'run/aaa.md file']);
+  assert.deepEqual(
+    result.suppressed.map((alias) => `${alias.relative} -> ${alias.reportedAt} (${alias.kind})`),
+    ['run/index.md -> run/aaa.md (file)'],
+    'the alias names the spelling that lost and the one that won',
+  );
+  assert.equal(result.suppressed[0]?.depth, 2);
+  assert.match(String(result.suppressed[0]?.reason), /second spelling of run\/aaa\.md/);
+  assert.equal(result.suppressedNotRecorded, 0);
+  // The per-directory tally, which is what a consumer compares against the
+  // names above to know whether it was told about all of them.
+  assert.deepEqual([...result.suppressedByDirectory], [['run', 1]]);
+
+  // Not a truncation — no bound was reached — and not a complete walk either:
+  // an aliased `index.md` must not read as a plain, fully-listed directory.
+  assert.deepEqual(result.truncations, []);
+  assert.equal(
+    result.complete,
+    false,
+    'a directory whose listing the walk shortened is not a clean pass over it',
+  );
+
+  // And the suppression is about a name, not about an artifact going missing:
+  // the resolved path it carries is one this result reports.
+  const reported = result.entries.flatMap((entry) =>
+    entry.state === 'present' ? [String(entry.path)] : [],
+  );
+  assert.equal(reported.includes(String(result.suppressed[0]?.path)), true);
+});
+
+test('a cycle link is a suppression too, and the whole tree still walks', async (t) => {
+  if (!(await symlinksAvailable())) {
+    t.skip('needs symlinks: unelevated Windows cannot create them');
+    return;
+  }
+  // The same mechanism from the other direction: a directory link back into an
+  // already-seen subtree is a second spelling as much as a file alias is, so it
+  // is reported in the same list rather than in a second vocabulary.
+  const { result } = await walked(t, [
+    { file: 'artifacts/one.md' },
+    { link: 'artifacts/cycle', to: 'artifacts', type: 'dir' },
+    { link: 'self', to: '.', type: 'dir' },
+  ]);
+
+  assert.deepEqual(shape(result), ['. directory', 'artifacts directory', 'artifacts/one.md file']);
+  assert.deepEqual(
+    result.suppressed.map((alias) => `${alias.relative} -> ${alias.reportedAt} (${alias.kind})`),
+    // Discovery order, not path order: the root's own children are examined
+    // before the walk descends, so `self` is met before `artifacts/cycle`.
+    ['self -> . (directory)', 'artifacts/cycle -> artifacts (directory)'],
+    'the starting directory is a spelling that can be aliased like any other',
+  );
+  // The root's own reason is worded for a reader rather than mechanically: `.`
+  // is a spelling nobody typed, and "a second spelling of `.`" reads as noise.
+  assert.equal(
+    result.suppressed[0]?.reason,
+    'a second spelling of the directory the walk started from',
+  );
+  assert.deepEqual([...result.suppressedByDirectory].sort(), [['.', 1], ['artifacts', 1]]);
+  assert.equal(result.complete, false);
+});
+
+test('the recorded suppressions are capped, and the overflow is counted rather than dropped', async (t) => {
+  if (!(await symlinksAvailable())) {
+    t.skip('needs symlinks: unelevated Windows cannot create them');
+    return;
+  }
+  // The lesson `src/cli/inventory.ts` learned about its skip log, applied
+  // before it is paid for twice: a suppressed child never becomes an entry, so
+  // `maxEntries` does not bound this list and one directory of links to one
+  // file could grow it without limit.
+  const aliases = MAX_RECORDED_SUPPRESSIONS + 25;
+  const root = await makeTree(t, [
+    { file: 'real.md' },
+    ...Array.from({ length: aliases }, (_unused, index) => ({
+      link: `z${String(index).padStart(4, '0')}`,
+      to: 'real.md',
+      type: 'file' as const,
+    })),
+  ]);
+  const result = walk(new ConfinedReader(canonical(root)), { maxDepth: 4, maxEntries: 500 });
+
+  assert.deepEqual(shape(result), ['. directory', 'real.md file']);
+  assert.equal(result.suppressed.length, MAX_RECORDED_SUPPRESSIONS);
+  assert.equal(result.suppressedNotRecorded, aliases - MAX_RECORDED_SUPPRESSIONS);
+  assert.equal(
+    result.suppressed.length + result.suppressedNotRecorded,
+    aliases,
+    'nothing is lost: what is not listed is counted',
+  );
+  assert.equal(result.complete, false, 'past the cap the shortfall is still reported');
+
+  // The cap's escape hatch, and the reason the pass can still tell which
+  // listings are short: the per-directory tally counts every suppression,
+  // recorded or not, so the count here exceeds what `suppressed` can name.
+  assert.deepEqual([...result.suppressedByDirectory], [['.', aliases]]);
+  assert.ok(
+    (result.suppressedByDirectory.get('.') ?? 0) > result.suppressed.length,
+    'the tally is what survives the cap; without it the cap hides names',
+  );
 });
