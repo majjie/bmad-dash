@@ -291,6 +291,24 @@ test('help wins even over a flag the parser does not know', () => {
   }
 });
 
+test('an empty path argument is refused, not treated as the default', () => {
+  // `resolve(cwd, '')` returns `cwd`, so this used to look like a successful
+  // default. The case that matters is a wrapper script's `bmad-dash "$TARGET"`
+  // with `TARGET` unset: it inspected whatever directory the script ran from
+  // and reported it as the project the caller asked for.
+  const invocation = parseInvocation([''], CWD);
+  assert.ok(!invocation.ok, 'an empty path must not parse as a serving invocation');
+  assert.match(invocation.message, /Empty path argument/);
+
+  // Absent still means the current directory — that is the default, and it is
+  // a different thing from an empty argument.
+  assert.equal(serving([]).projectRoot, CWD);
+
+  // And a path that is merely odd is still a path: one space names a directory
+  // called " ", which is legal and is not the working directory.
+  assert.equal(serving([' ']).projectRoot, `${CWD}/ `);
+});
+
 test('a path literally named --help is still a path, after the separator', () => {
   // `--` ends option parsing, so the help short-circuit must respect it or it
   // would swallow a legitimate, if eccentric, directory name.

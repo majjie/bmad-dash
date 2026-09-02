@@ -65,6 +65,23 @@ function stubHandle(): ServerHandle {
   };
 }
 
+/**
+ * Dependencies for a run that is only asked for its exit code.
+ *
+ * Everything observable is stubbed, so the number `run` returns is the whole
+ * result — and `start` never fails, which is what makes an exit of 1 evidence
+ * about resolution rather than about the socket.
+ */
+function exitCodeDeps(): Parameters<typeof run>[1] {
+  return {
+    start: () => Promise.resolve(stubHandle()),
+    launch: () => Promise.resolve({ opened: true as const, command: 'stub' }),
+    stdout: () => {},
+    stderr: () => {},
+    onSignal: () => {},
+  };
+}
+
 test('the signal handler is registered before anything a consumer can observe', async () => {
   const order: string[] = [];
 
@@ -392,31 +409,44 @@ test('an honoured port is not remarked on, and neither is the default', async ()
   }
 });
 
-test('a mistyped target exits 2 and an unreachable one exits 1', async (t) => {
-  // The CLI separates "you typed it wrong" from "it could not start", and a
-  // directory the tool is denied is the second kind: the invocation was fine
-  // and the environment was not. A wrapper script branching on the code needs
-  // those apart, and collapsing them back to 2 passed the whole suite.
+test('a mistyped target exits 2', async (t) => {
+  // The CLI separates "you typed it wrong" from "it could not start". This is
+  // the first half, and it is its own test because the second half cannot run
+  // as root: as one test, the early return reported a pass and took these two
+  // assertions down with it into a result that said nothing about either.
+  const { mkdtemp, rm } = await import('node:fs/promises');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+
+  const deps = exitCodeDeps();
+  const base = await mkdtemp(join(tmpdir(), 'bmad-dash-exit-'));
+  t.after(() => rm(base, { recursive: true, force: true }));
+
+  assert.equal(await run([join(base, 'nope')], deps), 2, 'an absent path is a usage error');
+  assert.equal(await run([base], deps), 2, 'a non-project is a usage error');
+});
+
+test('an unreachable target exits 1, not 2', async (t) => {
+  // The other half: a directory the tool is denied is not a usage error — the
+  // invocation was fine and the environment was not. A wrapper script branching
+  // on the code needs those apart, and collapsing them back to 2 passed the
+  // whole suite.
   const { mkdtemp, mkdir, chmod, rm } = await import('node:fs/promises');
   const { tmpdir } = await import('node:os');
   const { join } = await import('node:path');
 
-  const deps = {
-    start: () => Promise.resolve(stubHandle()),
-    launch: () => Promise.resolve({ opened: true as const, command: 'stub' }),
-    stdout: () => {},
-    stderr: () => {},
-    onSignal: () => {},
-  };
+  // Skipped rather than silently returned. This is the *only* assertion in the
+  // suite that distinguishes exit 1 from exit 2, so a run that could not make
+  // it has to say so — otherwise a root container reports a full green suite
+  // with the distinction untested.
+  if (process.platform === 'win32' || process.getuid?.() === 0) {
+    t.skip('needs POSIX permissions and a non-root user');
+    return;
+  }
 
-  const base = await mkdtemp(join(tmpdir(), 'bmad-dash-exit-'));
+  const deps = exitCodeDeps();
+  const base = await mkdtemp(join(tmpdir(), 'bmad-dash-exit-denied-'));
   t.after(() => rm(base, { recursive: true, force: true }));
-
-  // Usage errors: a path that is not there, and a directory that is not a project.
-  assert.equal(await run([join(base, 'nope')], deps), 2, 'an absent path is a usage error');
-  assert.equal(await run([base], deps), 2, 'a non-project is a usage error');
-
-  if (process.platform === 'win32' || process.getuid?.() === 0) return;
 
   const project = join(base, 'project');
   await mkdir(project);

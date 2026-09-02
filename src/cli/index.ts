@@ -279,7 +279,24 @@ export function parseInvocation(argv: readonly string[], cwd: string): Invocatio
     };
   }
 
-  const projectRoot = resolve(cwd, positionals[0] ?? '.');
+  // An explicit empty argument is misuse, not a request for the default.
+  // `resolve(cwd, '')` returns `cwd`, so `bmad-dash ""` — an unset variable in a
+  // wrapper script's `bmad-dash "$TARGET"` — inspected whatever directory the
+  // script happened to be run from and reported it as the project the caller
+  // asked for. Absent means the current directory; empty means a mistake.
+  //
+  // Only the empty string. `" "` resolves to a directory literally named one
+  // space, which is a legal path and is not the working directory, so refusing
+  // it would refuse something the caller could actually have meant.
+  const given = positionals[0];
+  if (given === '') {
+    return {
+      ok: false,
+      message: `Empty path argument. Omit it to target the current directory.\n${USAGE}`,
+    };
+  }
+
+  const projectRoot = resolve(cwd, given ?? '.');
   if (!isAbsolute(projectRoot)) {
     // Unreachable via `resolve`, asserted because everything downstream trusts it.
     return { ok: false, message: `Could not resolve an absolute path for the target.\n${USAGE}` };

@@ -294,14 +294,23 @@ function startCli(args: readonly string[], cwd: string): Promise<RunningCli> {
 
     const stopWith = async (signal: NodeJS.Signals, timeoutMs = 8_000): Promise<Exit> => {
       if (child.exitCode === null && child.signalCode === null) child.kill(signal);
+      let watchdog: NodeJS.Timeout | undefined;
       const hung = new Promise<Exit>((done) => {
-        const t = setTimeout(() => {
+        watchdog = setTimeout(() => {
           child.kill('SIGKILL');
           done({ code: null, signal: null, timedOut: true });
         }, timeoutMs);
-        t.unref();
+        watchdog.unref();
       });
-      return Promise.race([exited, hung]);
+      try {
+        return await Promise.race([exited, hung]);
+      } finally {
+        // Cleared when `exited` wins the race. `unref()` meant it held nothing
+        // open, so the cost was a stray `SIGKILL` at an already-dead child
+        // rather than a leak — but `deadline()` exists to do exactly this and
+        // this one place was not using it.
+        clearTimeout(watchdog);
+      }
     };
 
     const timer = setTimeout(() => {

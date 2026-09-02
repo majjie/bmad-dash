@@ -63,6 +63,27 @@ test('an empty pattern override is refused', () => {
   assert.equal(fallback.value, 'test/**/*.test.ts');
 });
 
+test('a padded pattern override is trimmed rather than passed through', () => {
+  // Untrimmed, this matched no files, and the floor then reported it as the
+  // suite having stopped collecting — sending the reader to look at discovery
+  // instead of at the environment variable they had just set.
+  const parsed = parsePattern('  test/**/*.test.ts  ', 'unused');
+  assert.ok(parsed.ok);
+  assert.equal(parsed.value, 'test/**/*.test.ts');
+
+  // A pattern that is nothing but padding is still empty, and still refused.
+  assert.equal(parsePattern('   ', 'unused').ok, false);
+});
+
+test('a CRLF summary line is still a summary', () => {
+  // Kept, but as a *characterization* test rather than a regression test: the
+  // bare `$` already handles this, because under `/m` JavaScript treats `\r` as
+  // a line terminator. A deferred finding claimed CRLF broke the match; it does
+  // not, and this is what pins that so the claim is not re-fixed.
+  assert.equal(readTotal('\u2139 tests 12\r\n'), 12);
+  assert.equal(readTotal(['\u2139 tests 999\r', 'noise', '\u2139 tests 7\r'].join('\n')), 7);
+});
+
 test('the total is read from the last summary, not the first', () => {
   // Assertion messages quote nested runner output, so the first match can be a
   // fixture's count. Reading it would mask the real result.

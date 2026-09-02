@@ -11,9 +11,14 @@
  *   2. **Confined.** Every path is canonicalized and checked against the
  *      permitted root before the filesystem is touched — not after, and not by
  *      the caller. Canonicalization comes first because that is what makes the
- *      check meaningful: a `..` segment or a symlink pointing outside the tree
- *      has already been resolved away by the time containment is asked, so
- *      neither can pass by virtue of its spelling.
+ *      check meaningful: a `..` segment, and an *existing* symlink pointing
+ *      outside the tree, have both been resolved away by the time containment
+ *      is asked, so neither passes by virtue of its spelling. For a path that
+ *      does not exist there is nothing to resolve and containment answers about
+ *      the spelling instead — see `canonical`. No read escapes as a result,
+ *      since the `stat` below resolves the link and finds nothing at the far
+ *      end; the point of saying so here is that the guarantee is narrower than
+ *      this paragraph used to claim.
  *
  * There is no way for a caller to skip the check. That is the design: a reader
  * that could be handed an already-checked path would eventually be handed one

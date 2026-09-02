@@ -70,7 +70,11 @@ export function parsePattern(raw: string | undefined, fallback: string): Parsed<
       message: `${PATTERN_ENV} is set but empty; that matches no files. Unset it to use the default.`,
     };
   }
-  return { ok: true, value: raw };
+  // Trimmed, like `parseFloor`. Untrimmed, `' test/**/*.test.ts '` was accepted,
+  // matched nothing, and surfaced as "discovery is collecting less than the
+  // whole suite" — pointing the reader at the suite rather than at the padded
+  // environment variable they had just set.
+  return { ok: true, value: raw.trim() };
 }
 
 /**
@@ -81,6 +85,10 @@ export function parsePattern(raw: string | undefined, fallback: string): Parsed<
  * count and mask the real result.
  */
 export function readTotal(output: string): number | undefined {
+  // No `\r?` needed before `$`: under `/m` JavaScript counts `\r` itself as a
+  // line terminator, so this already matches a CRLF stream. Measured, because a
+  // deferred finding claimed otherwise and the "fix" was a no-op whose test
+  // passed either way.
   const matches = [...output.matchAll(/^ℹ tests (\d+)$/gm)];
   const last = matches.at(-1)?.[1];
   return last === undefined ? undefined : Number(last);

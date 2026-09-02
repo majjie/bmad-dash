@@ -219,7 +219,7 @@ test('the built entry point exists at the path bin advertises', async () => {
   await access(BUILT_ENTRY);
 });
 
-test('the files whitelist publishes the directory holding the bin', () => {
+test('the files whitelist publishes the directory holding the bin', async () => {
   const files = MANIFEST.files;
   assert.ok(Array.isArray(files) && files.length > 0, 'no explicit files whitelist');
 
@@ -231,11 +231,19 @@ test('the files whitelist publishes the directory holding the bin', () => {
   );
 
   // Every whitelisted entry must be something that actually exists, so a stale
-  // entry cannot sit in the manifest looking like a shipped directory.
+  // entry cannot sit in the manifest looking like a shipped directory. The
+  // assertion used to check only that the entry was a non-empty string, which
+  // is not the claim this comment makes — a deleted directory still reads as a
+  // perfectly good string.
   for (const entry of files) {
     assert.ok(
       typeof entry === 'string' && entry.length > 0,
       `files contains a non-path entry: ${JSON.stringify(entry)}`,
+    );
+    await assert.doesNotReject(
+      () => access(join(REPO_ROOT, entry)),
+      `files lists ${JSON.stringify(entry)}, which does not exist — a stale entry ` +
+        `looks like a shipped directory and publishes nothing`,
     );
   }
 });

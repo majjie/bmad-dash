@@ -110,6 +110,11 @@ test('the scan actually reaches every root it claims, tooling included', async (
     'src/adapters/fs/realpath.ts',
     'scripts/run-tests.ts',
     'scripts/test-run-policy.ts',
+    // The one `scripts/` file whose `child_process` allowance is load-bearing:
+    // `check-tasks.ts` shells out to git for its entire purpose. A spot-check
+    // that omits it cannot detect the allowance being narrowed away, and the
+    // file would then fail the gate for doing exactly what it exists to do.
+    'scripts/check-tasks.ts',
   ]) {
     assert.ok(files.includes(expected), `${expected} not scanned; found: ${files.join(', ')}`);
   }
@@ -585,6 +590,7 @@ test('the scan reaches the composition root and the render layer too', async () 
     'src/render/page.ts',
     'src/adapters/http/server.ts',
     'scripts/run-tests.ts',
+    'scripts/check-tasks.ts',
   ]) {
     assert.ok(scanned.includes(required), `${required} is not scanned by the gate`);
   }

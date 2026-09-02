@@ -1,12 +1,4 @@
 - source_spec: `_bmad-output/implementation-artifacts/spec-1-1-run-the-command-and-reach-a-served-page.md`
-  summary: RESOLVED 2026-09-01 by Story 1.4 — `--help`, `-h` and `--version` are implemented and exit 0, the help text is reachable on request rather than only by error, and FR-6's flag is named `--no-open`. The deferral test in test/server.test.ts was inverted to assert the new behaviour. Original: No `--help`, `-h` or `--version`; all three exit 2 as unknown arguments and the USAGE string is reachable only by error.
-  evidence: Reviewers confirmed `parseArgs` runs strict with an empty options map. A published CLI with no --version is hard to support. FR-6's suppression flag is also still unnamed in the PRD.
-
-- source_spec: `_bmad-output/implementation-artifacts/spec-1-1-run-the-command-and-reach-a-served-page.md`
-  summary: A nonexistent or non-directory target path is accepted without complaint; the tool serves a dashboard over nothing.
-  evidence: Confirmed by a reviewer. Deliberate for this story — the spec assigns project recognition to Story 1.5 (FR-7) — but it must not be lost, because until 1.5 lands a typo'd path looks like a working tool.
-
-- source_spec: `_bmad-output/implementation-artifacts/spec-1-1-run-the-command-and-reach-a-served-page.md`
   summary: The served page carries no hardening headers (nosniff, CSP, Referrer-Policy), and DNS-rebinding defence rests on Host alone with no Origin or Sec-Fetch-Site check.
   evidence: Real but premature — the page is a constant string today. Becomes load-bearing the moment Stories 1.12 and 2.1 render project content into it, and AD-19's rationale already anticipates the browser as the threat vector.
 
@@ -16,24 +8,16 @@
   revisit: Before Story 1.7, when markdown-it and yaml arrive. The gate reads source specifiers, so once a runtime dependency exists it could reach the network with nothing for the gate to see — a hole the gate cannot close retroactively. NFR-11 remains the only NFR with no automated enforcement until then.
 
 - source_spec: `_bmad-output/implementation-artifacts/spec-1-1-run-the-command-and-reach-a-served-page.md`
-  summary: Repository hygiene absent — no .gitignore, README, LICENSE, repository or author fields, and no CI workflow running typecheck or tests.
-  evidence: Confirmed by two reviewers. Partly downstream of the deferred `git init`; the license needs a human decision. CI matters because nothing automated currently runs `tsc --noEmit`.
-
-- source_spec: `_bmad-output/implementation-artifacts/spec-1-1-run-the-command-and-reach-a-served-page.md`
-  summary: No README, and no `license`, `repository`, `author` or `keywords` in package.json, for a package whose whole interface is one npx command.
-  evidence: Two reviewers noted the npm page would be blank. License needs a human decision; the rest are mechanical but out of scope for a story about serving a page.
-
-- source_spec: `_bmad-output/implementation-artifacts/spec-1-1-run-the-command-and-reach-a-served-page.md`
-  summary: No CI workflow, no lockfile committed, no lint or format config, and no coverage instrumentation despite a suite whose entire thesis is coverage.
-  evidence: Nothing automated runs `tsc --noEmit` outside a contributor's own machine. Coverage matters here specifically because three review rounds each found gaps that a green suite could not see.
-
-- source_spec: `_bmad-output/implementation-artifacts/spec-1-1-run-the-command-and-reach-a-served-page.md`
   summary: No socket-level limits configured — requestTimeout, headersTimeout, keepAliveTimeout, maxConnections all default — on a server the user leaves running all day.
   evidence: A reviewer noted this is also the knob that bounds the shutdown problem. Real, but a tuning decision rather than a defect in this story.
 
 - source_spec: `_bmad-output/implementation-artifacts/spec-1-1-run-the-command-and-reach-a-served-page.md`
   summary: `errorCode()` is duplicated across the adapter and the CLI, and several test helpers are re-implemented across test files.
   evidence: Roughly 80 duplicated lines with drift risk. Cleanup, not correctness; deferred so it does not compete with the correctness work in this story.
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-1-1-run-the-command-and-reach-a-served-page.md`
+  summary: Repository hygiene, consolidated: no README, no `keywords` in package.json, no CI workflow, no lint or format config, and no coverage instrumentation.
+  evidence: Consolidates three overlapping entries recorded 2026-09-01, whose combined text is superseded by this one. Verified 2026-09-02: `.gitignore`, `LICENSE`, `license`, `author`, `repository` and a committed lockfile all now exist, so those parts are done and were making the list look longer than it is. What is genuinely absent is the five above. CI is the load-bearing one — nothing automated runs `tsc --noEmit` or the suite outside a contributor's own machine, and three review rounds each found gaps a green local suite could not see. It is not a pure win: it needs a decision on the OS and Node matrix. Note for whoever writes it — a CI container running as root now reports four *named skips* rather than an all-green suite (fixed 2026-09-02), so the run's `skipped` count is a signal worth failing or warning on.
 
 ## Deferred from: code review of spec-1-1-run-the-command-and-reach-a-served-page (2026-09-01)
 
@@ -45,10 +29,6 @@
 
 <!-- Story 1.1 code review, 2026-09-01: 27 findings. 3 high + 3 gate-related medium fixed;
      the 21 below deferred by decision so 1.1 could close. Locations preserved verbatim. -->
-
-- source_spec: `_bmad-output/implementation-artifacts/spec-1-1-run-the-command-and-reach-a-served-page.md`
-  summary: RESOLVED 2026-09-01 by Story 1.4 — `--port <n>` is exposed, validated as a plain decimal integer in range, passed to the server, and a fallback to an OS-assigned port is now reported rather than silent. This also makes the port-80 `Host` allowance and the bind-retry path reachable outside tests, which was the reason for exposing it. Original: (medium) Expose `--port <n>` on the CLI
-  evidence: From the 2026-09-01 code review, located and verified there. Full text: Expose `--port <n>` on the CLI [src/cli/index.ts:54-89, 161] — resolves the decision above. Add a `port` option to the `parseArgs` call (strict, so an unknown flag still exits 2), validate it as an integer in `0..65535` and exit 2 naming the value and the range on failure, pass it into `start(...)`,
 
 - source_spec: `_bmad-output/implementation-artifacts/spec-1-1-run-the-command-and-reach-a-served-page.md`
   summary: (medium) The request target is parsed with `split('?')`, not `new URL(..., base)`
@@ -91,48 +71,16 @@
   evidence: From the 2026-09-01 code review, located and verified there. Full text: `test/cli-entry.test.ts` errors rather than skips where symlink creation needs elevation [test/cli-entry.test.ts:204, 218, 233-234] — no `skip` appears anywhere in the file; every symlink test calls `await symlink(...)` bare. On Windows without Developer Mode or elevation this throws `EPERM` and rep
 
 - source_spec: `_bmad-output/implementation-artifacts/spec-1-1-run-the-command-and-reach-a-served-page.md`
-  summary: (low) The `files`-whitelist test's comment claims an existence check it does not perform
-  evidence: From the 2026-09-01 code review, located and verified there. Full text: The `files`-whitelist test's comment claims an existence check it does not perform [test/cli-entry.test.ts:164-170] — the comment reads "Every whitelisted entry must be something that actually exists, so a stale entry cannot sit in the manifest looking like a shipped directory", but the assertion is
-
-- source_spec: `_bmad-output/implementation-artifacts/spec-1-1-run-the-command-and-reach-a-served-page.md`
-  summary: (low) `parsePattern` accepts a padded override and passes it through untrimmed
-  evidence: From the 2026-09-01 code review, located and verified there. Full text: `parsePattern` accepts a padded override and passes it through untrimmed [scripts/test-run-policy.ts:67-73] — `parseFloor` trims, this does not, so `' test/**/*.test.ts '` is accepted, matches nothing, and is reported as "discovery is collecting less than the whole suite" rather than as a bad patter
-
-- source_spec: `_bmad-output/implementation-artifacts/spec-1-1-run-the-command-and-reach-a-served-page.md`
-  summary: (low) `readTotal` requires the `ℹ` glyph and a bare `\n`
-  evidence: From the 2026-09-01 code review, located and verified there. Full text: `readTotal` requires the `ℹ` glyph and a bare `\n` [scripts/test-run-policy.ts:84] — `/^ℹ tests (\d+)$/gm` fails on a CRLF reporter line or a re-encoded stream, turning a green suite into "could not determine how many tests ran". It also counts subtests, so the floor measures something different fro
-
-- source_spec: `_bmad-output/implementation-artifacts/spec-1-1-run-the-command-and-reach-a-served-page.md`
-  summary: (low) Stale `.mjs` references, one of them load-bearing
-  evidence: From the 2026-09-01 code review, located and verified there. Full text: Stale `.mjs` references, one of them load-bearing [test/architecture.test.ts:38, 321; test/discovery/nested.test.ts:10] — the runner is `scripts/run-tests.ts`. Consequentially, `test/architecture.test.ts:321` scopes the stale-`.js` guard to `src/` on the premise that "`scripts/` is plain `.mjs` tool
-
-- source_spec: `_bmad-output/implementation-artifacts/spec-1-1-run-the-command-and-reach-a-served-page.md`
-  summary: (low) Vacuous assertion
-  evidence: From the 2026-09-01 code review, located and verified there. Full text: Vacuous assertion [test/discovery/nested.test.ts:82] — `assert.ok(fromTestDir.split(sep).length >= 1)` can never fail; `String.prototype.split` never returns an empty array. The two assertions above it do the real work.
+  summary: (low) `readTotal` is coupled to the reporter's `ℹ` glyph, and counts subtests rather than test files. **The CRLF half of this finding was wrong and has been struck** — see evidence.
+  evidence: From the 2026-09-01 code review. Re-examined 2026-09-02 while clearing easy wins. The original claimed `/^ℹ tests (\d+)$/gm` "fails on a CRLF reporter line", which is false: under `/m` JavaScript treats `\r` as a line terminator, so `$` matches before it. Measured on all three of `\n`, `\r\n` and bare `\r` — every one matches, with and without a `\r?`. A "fix" was written, found to be a no-op whose test passed either way, and reverted; `test/tooling/run-policy.test.ts` now pins the real behaviour as a characterization test so nobody re-fixes it. What remains genuinely open is the other half: the match depends on the reporter emitting `ℹ tests <n>`, so a reporter change turns a green suite into "could not determine how many tests ran" — which is the safe direction but still a coupling — and the count includes subtests, so the floor measures something other than the number of test files. Inert today: the suite reports `suites 0` and uses no subtests.
 
 - source_spec: `_bmad-output/implementation-artifacts/spec-1-1-run-the-command-and-reach-a-served-page.md`
   summary: (low) `engines: ">=22"` is unsatisfiable for AC1's own command
   evidence: From the 2026-09-01 code review, located and verified there. Full text: `engines: ">=22"` is unsatisfiable for AC1's own command [package.json:12-14] — `npm test` runs `node scripts/run-tests.ts` and discovers `test/**/*.test.ts`, both needing unflagged type stripping (Node ≥ 22.18). The mismatch is documented only in a `"//"` string (`package.json:7`) that no tool read
 
 - source_spec: `_bmad-output/implementation-artifacts/spec-1-1-run-the-command-and-reach-a-served-page.md`
-  summary: (low) `bmad-dash ""` silently targets the working directory
-  evidence: From the 2026-09-01 code review, located and verified there. Full text: `bmad-dash ""` silently targets the working directory [src/cli/index.ts:83] — `resolve(cwd, positionals[0] ?? '.')` turns `''` into `cwd`, so an empty argument looks like a successful default rather than misuse. Distinct from the nonexistent-path case already deferred to Story 1.5; this one is an ar
-
-- source_spec: `_bmad-output/implementation-artifacts/spec-1-1-run-the-command-and-reach-a-served-page.md`
-  summary: (low) `stopWith`'s 8s timer is never cleared, though `deadline()` exists to do exactly that
-  evidence: From the 2026-09-01 code review, located and verified there. Full text: `stopWith`'s 8s timer is never cleared, though `deadline()` exists to do exactly that [test/server.test.ts:271-278] — `t.unref()` means it holds nothing, so the consequence is a stray `SIGKILL` attempt on an already-dead child rather than a leak. Use `deadline()` (`test/server.test.ts:357`) or clear
-
-- source_spec: `_bmad-output/implementation-artifacts/spec-1-1-run-the-command-and-reach-a-served-page.md`
   summary: (low) Cross-pipe ordering on the three `Target:` assertions
   evidence: From the 2026-09-01 code review, located and verified there. Full text: Cross-pipe ordering on the three `Target:` assertions [test/server.test.ts:743, 756, 767] — `startCli` resolves on the first newline on **stdout**, then the test reads accumulated **stderr**. The child writes `Target:` first (`src/cli/index.ts:173`), but delivery order across two separate pipes to t
-
-- source_spec: `_bmad-output/implementation-artifacts/spec-1-1-run-the-command-and-reach-a-served-page.md`
-  summary: (low) Two *Suggested Review Order* pointers no longer land on the code they describe — this spec says `index.ts:167` is "Readiness is announced last" (the `stdout` call is `src/cli/index.ts:175`) and `test-run-policy.ts:75` is "Takes the last summary, not the first" (a blank line; `readTotal` is `scripts/test-run-policy.ts:84`). Spec-side drift; the other eleven pointers are accurate.
-  evidence: From the 2026-09-01 code review, located and verified there. Full text: Two *Suggested Review Order* pointers no longer land on the code they describe — this spec says `index.ts:167` is "Readiness is announced last" (the `stdout` call is `src/cli/index.ts:175`) and `test-run-policy.ts:75` is "Takes the last summary, not the first" (a blank line; `readTotal` is `scripts/
-
-- source_spec: `_bmad-output/implementation-artifacts/spec-1-2-establish-the-visual-foundation.md`
-  summary: RESOLVED 2026-09-01 — user chose the relative ladder; DESIGN.md's Elevation & Depth section rewritten to distinguish peer levels from nested surfaces, hover moved to the outline, and the tonal-separation claims put under test. (medium) DESIGN.md contradicts itself on the elevation ladder — its Elevation & Depth table states that `{colors.surface-container}` and `{colors.surface-container-highest}` "are not used at rest in v1", but `components.core-artifact-card` uses `surface-container-highest` as its background and `surface-container` as its absent background, both at rest.
-  evidence: From the Story 1.2 review, 2026-09-01, verified against DESIGN.md:267 and DESIGN.md:360-368. Not resolved in the build story because DESIGN.md is the normative side and this is an internal contradiction within it rather than code drift — resolving it is a UX decision about whether the ladder has three levels or five. Blocking for Story 1.3, which builds the core-artifact card and cannot pick a surface token from an ambiguous ladder.
 
 - source_spec: `_bmad-output/implementation-artifacts/spec-1-2-establish-the-visual-foundation.md`
   summary: (low) The contrast tests recompute the ratios DESIGN.md states and the pairings the system uses today, but nothing enumerates the *unused* pairings — a future story combining, say, `on-surface-faint` with a hover surface would get no warning until someone audits by hand.
@@ -145,10 +93,6 @@
 - source_spec: `_bmad-output/implementation-artifacts/spec-1-3-build-the-components-every-surface-reuses.md`
   summary: (medium) `.tile-grid` ships `display: grid` with `grid-template-columns: 1fr`, so tiles stack in one column at every width. The dashboard's actual column behaviour and the 900px collapse are UX-DR22.
   evidence: From the Story 1.3 review, 2026-09-01. Not built here because a `minmax()` track needs a tile-width token the system does not define, and inventing one would put a value in the stylesheet that DESIGN.md does not carry — the exact thing the token rule forbids. The rule is commented as deliberately single-column so it does not read as finished. Story 1.12 is the first story with more than one tile to place, and is where the columns and the breakpoint belong.
-
-- source_spec: `_bmad-output/implementation-artifacts/spec-1-3-build-the-components-every-surface-reuses.md`
-  summary: RESOLVED 2026-09-02 by Story 1.5 — the CLI now recognizes its target before binding: existence, directory-ness, both markers and readability are all checked, each with a distinguishable message, and the root is canonicalized through the platform's own resolver so a symlinked or differently-cased target yields one identity. Original: (medium) `assertProjectRoot` checks that the root is a non-empty absolute path, but not that it exists, is a directory, or is canonical — so a non-existent path renders as a project, and a symlinked invocation displays a path that differs from the canonical root later stories key artifacts by.
-  evidence: From the Story 1.3 review, 2026-09-01, verified against src/render/chrome.ts. Existence and canonicalization are Story 1.5's, which resolves the root by the presence of `_bmad` and `_bmad-output` and canonicalizes at the filesystem adapter. Deferred rather than half-implemented: a partial existence check in the render layer would need `node:fs`, which AD-1 forbids there, and would duplicate the resolution Story 1.5 owns.
 
 - source_spec: `_bmad-output/implementation-artifacts/spec-1-3-build-the-components-every-surface-reuses.md`
   summary: (low) `REFRESH_HREF` is hardcoded to `/`, so the header's refresh control will navigate to the Dashboard rather than re-requesting the current surface once other surfaces exist.
@@ -179,3 +123,94 @@
   evidence: Split from Story 1.5 at the step-1 checkpoint, 2026-09-02, by user decision, because the narrowed 1.5 (root resolution, canonical paths, reading surface) is already at the token ceiling. Until this lands the artifact roots stay at their documented defaults, which is a known-wrong state carried deliberately — FR-10 exists precisely because a project may put them elsewhere.
   findings_already_measured: The parser decision was made and verified during 1.5 planning, so the next story should not redo it. `yaml@2.9.0` (ISC, no dependencies of its own, ships types) is to be a **devDependency bundled by esbuild**, not a runtime dependency — user decision, and the architecture spine records why. Measured: its node export is CommonJS and dynamically requires `process` and `buffer`, so an ESM bundle throws `Dynamic require of "process" is not supported` at import unless the build carries a banner such as `--banner:js='import{createRequire as __cr}from "node:module";const require=__cr(import.meta.url);'`. With that banner, parsing of flat scalars, one level of nesting and inline sequences is correct; the only dynamic requires in the output are those two builtins; and there is no `node:http`, `node:https`, `node:net`, `node:fs`, `node:child_process` or `fetch` anywhere in it. The bundle grows from about 34KB to about 264KB. `LICENSE-THIRD-PARTY` carrying yaml's ISC text must ship, taking the tarball from three files to four. Measured shapes it must handle: `config.yaml` is flat `key: scalar`; `sprint-status.yaml` has one level of nesting; artifact frontmatter has scalars and inline sequences.
   triggers: NFR-11's deferred automated enforcement comes due with this story, not before — a gate that reads source specifiers proves nothing once third-party code executes at runtime, so it must assert against `dist/` instead.
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-land-deferred-findings-cleanup.md`
+  summary: (low) The stale-`.js` guard is still scoped to `src/`, so a compiled leftover under `scripts/` or `web/` is invisible to it — `test/architecture.test.ts:134-138` filters `file.startsWith('src/')` while the gate scans three roots.
+  evidence: Found 2026-09-02 while re-verifying the closed "Stale `.mjs` references" entry, whose closing note claims this consequence "no longer exists in the code". It does. The premise that justified the scoping ("`scripts/` is plain `.mjs` tooling") was deleted from the comment; the scoping itself was left. Harmless today because `scripts/` holds three `.ts` files and `web/` is empty, and it is a one-token change — but it is a guard narrower than the invariant it is named for, which is the shape of defect this list keeps recording.
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-land-deferred-findings-cleanup.md`
+  summary: (low) `changedFiles` in `scripts/check-tasks.ts` carries two latches for one invariant, and only one of them is observable end to end: `--full-name` and `-c diff.relative=false` are both redundant while the commands also run with `cwd: repoRoot`.
+  evidence: Measured 2026-09-02 with git 2.43.0 while writing `test/tooling/check-tasks.test.ts`, not reasoned about. Run at the repository root, `ls-files --others` and `diff --name-only` are already repo-relative, so reverting either flag changes no verdict from any cwd — the spec's acceptance criterion for that mutation cannot be met by a black-box run. It is met instead by `both list commands are pinned repo-relative in the argv the checker issues`, which puts a logging `git` shim on PATH and asserts the argv. That test earns its keep (removing `cwd: repoRoot` *is* caught end to end, by two other tests, so the flags are the half that could vanish silently) but it is a whiter box than the rest of the suite. Two of its rows — the shim and the empty-PATH missing-git row — name-skip on `win32`, so the flag pinning and the ENOENT branch of `git()` are unverified on Windows. Comes due with the CI matrix decision in the "Repository hygiene, consolidated" entry.
+
+## Resolved and closed
+
+Kept verbatim rather than deleted — this file exists so nothing is lost, and a
+resolved finding is evidence about what this project gets wrong. Moved here on
+2026-09-02 so the list above is only what is actually open: it had 43 entries,
+of which 15 were already closed, superseded, or triple-recorded.
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-1-1-run-the-command-and-reach-a-served-page.md`
+  summary: RESOLVED 2026-09-01 by Story 1.4 — `--help`, `-h` and `--version` are implemented and exit 0, the help text is reachable on request rather than only by error, and FR-6's flag is named `--no-open`. The deferral test in test/server.test.ts was inverted to assert the new behaviour. Original: No `--help`, `-h` or `--version`; all three exit 2 as unknown arguments and the USAGE string is reachable only by error.
+  evidence: Reviewers confirmed `parseArgs` runs strict with an empty options map. A published CLI with no --version is hard to support. FR-6's suppression flag is also still unnamed in the PRD.
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-1-1-run-the-command-and-reach-a-served-page.md`
+  summary: RESOLVED 2026-09-01 by Story 1.4 — `--port <n>` is exposed, validated as a plain decimal integer in range, passed to the server, and a fallback to an OS-assigned port is now reported rather than silent. This also makes the port-80 `Host` allowance and the bind-retry path reachable outside tests, which was the reason for exposing it. Original: (medium) Expose `--port <n>` on the CLI
+  evidence: From the 2026-09-01 code review, located and verified there. Full text: Expose `--port <n>` on the CLI [src/cli/index.ts:54-89, 161] — resolves the decision above. Add a `port` option to the `parseArgs` call (strict, so an unknown flag still exits 2), validate it as an integer in `0..65535` and exit 2 naming the value and the range on failure, pass it into `start(...)`,
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-1-3-build-the-components-every-surface-reuses.md`
+  summary: RESOLVED 2026-09-02 by Story 1.5 — the CLI now recognizes its target before binding: existence, directory-ness, both markers and readability are all checked, each with a distinguishable message, and the root is canonicalized through the platform's own resolver so a symlinked or differently-cased target yields one identity. Original: (medium) `assertProjectRoot` checks that the root is a non-empty absolute path, but not that it exists, is a directory, or is canonical — so a non-existent path renders as a project, and a symlinked invocation displays a path that differs from the canonical root later stories key artifacts by.
+  evidence: From the Story 1.3 review, 2026-09-01, verified against src/render/chrome.ts. Existence and canonicalization are Story 1.5's, which resolves the root by the presence of `_bmad` and `_bmad-output` and canonicalizes at the filesystem adapter. Deferred rather than half-implemented: a partial existence check in the render layer would need `node:fs`, which AD-1 forbids there, and would duplicate the resolution Story 1.5 owns.
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-1-2-establish-the-visual-foundation.md`
+  summary: RESOLVED 2026-09-01 — user chose the relative ladder; DESIGN.md's Elevation & Depth section rewritten to distinguish peer levels from nested surfaces, hover moved to the outline, and the tonal-separation claims put under test. (medium) DESIGN.md contradicts itself on the elevation ladder — its Elevation & Depth table states that `{colors.surface-container}` and `{colors.surface-container-highest}` "are not used at rest in v1", but `components.core-artifact-card` uses `surface-container-highest` as its background and `surface-container` as its absent background, both at rest.
+  evidence: From the Story 1.2 review, 2026-09-01, verified against DESIGN.md:267 and DESIGN.md:360-368. Not resolved in the build story because DESIGN.md is the normative side and this is an internal contradiction within it rather than code drift — resolving it is a UX decision about whether the ladder has three levels or five. Blocking for Story 1.3, which builds the core-artifact card and cannot pick a surface token from an ambiguous ladder.
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-1-1-run-the-command-and-reach-a-served-page.md`
+  summary: A nonexistent or non-directory target path is accepted without complaint; the tool serves a dashboard over nothing.
+  evidence: Confirmed by a reviewer. Deliberate for this story — the spec assigns project recognition to Story 1.5 (FR-7) — but it must not be lost, because until 1.5 lands a typo'd path looks like a working tool.
+  closed: RESOLVED 2026-09-02 by Story 1.5. Superseded and simply never marked — recognition now happens in the composition root before the socket binds. It was still sitting in the open list a day after it closed.
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-1-1-run-the-command-and-reach-a-served-page.md`
+  summary: (low) Vacuous assertion
+  evidence: From the 2026-09-01 code review, located and verified there. Full text: Vacuous assertion [test/discovery/nested.test.ts:82] — `assert.ok(fromTestDir.split(sep).length >= 1)` can never fail; `String.prototype.split` never returns an empty array. The two assertions above it do the real work.
+  closed: RESOLVED 2026-09-02. `test/discovery/nested.test.ts` now asserts the depth on the *file* path with `>= 2`, which fails if the file moves up into `test/`. Mutation-checked: tightening it to `>= 3` fails the test, so it is live.
+  mutations: Re-run 2026-09-02, not inherited. Tightened `test/discovery/nested.test.ts:89` to `>= 3`: `this test file is itself in a subdirectory of test/` failed, 16 pass / 1 fail in that file. Restored. The claim holds.
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-1-1-run-the-command-and-reach-a-served-page.md`
+  summary: (low) `parsePattern` accepts a padded override and passes it through untrimmed
+  evidence: From the 2026-09-01 code review, located and verified there. Full text: `parsePattern` accepts a padded override and passes it through untrimmed [scripts/test-run-policy.ts:67-73] — `parseFloor` trims, this does not, so `' test/**/*.test.ts '` is accepted, matches nothing, and is reported as "discovery is collecting less than the whole suite" rather than as a bad patter
+  closed: RESOLVED 2026-09-02. `parsePattern` trims like `parseFloor`, and a pattern that is only padding is still refused. Mutation-checked: removing the trim fails the new test in `test/tooling/run-policy.test.ts`.
+  mutations: Re-run 2026-09-02, not inherited. Replaced `raw.trim()` with `raw` in `parsePattern`: `a padded pattern override is trimmed rather than passed through` failed, 12 pass / 1 fail. Restored. The claim holds.
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-1-1-run-the-command-and-reach-a-served-page.md`
+  summary: (low) Stale `.mjs` references, one of them load-bearing
+  evidence: From the 2026-09-01 code review, located and verified there. Full text: Stale `.mjs` references, one of them load-bearing [test/architecture.test.ts:38, 321; test/discovery/nested.test.ts:10] — the runner is `scripts/run-tests.ts`. Consequentially, `test/architecture.test.ts:321` scopes the stale-`.js` guard to `src/` on the premise that "`scripts/` is plain `.mjs` tool
+  closed: RESOLVED 2026-09-02. Two of the three named sites had already gone (`test/architecture.test.ts:38, 321`); the third, a header comment in `test/discovery/nested.test.ts` naming `scripts/run-tests.mjs`, is corrected. The load-bearing consequence the finding warned about — the stale-`.js` guard scoped to `src/` on a false premise — no longer exists in the code.
+  mutations: Re-checked 2026-09-02, and **the last sentence above is wrong**. No mutation applies — the fix was a comment — so the claim was read against the code instead. The three `.mjs` references are indeed gone (the only survivors are extension lists in `test/support/gate.ts:62` and the guard's own pattern, both correct). But the guard at `test/architecture.test.ts:134-138` is *still* scoped to `src/`: only the false premise in its comment was removed, not the scoping the premise justified. Re-opened as its own entry in the list above.
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-1-1-run-the-command-and-reach-a-served-page.md`
+  summary: (low) `bmad-dash ""` silently targets the working directory
+  evidence: From the 2026-09-01 code review, located and verified there. Full text: `bmad-dash ""` silently targets the working directory [src/cli/index.ts:83] — `resolve(cwd, positionals[0] ?? '.')` turns `''` into `cwd`, so an empty argument looks like a successful default rather than misuse. Distinct from the nonexistent-path case already deferred to Story 1.5; this one is an ar
+  closed: RESOLVED 2026-09-02. An empty positional is now a usage error naming the fix. Deliberately only the empty string: `" "` names a directory called one space, which is legal and is not the working directory, so refusing it would refuse something a caller could have meant. Mutation-checked: disabling the guard fails the new test in `test/cli/flags.test.ts`. Independently re-found by the Story 1.5 review, which is some evidence this list is not being read.
+  mutations: Re-run 2026-09-02, not inherited. Forced the `given === ''` branch in `src/cli/index.ts:292` to never be taken: `an empty path argument is refused, not treated as the default` failed, 17 pass / 1 fail. Restored. The claim holds.
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-1-1-run-the-command-and-reach-a-served-page.md`
+  summary: (low) `stopWith`'s 8s timer is never cleared, though `deadline()` exists to do exactly that
+  evidence: From the 2026-09-01 code review, located and verified there. Full text: `stopWith`'s 8s timer is never cleared, though `deadline()` exists to do exactly that [test/server.test.ts:271-278] — `t.unref()` means it holds nothing, so the consequence is a stray `SIGKILL` attempt on an already-dead child rather than a leak. Use `deadline()` (`test/server.test.ts:357`) or clear
+  closed: RESOLVED 2026-09-02. Cleared in a `finally` after the race. **No test**, and that is not an oversight: the consequence was a stray `SIGKILL` attempt at an already-dead child rather than an observable behaviour, exactly as the finding said, so there is nothing an assertion could catch. Recorded rather than claimed as verified.
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-1-1-run-the-command-and-reach-a-served-page.md`
+  summary: (low) The `files`-whitelist test's comment claims an existence check it does not perform
+  evidence: From the 2026-09-01 code review, located and verified there. Full text: The `files`-whitelist test's comment claims an existence check it does not perform [test/cli-entry.test.ts:164-170] — the comment reads "Every whitelisted entry must be something that actually exists, so a stale entry cannot sit in the manifest looking like a shipped directory", but the assertion is
+  closed: RESOLVED 2026-09-02. The assertion now does what the comment claims, using the `access` already imported in that file. Mutation-checked: adding a non-existent entry to `files` in package.json fails the test.
+  mutations: Re-run 2026-09-02, not inherited. Added `"no-such-directory"` to `package.json`'s `files`: `the files whitelist publishes the directory holding the bin` failed, 20 pass / 1 fail in `test/cli-entry.test.ts`. Restored. The claim holds.
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-1-1-run-the-command-and-reach-a-served-page.md`
+  summary: (low) Two *Suggested Review Order* pointers no longer land on the code they describe — this spec says `index.ts:167` is "Readiness is announced last" (the `stdout` call is `src/cli/index.ts:175`) and `test-run-policy.ts:75` is "Takes the last summary, not the first" (a blank line; `readTotal` is `scripts/test-run-policy.ts:84`). Spec-side drift; the other eleven pointers are accurate.
+  evidence: From the 2026-09-01 code review, located and verified there. Full text: Two *Suggested Review Order* pointers no longer land on the code they describe — this spec says `index.ts:167` is "Readiness is announced last" (the `stdout` call is `src/cli/index.ts:175`) and `test-run-policy.ts:75` is "Takes the last summary, not the first" (a blank line; `readTotal` is `scripts/
+  closed: CLOSED BY DECISION 2026-09-02, not fixed — raise it again if you disagree. The pointers sit in a *completed* story's spec and were accurate for the code as it stood at that review. Re-pointing them at today's line numbers would make a Story 1.1 document describe code written in 1.4 and 1.5, which is worse than leaving them stale: the spec records a review that happened, it is not a live index.
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-1-1-run-the-command-and-reach-a-served-page.md`
+  summary: Repository hygiene absent — no .gitignore, README, LICENSE, repository or author fields, and no CI workflow running typecheck or tests.
+  evidence: Confirmed by two reviewers. Partly downstream of the deferred `git init`; the license needs a human decision. CI matters because nothing automated currently runs `tsc --noEmit`.
+  closed: SUPERSEDED 2026-09-02, not resolved — the work is still open, recorded once instead of three times. See "Repository hygiene, consolidated" in the open list above, which states what is actually still missing (README, `keywords`, CI, lint/format, coverage) and what has since landed (`.gitignore`, `LICENSE`, `license`, `author`, `repository`, lockfile).
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-1-1-run-the-command-and-reach-a-served-page.md`
+  summary: No README, and no `license`, `repository`, `author` or `keywords` in package.json, for a package whose whole interface is one npx command.
+  evidence: Two reviewers noted the npm page would be blank. License needs a human decision; the rest are mechanical but out of scope for a story about serving a page.
+  closed: SUPERSEDED 2026-09-02, not resolved — the work is still open, recorded once instead of three times. See "Repository hygiene, consolidated" in the open list above, which states what is actually still missing (README, `keywords`, CI, lint/format, coverage) and what has since landed (`.gitignore`, `LICENSE`, `license`, `author`, `repository`, lockfile).
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-1-1-run-the-command-and-reach-a-served-page.md`
+  summary: No CI workflow, no lockfile committed, no lint or format config, and no coverage instrumentation despite a suite whose entire thesis is coverage.
+  evidence: Nothing automated runs `tsc --noEmit` outside a contributor's own machine. Coverage matters here specifically because three review rounds each found gaps that a green suite could not see.
+  closed: SUPERSEDED 2026-09-02, not resolved — the work is still open, recorded once instead of three times. See "Repository hygiene, consolidated" in the open list above, which states what is actually still missing (README, `keywords`, CI, lint/format, coverage) and what has since landed (`.gitignore`, `LICENSE`, `license`, `author`, `repository`, lockfile).

@@ -7,7 +7,7 @@
  * evidence that the suite had run.
  *
  * Two things guard that now. This file's *location* means a single-level
- * pattern stops collecting it, and `scripts/run-tests.mjs` fails when the
+ * pattern stops collecting it, and `scripts/run-tests.ts` fails when the
  * reported total drops below a floor — which is what turns "collected nothing"
  * into a red build, since `node --test` exits 0 when a pattern matches nothing.
  *
@@ -79,7 +79,16 @@ test('this test file is itself in a subdirectory of test/', () => {
   const fromTestDir = relative(join(REPO_ROOT, 'test'), HERE);
   assert.notEqual(fromTestDir, '', 'this file must not sit directly in test/');
   assert.ok(!fromTestDir.startsWith('..'), 'this file must live under test/');
-  assert.ok(fromTestDir.split(sep).length >= 1);
+
+  // On the *file's* path, and `>= 2`. The previous version asked whether the
+  // directory's path had at least one segment, which `String.prototype.split`
+  // guarantees for every input — so it could not fail, and the depth this file
+  // depends on for its entire purpose was unasserted.
+  const fileFromTestDir = relative(join(REPO_ROOT, 'test'), fileURLToPath(import.meta.url));
+  assert.ok(
+    fileFromTestDir.split(sep).length >= 2,
+    `this file must be at least one directory below test/, got ${fileFromTestDir}`,
+  );
 });
 
 test('a single-level pattern misses a nested failing test, and still exits 0', async (t) => {

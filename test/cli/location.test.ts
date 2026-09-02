@@ -171,7 +171,10 @@ test('a marker that is a symlink to a directory does count', async (t) => {
 
 test('a directory whose children cannot be read reports the marker it could not stat', async (t) => {
   const dir = await bare(t);
-  if (process.platform === 'win32' || process.getuid?.() === 0) return;
+  if (process.platform === 'win32' || process.getuid?.() === 0) {
+    t.skip('needs POSIX permissions and a non-root user');
+    return;
+  }
 
   await chmod(dir, 0o000);
   try {
@@ -190,7 +193,10 @@ test('a target the tool cannot even stat is unreadable, not "not a directory"', 
   // per-marker branch, and the target branch was never executed at all:
   // deleting it left the suite green. Denying traversal to the *parent* is what
   // makes the target itself unstattable.
-  if (process.platform === 'win32' || process.getuid?.() === 0) return;
+  if (process.platform === 'win32' || process.getuid?.() === 0) {
+    t.skip('needs POSIX permissions and a non-root user');
+    return;
+  }
 
   const outer = await bare(t);
   const project = join(outer, 'project');

@@ -23,9 +23,42 @@
  * leaves the architecture rule where it is instead of widening it for tooling.
  *
  * Usage: node scripts/check-tasks.ts < path/to/spec.md
+ *
+ * Runnable from any directory inside the repository: the git commands are run
+ * from the root so that the two lists it compares are in one path space.
  */
 
 import { execFileSync } from 'node:child_process';
+
+/**
+ * Run a git command, or stop with a report rather than a stack trace.
+ *
+ * **Exit 2, never 1.** Exit 1 means "a ticked task is unbacked", which is a
+ * finding about the story; a rebased baseline, a missing `git`, or a spec piped
+ * in from outside a repository is a broken *check*, and a caller branching on
+ * the code has to be able to tell those apart. Unguarded, both arrived as an
+ * uncaught exception — a stack trace and exit 1, indistinguishable from a
+ * caught lie.
+ */
+function git(args: readonly string[], cwd?: string): string {
+  try {
+    return execFileSync('git', [...args], {
+      encoding: 'utf8',
+      cwd,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+  } catch (error: unknown) {
+    const reported = (error as { stderr?: string }).stderr;
+    const detail =
+      typeof reported === 'string' && reported.trim() !== ''
+        ? reported.trim()
+        : error instanceof Error
+          ? error.message
+          : String(error);
+    process.stderr.write(`Could not run \`git ${args.join(' ')}\`: ${detail}\n`);
+    process.exit(2);
+  }
+}
 
 async function readStdin(): Promise<string> {
   const chunks: string[] = [];
@@ -46,12 +79,42 @@ if (baseline === undefined) {
   process.exit(2);
 }
 
-/** Files the diff since the baseline actually touches, tracked and untracked. */
-function changedFiles(baseline: string): Set<string> {
-  const tracked = execFileSync('git', ['diff', '--name-only', baseline], { encoding: 'utf8' });
-  const untracked = execFileSync('git', ['ls-files', '--others', '--exclude-standard'], {
-    encoding: 'utf8',
+const repoRoot = git(['rev-parse', '--show-toplevel']).trim();
+
+// Named specifically, because this is the failure a rebase or an amend
+// produces and "could not run git diff" sends the reader to look at git.
+try {
+  execFileSync('git', ['rev-parse', '--verify', '--quiet', `${baseline}^{commit}`], {
+    cwd: repoRoot,
+    stdio: 'ignore',
   });
+} catch {
+  process.stderr.write(
+    `baseline_commit ${baseline} is not a commit in ${repoRoot}. ` +
+      'Rebased or amended since the spec was written? Update it before checking.\n',
+  );
+  process.exit(2);
+}
+
+/**
+ * Files the diff since the baseline actually touches, tracked and untracked.
+ *
+ * **Both commands run from the repository root, and both report paths relative
+ * to it.** That is not tidiness: `git diff --name-only` prints repo-relative
+ * paths while `git ls-files --others` prints paths relative to the *current
+ * directory*, so run from `src/` the same new file appeared as
+ * `src/adapters/fs/read.ts` in one list and `read.ts` in the other. Every
+ * untracked file a spec named then reported MISS and the checker exited 1 on
+ * honest work — which is how a guard gets routed around. `--full-name` pins
+ * `ls-files` to repo-relative whatever the cwd, and `-c diff.relative=false`
+ * pins `diff` against a repository that configures the opposite.
+ */
+function changedFiles(baseline: string, repoRoot: string): Set<string> {
+  const tracked = git(['-c', 'diff.relative=false', 'diff', '--name-only', baseline], repoRoot);
+  const untracked = git(
+    ['ls-files', '--others', '--exclude-standard', '--full-name'],
+    repoRoot,
+  );
   return new Set(
     [...tracked.split('\n'), ...untracked.split('\n')].map((line) => line.trim()).filter(Boolean),
   );
@@ -76,7 +139,7 @@ function tickedTargets(): readonly { readonly file: string; readonly line: strin
   return found;
 }
 
-const changed = changedFiles(baseline);
+const changed = changedFiles(baseline, repoRoot);
 const targets = tickedTargets();
 
 // A checker that finds nothing to check has become a no-op, which is how the

@@ -20,6 +20,7 @@ import { tmpdir } from 'node:os';
 import { join, sep } from 'node:path';
 
 import { canonical, identical, contains, toPlatform } from '../../src/adapters/fs/paths.ts';
+import { ConfinedReader } from '../../src/adapters/fs/read.ts';
 
 async function scratch(t: { after: (fn: () => unknown) => void }): Promise<string> {
   const dir = await mkdtemp(join(tmpdir(), 'bmad-dash-paths-'));
@@ -168,6 +169,50 @@ test('containment is computed on segments, not on characters', async (t) => {
   assert.ok(!contains(canonicalRoot, canonical(join(root, '..'))));
   assert.equal(toPlatform(canonical(join(root, 'a', '..'))), root, 'dot-dot resolves, never survives');
   assert.ok(!toPlatform(canonical(join(root, 'a', '..'))).split(sep).includes('..'));
+});
+
+test('the resolution limit is where the comments now say it is, not wider', async (t) => {
+  // A characterization test, and deliberately so: it pins the *limit* the doc
+  // comments in `paths.ts` were narrowed to state, rather than blessing it.
+  //
+  // `canonical` cannot resolve a path that is not there, so it returns it
+  // absolute and normalized with the symlink in it intact — which means
+  // `contains` answers about the spelling and reports an escaping path as
+  // inside. The comments used to claim this could not happen. It can; what
+  // cannot happen is a read escaping, because the `stat` at the far end finds
+  // nothing. If someone later makes `canonical` throw or resolve differently,
+  // this test is the one that has to be reconsidered along with those comments.
+  const root = await scratch(t);
+  const project = join(root, 'project');
+  const outside = join(root, 'outside');
+  await mkdir(project);
+  await mkdir(outside);
+  await symlink(outside, join(project, 'escape'));
+
+  // The link's own target resolves and is correctly refused.
+  assert.ok(!contains(canonical(project), canonical(join(project, 'escape'))));
+
+  // A file that does not exist *under* it does not resolve, so containment
+  // answers about the spelling and says yes.
+  const absent = join(project, 'escape', 'not-created-yet.txt');
+  assert.equal(toPlatform(canonical(absent)), absent, 'an unresolvable path is returned as spelled');
+  assert.ok(
+    contains(canonical(project), canonical(absent)),
+    'the documented limit: an unresolvable path is judged by its spelling',
+  );
+
+  // And the consequence the comments claim: nothing outside is readable, because
+  // the far end is empty. The read fails as absent rather than reaching across.
+  const reader = new ConfinedReader(canonical(project));
+  assert.equal(reader.entryAt('escape/not-created-yet.txt').kind, 'absent');
+
+  // Whereas a file that *does* exist out there resolves, and is refused.
+  await writeFile(join(outside, 'secret.txt'), 'x');
+  assert.throws(
+    () => reader.entryAt('escape/secret.txt'),
+    /refusing to read outside the project/,
+    'an existing path out of the tree is still refused',
+  );
 });
 
 test('an absolute path is normalized even when it does not exist', async (t) => {

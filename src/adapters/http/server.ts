@@ -67,9 +67,18 @@ export interface StartServerOptions {
    * spelled as the filesystem spells it — because every later story keys
    * artifact identity by it. As a bare string, handing over the raw argument
    * instead of the resolved root typechecked, and only one end-to-end test
-   * stood between that substitution and shipping. The brand makes it a
-   * compile error, which is what this repo does with invariants it can move
-   * into the type system.
+   * stood between that substitution and shipping. The brand makes that
+   * substitution a compile error, which is what this repo does with invariants
+   * it can move into the type system.
+   *
+   * **The brand proves less than the paragraph above, and the difference
+   * matters here.** It certifies that the value went through `canonical`, not
+   * that anything exists: `canonical` brands a path that is not there, and
+   * `test/render/page.test.ts` relies on that. So "recognized" is a property of
+   * the caller — `src/cli/` resolving before it binds — and not something this
+   * adapter can read off the type. What this adapter checks for itself is the
+   * `assertProjectRoot` call in `startServer`, which still runs and still
+   * rejects an empty or relative root.
    */
   readonly projectRoot: CanonicalPath;
   /**

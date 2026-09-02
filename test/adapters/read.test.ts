@@ -75,8 +75,14 @@ test('a directory that cannot be read is unreadable, not absent', async (t) => {
 
   // Running as root defeats the point, so the case is skipped rather than
   // asserted falsely — a test that passes because it could not run is worse
-  // than one that says it did not.
-  if (process.getuid?.() === 0) return;
+  // than one that says it did not. `t.skip` is what makes it *say* so. A bare
+  // `return` reported this as a pass, so on any root container the summary read
+  // 369 passed and 0 skipped while this assertion had never once executed —
+  // which is the failure this comment claimed to have avoided.
+  if (process.getuid?.() === 0) {
+    t.skip('needs a non-root user: root is not denied by a 0o000 mode');
+    return;
+  }
 
   // Restored in `finally`, not in an `after` hook: the fixture registered its
   // own cleanup first, so a hook here runs *after* the recursive delete and the
@@ -198,14 +204,18 @@ test('a fifo is refused rather than blocking the process forever', async (t) => 
   // The reason the kind is checked before the read: `readFileSync` on a fifo
   // waits for a writer that never comes, so in a server the request never
   // returns and the process never exits. A project can contain one.
-  if (process.platform === 'win32') return;
+  if (process.platform === 'win32') {
+    t.skip('no fifos on Windows');
+    return;
+  }
   const { root, reader } = await fixture(t);
   const fifo = join(root, 'pipe');
   const { execFileSync } = await import('node:child_process');
   try {
     execFileSync('mkfifo', [fifo]);
   } catch {
-    return; // no mkfifo on this box; nothing to assert
+    t.skip('no mkfifo on this box; nothing to assert');
+    return;
   }
 
   const result = reader.readText('pipe');
