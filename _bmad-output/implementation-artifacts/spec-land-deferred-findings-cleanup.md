@@ -2,7 +2,7 @@
 title: 'Verify and land the deferred-findings cleanup'
 type: 'chore'
 created: '2026-09-02'
-status: 'in-review'
+status: 'done'
 baseline_commit: 'cef8da80f3cf94a49a0732a90da43bdeba43435a'
 review_loop_iteration: 1
 context:
@@ -126,3 +126,60 @@ Two notes on what these mutations show rather than prove:
 
 - **D is the load-bearing latch, not A/C/G.** Removing `cwd: repoRoot` breaks four tests behaviourally; the flags on their own are only observable through the argv shim. That asymmetry is the open entry, not a defect.
 - **L confirms the round-2 finding about the gate enumeration.** Narrowing the allowance makes the gate fail *loudly* — three tests, including the AD-1 import check — so the file enumeration was never what protected it. The new `GATED_MODULES` assertion is what makes *widening* the allowance a deliberate edit.
+
+## Suggested Review Order
+
+**The honesty guard — the reason this story exists**
+
+- Start here: the guard's own new failure mode, exit 2 for a broken check, never 1.
+  [`check-tasks.ts:43`](../../scripts/check-tasks.ts#L43)
+- Both list commands pinned to one path space; `-z` plus `core.quotePath=false`.
+  [`check-tasks.ts:141`](../../scripts/check-tasks.ts#L141)
+- A rebased baseline named specifically, rather than reported as a git failure.
+  [`check-tasks.ts:104`](../../scripts/check-tasks.ts#L104)
+- Frontmatter read unquoted, single- and double-quoted; a hand-written spec is not one style.
+  [`check-tasks.ts:86`](../../scripts/check-tasks.ts#L86)
+- The heuristic that stays deferred: any dotted backticked token still reads as a path.
+  [`check-tasks.ts:161`](../../scripts/check-tasks.ts#L161)
+
+**A green suite can no longer hide an unexecuted branch**
+
+- Skips are now counted, not just named; an unreadable count is refused, not assumed zero.
+  [`test-run-policy.ts:118`](../../scripts/test-run-policy.ts#L118)
+- The allowance must be an explicit number — blank would have read as unlimited.
+  [`test-run-policy.ts:140`](../../scripts/test-run-policy.ts#L140)
+- Where the verdict is actually reached: floor, signal, exit code, and now skips.
+  [`test-run-policy.ts:175`](../../scripts/test-run-policy.ts#L175)
+- The floor, raised to the observed total and never lowered.
+  [`run-tests.ts:38`](../../scripts/run-tests.ts#L38)
+
+**Guarantees narrowed to what the code actually delivers**
+
+- The brand certifies comparability, not existence — it used to read as both.
+  [`paths.ts:54`](../../src/adapters/fs/paths.ts#L54)
+- Resolution fails for any reason, not only for absence: EACCES and ELOOP too.
+  [`paths.ts:78`](../../src/adapters/fs/paths.ts#L78)
+- Containment answers about spelling when there was nothing to resolve.
+  [`paths.ts:132`](../../src/adapters/fs/paths.ts#L132)
+- The real reason no read escapes: containment is re-asked on every operation.
+  [`read.ts:20`](../../src/adapters/fs/read.ts#L20)
+- The adapter says which invariant is the type's and which is the caller's.
+  [`server.ts:74`](../../src/adapters/http/server.ts#L74)
+
+**One user-facing behaviour change**
+
+- An unset variable in a wrapper script is misuse, not a request for the default.
+  [`index.ts:296`](../../src/cli/index.ts#L296)
+
+**Tests — where the evidence lives**
+
+- The guard put under test at last: exit 1 and exit 2 asserted by separate tests.
+  [`check-tasks.test.ts:326`](../../test/tooling/check-tasks.test.ts#L326)
+- The regression that motivated the path-space fix, checked from a subdirectory.
+  [`check-tasks.test.ts:277`](../../test/tooling/check-tasks.test.ts#L277)
+- A non-ASCII ticked path is no longer falsely accused.
+  [`check-tasks.test.ts:532`](../../test/tooling/check-tasks.test.ts#L532)
+- The flags have no observable effect, so the argv itself is pinned via a shim.
+  [`check-tasks.test.ts:465`](../../test/tooling/check-tasks.test.ts#L465)
+- The `child_process` allowance asserted positively — the enumeration never protected it.
+  [`architecture.test.ts:565`](../../test/architecture.test.ts#L565)
