@@ -19,7 +19,13 @@ import { mkdtemp, mkdir, rm, symlink, writeFile, stat, chmod } from 'node:fs/pro
 import { tmpdir } from 'node:os';
 import { join, sep } from 'node:path';
 
-import { canonical, identical, contains, toPlatform } from '../../src/adapters/fs/paths.ts';
+import {
+  canonical,
+  canonicalWithResolution,
+  identical,
+  contains,
+  toPlatform,
+} from '../../src/adapters/fs/paths.ts';
 import { ConfinedReader } from '../../src/adapters/fs/read.ts';
 
 async function scratch(t: { after: (fn: () => unknown) => void }): Promise<string> {
@@ -277,4 +283,49 @@ test('an absolute path is normalized even when it does not exist', async (t) => 
   const tidy = join(root, 'missing', 'deeper', 'x.txt');
   assert.equal(toPlatform(canonical(messy)), tidy);
   assert.ok(identical(canonical(messy), canonical(tidy)), 'one absent path, one identity');
+});
+
+// ---------------------------------------------------------------------------
+// The narrowed guarantee, with the answer handed back
+// ---------------------------------------------------------------------------
+
+test('canonicalWithResolution says whether resolution actually happened', async (t) => {
+  // The gap the rest of this file characterizes: `canonical` returns the
+  // spelling on any resolver failure and cannot say that it did. A caller that
+  // keys an identity by the result has to know, because a spelling is not an
+  // identity — two spellings of one file are two keys.
+  const root = await scratch(t);
+  await writeFile(join(root, 'real.txt'), 'x');
+
+  const resolved = canonicalWithResolution(join(root, 'real.txt'));
+  assert.equal(resolved.resolved, true);
+  assert.equal(toPlatform(resolved.path), join(root, 'real.txt'));
+
+  const missing = canonicalWithResolution(join(root, 'nope', 'deeper.txt'));
+  assert.equal(missing.resolved, false);
+  assert.equal(!missing.resolved && missing.code, 'ENOENT');
+  // Still absolute and normalized, and still the same value `canonical` gives,
+  // which is what keeps the two from drifting into two ways to canonicalize.
+  assert.equal(
+    toPlatform(missing.path),
+    toPlatform(canonical(join(root, 'nope', 'deeper.txt'))),
+  );
+});
+
+test('canonicalWithResolution reports a path that exists and cannot be resolved', async (t) => {
+  // `ELOOP` rather than `ENOENT`, because that is the case the walk's identity
+  // rule turns on: a cycle is exactly where one file grows extra spellings, so
+  // "could not resolve" must be distinguishable from "is not there".
+  if (process.platform === 'win32') {
+    t.skip('needs symlinks: unelevated Windows cannot create them');
+    return;
+  }
+  const root = await scratch(t);
+  await symlink('loop', join(root, 'loop'), 'file');
+
+  const looping = canonicalWithResolution(join(root, 'loop'));
+  assert.equal(looping.resolved, false);
+  assert.equal(!looping.resolved && looping.code, 'ELOOP');
+  assert.ok(!looping.resolved && /ELOOP|too many/i.test(looping.reason), 'the reason travels too');
+  assert.equal(toPlatform(looping.path), join(root, 'loop'), 'the spelling is what is left');
 });

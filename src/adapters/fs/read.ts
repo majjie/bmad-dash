@@ -30,11 +30,36 @@
  * There is no way for a caller to skip the check. That is the design: a reader
  * that could be handed an already-checked path would eventually be handed one
  * that was not.
+ *
+ * **Enumeration lives here too, and it has to.** AD-10's one scoped exception
+ * is the CLI's suggestion scan — directory *names*, no recursion, no read —
+ * which is not what a walk over the artifact tree does, so `list.ts` cannot
+ * serve it and the walk in `walk.ts` is built on `childrenOf` instead. What
+ * enumeration adds to the two properties above is a second resolve-and-confine
+ * pass per operation rather than one: the directory is resolved and checked
+ * before `readdir` touches it, and then every child is resolved and checked
+ * again before it is handed back, because a child can be a symlink and a
+ * symlink is the case where the spelling and the destination disagree.
+ *
+ * Enumeration also needs something the rest of this file does not: to know
+ * whether resolution *happened*. `canonical` is silent about that by design, so
+ * the enumeration path goes through `canonicalWithResolution` and refuses to
+ * call anything `present` whose real path the platform could not produce — a
+ * `present` verdict carries an identity, and an identity built from a spelling
+ * is the duplicate this whole surface exists to prevent.
  */
 
-import { statSync, readFileSync } from 'node:fs';
+import { statSync, readFileSync, readdirSync } from 'node:fs';
+import type { Dirent } from 'node:fs';
+import { join } from 'node:path';
 
-import { canonical, contains, toPlatform, type CanonicalPath } from './paths.ts';
+import {
+  canonical,
+  canonicalWithResolution,
+  contains,
+  toPlatform,
+  type CanonicalPath,
+} from './paths.ts';
 
 /**
  * The largest file this will read into memory.
@@ -47,6 +72,31 @@ import { canonical, contains, toPlatform, type CanonicalPath } from './paths.ts'
  * an out-of-memory kill.
  */
 export const MAX_READ_BYTES = 8 * 1024 * 1024;
+
+/**
+ * The kind a `Dirent` may be trusted for, or `undefined` when it must be probed.
+ *
+ * **Positively, or not at all.** A `Dirent` is filled from the directory
+ * entry's `d_type`, and a filesystem is allowed to answer `DT_UNKNOWN` — at
+ * which point *every* `isX()` returns false. Deciding by `!isSymbolicLink()`
+ * therefore reads "unknown" as "definitely not a link", skips the probe, and
+ * reports a real directory as `other`, which the walk then never descends: a
+ * whole subtree missing, with no truncation to say so.
+ *
+ * Exported and taking a shape rather than a `Dirent` so this decision is
+ * testable on its own. `DT_UNKNOWN` cannot be produced on an ordinary
+ * development filesystem, so a test that went through `readdir` could not
+ * distinguish this rule from the defective one, and the guard would be a
+ * comment rather than a claim.
+ */
+export function trustedKind(dirent: {
+  isDirectory(): boolean;
+  isFile(): boolean;
+}): 'directory' | 'file' | undefined {
+  if (dirent.isDirectory()) return 'directory';
+  if (dirent.isFile()) return 'file';
+  return undefined;
+}
 
 /** Enough of a stat to name what a non-file actually is, for the report. */
 function describeKind(stats: {
@@ -61,6 +111,117 @@ function describeKind(stats: {
   if (stats.isSymbolicLink()) return 'symlink';
   return 'special file';
 }
+
+/**
+ * Where a child of an enumerated directory stopped being usable.
+ *
+ * Named rather than inferred from the message, because Story 1.9's contract is
+ * "naming what failed and at which stage" and a raw `EACCES` string does not
+ * say which question was being asked when it arrived. Three stages, and they
+ * are genuinely different failures:
+ *
+ *   - `confinement` — the path resolved to somewhere outside the root. Not an
+ *     error at all in the OS sense: the filesystem answered perfectly well and
+ *     the answer was refused. Nothing was read and nothing will be.
+ *   - `resolve` — `realpathSync.native` could not resolve the path: `EACCES` on
+ *     the way through it, `ELOOP`, `ENAMETOOLONG`, or a dangling link's
+ *     `ENOENT`. This is the stage that matters most, because it is exactly when
+ *     the canonical form degrades to the *spelling* — so a path that reaches
+ *     this stage has no trustworthy identity. See `Child`.
+ *   - `read-directory` — the path resolved and is in bounds, and `readdir`
+ *     still refused it.
+ */
+export type ChildStage = 'confinement' | 'resolve' | 'read-directory';
+
+/**
+ * A path refused for resolving outside the permitted root.
+ *
+ * A class rather than a message to match on, so a caller can tell the refusal
+ * apart from every other throw. `walk.ts` is the caller that needs to: a
+ * confinement refusal is a decision it reports as `unchecked`, while a
+ * `TypeError` or a limit-validation `Error` is a defect, and reporting the
+ * second as "refused for being outside the project" would send a reader to
+ * look at their project for a bug in this code.
+ */
+export class ConfinementError extends Error {
+  readonly refused: CanonicalPath;
+  readonly root: CanonicalPath;
+
+  constructor(refused: CanonicalPath, root: CanonicalPath) {
+    super(
+      `refusing to read outside the project: ${toPlatform(refused)} is not within ${toPlatform(root)}`,
+    );
+    this.name = 'ConfinementError';
+    this.refused = refused;
+    this.root = root;
+  }
+}
+
+/**
+ * One child of an enumerated directory, in AD-8's vocabulary.
+ *
+ * **Only the `present` variant carries a `path`, and that is the load-bearing
+ * part of this type rather than an omission.** A resolved absolute path is what
+ * artifact identity is keyed by (AD's identity convention), and the canonical
+ * form degrades to the *spelling* for anything the platform's resolver could
+ * not resolve — `EACCES`, `ELOOP`, `ENAMETOOLONG`. Keying a spelling would hand
+ * two names for one thing two identities, which is exactly the duplicate a walk
+ * over symlinked trees exists to prevent, and `ELOOP` is the cycle case. So a
+ * child whose resolution failed has no `path` field for a caller to key on: the
+ * mistake is not discouraged, it is unavailable.
+ *
+ * The state and the stage are paired rather than free, for the same reason:
+ * `unchecked` happens only at `confinement` and `absent` only at `resolve`, so
+ * the combinations the prose calls impossible do not typecheck either.
+ */
+export type Child =
+  | {
+      readonly name: string;
+      readonly state: 'present';
+      /** The resolved absolute path — the identity, safe to key by. */
+      readonly path: CanonicalPath;
+      readonly kind: 'directory' | 'file' | 'other';
+    }
+  | {
+      readonly name: string;
+      readonly state: 'unchecked';
+      readonly stage: 'confinement';
+      readonly reason: string;
+    }
+  | {
+      readonly name: string;
+      readonly state: 'absent' | 'unreadable';
+      readonly stage: 'resolve';
+      readonly reason: string;
+    };
+
+/**
+ * What one directory's children turned out to be, or why there is no list.
+ *
+ * `ok: false` rather than a throw for a directory that is merely absent or
+ * unreadable: that is a value the caller reports and carries on from (AD-7),
+ * and a walk that threw here would lose every sibling and everything below
+ * them — the defect `test/support/gate.ts` still has. Confinement is the one
+ * refusal that still throws, because there is no sensible way to continue from
+ * a caller asking to enumerate outside the project.
+ *
+ * Both failure stages are producible and neither combination is spurious:
+ * `resolve` when the directory's own path could not be resolved, and
+ * `read-directory` when it resolved, passed confinement, and `readdir` refused.
+ */
+export type ChildListing =
+  | {
+      readonly ok: true;
+      readonly children: readonly Child[];
+      /** True when the directory held more kept children than `limit` allowed. */
+      readonly truncated: boolean;
+    }
+  | {
+      readonly ok: false;
+      readonly state: 'absent' | 'unreadable';
+      readonly stage: 'resolve' | 'read-directory';
+      readonly reason: string;
+    };
 
 /** What a path turned out to be. `unreadable` is not the same as `absent`. */
 export type Entry =
@@ -98,12 +259,49 @@ export class ConfinedReader {
    */
   resolveWithin(path: string): CanonicalPath {
     const target = canonical(path, toPlatform(this.#root));
-    if (!contains(this.#root, target)) {
-      throw new Error(
-        `refusing to read outside the project: ${toPlatform(target)} is not within ${toPlatform(this.#root)}`,
-      );
-    }
+    if (!contains(this.#root, target)) throw new ConfinementError(target, this.#root);
     return target;
+  }
+
+  /**
+   * Resolve `path`, refuse it if it escapes, and say whether it resolved.
+   *
+   * The three questions enumeration has to ask in one place, because the order
+   * is the correctness:
+   *
+   *   1. **Resolve.** So a link is judged by where it goes, never by where it
+   *      sits.
+   *   2. **Confine, on the best available form.** Containment is asked even
+   *      when resolution failed, and it is asked *first*, so an unresolvable
+   *      path outside the root is still refused as a refusal rather than
+   *      reported as an ordinary absence. That is the conservative direction:
+   *      for an unresolved path the answer is about the spelling, which is
+   *      documented in `paths.ts` and is why step 3 exists.
+   *   3. **Report the resolution failure.** A path that could not be resolved
+   *      never becomes `present`, whatever a `stat` would have said about it.
+   *      This is the correction that earned `canonicalWithResolution`: probing
+   *      with `statSync` and inferring resolution from its success is wrong,
+   *      because they are different syscalls with different failure sets — a
+   *      path `stat` accepts and `realpathSync.native` refuses would have been
+   *      marked `present` with an identity built from a spelling.
+   */
+  #resolveChecked(
+    path: string,
+  ):
+    | { readonly ok: true; readonly path: CanonicalPath }
+    | { readonly ok: false; readonly state: 'absent' | 'unreadable'; readonly reason: string } {
+    const resolution = canonicalWithResolution(path, toPlatform(this.#root));
+    if (!contains(this.#root, resolution.path)) {
+      throw new ConfinementError(resolution.path, this.#root);
+    }
+    if (!resolution.resolved) {
+      return {
+        ok: false,
+        state: resolution.code === 'ENOENT' || resolution.code === 'ENOTDIR' ? 'absent' : 'unreadable',
+        reason: resolution.reason,
+      };
+    }
+    return { ok: true, path: resolution.path };
   }
 
   /**
@@ -134,6 +332,147 @@ export class ConfinedReader {
   /** True only for a directory that is actually there and readable. */
   isDirectory(path: string): boolean {
     return this.entryAt(path).kind === 'directory';
+  }
+
+  /**
+   * The children of one directory, each re-resolved and re-confined.
+   *
+   * The enumeration `ConfinedReader` did not have, and the reason the walk in
+   * `walk.ts` does not use `list.ts`: AD-10's scoped exception covers a scan
+   * that reads *names* outside every permitted root and never recurses, which
+   * is the opposite of what a recursing reader does. So enumeration lands here,
+   * behind the same check as every other operation.
+   *
+   * Two resolve-and-confine passes, not one, and the second is the one that
+   * matters. The directory is resolved and checked before `readdir` touches it
+   * — including a resolution failure, so `readdir` can never follow an
+   * unresolvable link and enumerate names from outside the root. Then **every
+   * child is resolved and confinement-checked again before it is returned**,
+   * because a child can be a symlink, and a symlink is precisely the thing
+   * whose spelling says one place and whose destination says another. A child
+   * that resolves outside the root comes back `unchecked` at the `confinement`
+   * stage: named, so nothing disappears, and never stat'd, so nothing outside
+   * the tree is even asked about.
+   *
+   * `limit` is required, on `listChildDirectories`' precedent: an unbounded
+   * listing is the thing this signature exists to make impossible to ask for by
+   * accident, and a default would be the one value nobody chose. `keep` is that
+   * module's other lesson, applied for the same reason it was learned there: it
+   * runs **before** the cap, because a cap spent on names the caller was always
+   * going to discard is a cap on the wrong thing — a directory holding `limit`
+   * dot-directories otherwise returns nothing but dot-directories. It is
+   * mechanism only; which names to skip is policy, and policy lives with the
+   * caller (Story 1.7), never hardcoded here.
+   *
+   * Names are sorted before the cap, so a truncated listing is the same listing
+   * every time, and the cap is applied before any child is probed, so it bounds
+   * syscalls and not merely the array length.
+   *
+   * **What the cap does not bound is the entry list `readdirSync` builds.**
+   * `deferred-work.md` records that as an open finding against `list.ts`, and
+   * this is the "larger appetite" caller it named as the trigger. The decision
+   * taken here is deliberate and recorded there: the materialization stays.
+   * Streaming with `opendirSync` means owning a `Dir` handle and its close on
+   * every failure path, and the failure paths are exactly what this module is
+   * for — a handle leaked on an `EACCES` mid-iteration would be a worse defect
+   * than the memory spike it avoids, in a tool whose directories are project
+   * folders rather than mail spools. Nothing is allocated *on top of* that
+   * array beyond one in-place sort and one slice.
+   */
+  childrenOf(
+    path: string,
+    limit: number,
+    keep: (name: string) => boolean = () => true,
+  ): ChildListing {
+    if (!Number.isInteger(limit) || limit < 1) {
+      throw new Error(`childrenOf needs a whole limit of 1 or more, got ${JSON.stringify(limit)}`);
+    }
+
+    const resolved = this.#resolveChecked(path);
+    if (!resolved.ok) {
+      return { ok: false, state: resolved.state, stage: 'resolve', reason: resolved.reason };
+    }
+    const directory = resolved.path;
+
+    let entries: Dirent[];
+    try {
+      entries = readdirSync(toPlatform(directory), { withFileTypes: true });
+    } catch (error: unknown) {
+      const code = (error as { code?: string }).code;
+      return {
+        ok: false,
+        state: code === 'ENOENT' || code === 'ENOTDIR' ? 'absent' : 'unreadable',
+        stage: 'read-directory',
+        reason: error instanceof Error ? error.message : String(error),
+      };
+    }
+
+    // Sorted and sliced in place on the array `readdir` already built, rather
+    // than through a names array and a lookup `Map`. The earlier version of
+    // this tripled the footprint of the very allocation the paragraph above
+    // defends keeping, which made the record of that decision wrong.
+    const kept = entries.filter((entry) => keep(entry.name));
+    kept.sort((left, right) => (left.name < right.name ? -1 : left.name > right.name ? 1 : 0));
+
+    return {
+      ok: true,
+      truncated: kept.length > limit,
+      children: kept.slice(0, limit).map((entry) => this.#child(directory, entry)),
+    };
+  }
+
+  /**
+   * One child: resolved, then confined, then probed for its kind — in that
+   * order, which is the whole content of this function.
+   *
+   * Resolution and confinement are `#resolveChecked`'s, so a child whose
+   * resolution failed cannot come back `present` and cannot come back with a
+   * `path`. What is left here is the *kind*, and there are two ways to learn it:
+   *
+   *   - A `Dirent` that **positively** answers `isDirectory()` or `isFile()` is
+   *     trusted, and needs no second syscall. That rule lives in `trustedKind`,
+   *     which is exported so it can be tested against a `DT_UNKNOWN`-shaped
+   *     entry no real development filesystem will produce.
+   *   - Everything else is probed with `statSync`, which follows the link. A
+   *     symlink, a `DT_UNKNOWN` entry, a fifo: all take this route, and the
+   *     stat is only ever performed on a path already known to resolve inside
+   *     the root.
+   */
+  #child(directory: CanonicalPath, dirent: Dirent): Child {
+    const name = dirent.name;
+    const childPath = join(toPlatform(directory), name);
+
+    let resolved;
+    try {
+      resolved = this.#resolveChecked(childPath);
+    } catch (error: unknown) {
+      if (!(error instanceof ConfinementError)) throw error;
+      return { name, state: 'unchecked', stage: 'confinement', reason: error.message };
+    }
+    if (!resolved.ok) {
+      return { name, state: resolved.state, stage: 'resolve', reason: resolved.reason };
+    }
+
+    const trusted = trustedKind(dirent);
+    if (trusted !== undefined) return { name, state: 'present', path: resolved.path, kind: trusted };
+
+    try {
+      const stats = statSync(toPlatform(resolved.path));
+      const kind = stats.isDirectory() ? 'directory' : stats.isFile() ? 'file' : 'other';
+      return { name, state: 'present', path: resolved.path, kind };
+    } catch (error: unknown) {
+      // Reachable only by a change under our feet: the path resolved a moment
+      // ago, so this is a race rather than a shape. Reported at the `resolve`
+      // stage all the same, and without a `path`, because a child we could not
+      // finish asking about is not an identity.
+      const code = (error as { code?: string }).code;
+      return {
+        name,
+        state: code === 'ENOENT' || code === 'ENOTDIR' ? 'absent' : 'unreadable',
+        stage: 'resolve',
+        reason: error instanceof Error ? error.message : String(error),
+      };
+    }
   }
 
   /**

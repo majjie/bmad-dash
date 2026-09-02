@@ -27,11 +27,16 @@
  * directory, `ELOOP`, `ENAMETOOLONG`. Either way the "symlinks resolved" half
  * of the form did not happen, and the brand below certifies neither existence
  * nor resolution. `canonical` and `contains` each say what survives.
+ *
+ * A caller that cannot live with the silence — one that intends to key an
+ * identity by the result, where a spelling would multiply into two keys — asks
+ * `canonicalWithResolution` instead. It is the same call with the discarded
+ * half handed back, not a second way to canonicalize.
  */
 
 import { resolve, relative, isAbsolute, sep } from 'node:path';
 
-import { resolveRealPathNative } from './realpath.ts';
+import { resolveRealPathNative, tryResolveRealPathNative } from './realpath.ts';
 
 /**
  * A path that has been through `canonical`: absolute, normalized,
@@ -83,6 +88,45 @@ export function canonical(path: string, from?: string): CanonicalPath {
   // "No such directory" message printed whichever one was typed.
   const absolute = resolve(from ?? process.cwd(), path);
   return resolveRealPathNative(absolute) as CanonicalPath;
+}
+
+/**
+ * Whether resolution actually happened, alongside the canonical form.
+ *
+ * `canonical` cannot answer this and must not start throwing to do so: its
+ * callers ask about paths that may legitimately be absent. But a caller that
+ * intends to **key an identity** by the result needs the answer, because
+ * `resolved: false` means the value is the *spelling* — `..` segments removed
+ * and absolute, but with symlinks unresolved — and two spellings of one file
+ * are two keys. `ELOOP` is the case that makes this concrete: a cycle is
+ * exactly where a spelling multiplies.
+ *
+ * So this is `canonical` with the discarded half handed back rather than a
+ * second way to canonicalize. The `path` is the same value `canonical` would
+ * return either way, which is what keeps the two from drifting; what is added
+ * is permission to *use* it as an identity, and the `code` and `reason` to
+ * report when that permission is withheld.
+ */
+export function canonicalWithResolution(
+  path: string,
+  from?: string,
+):
+  | { readonly resolved: true; readonly path: CanonicalPath }
+  | {
+      readonly resolved: false;
+      readonly path: CanonicalPath;
+      readonly code: string | undefined;
+      readonly reason: string;
+    } {
+  const absolute = resolve(from ?? process.cwd(), path);
+  const attempt = tryResolveRealPathNative(absolute);
+  if (attempt.ok) return { resolved: true, path: attempt.path as CanonicalPath };
+  return {
+    resolved: false,
+    path: absolute as CanonicalPath,
+    code: attempt.code,
+    reason: attempt.reason,
+  };
 }
 
 /**

@@ -41,6 +41,7 @@ import {
   SCANNED_ROOTS,
   SPECIFIER_PATTERN,
   collectSourceFiles,
+  gateKey,
   scanSource,
   describeDomain,
   describeImports,
@@ -695,6 +696,71 @@ test('the unconfined listing capability is importable only by the suggestion sca
     await importersOf(REPO_ROOT, 'src/adapters/fs/list.ts'),
     ['src/cli/suggest.ts'],
     'only the suggestion scan may import the unconfined listing adapter',
+  );
+});
+
+test('the tree walk is scanned, reads through the confined reader, and never lists', async () => {
+  // A new module under `src/adapters/fs/` is the addition AD-1 exists for, so
+  // the first thing asserted is that the gate can see it at all — the generic
+  // import and mutation rules above are worth nothing over a file the scan
+  // never opened.
+  const scanned = await collectSourceFiles(REPO_ROOT);
+  assert.ok(
+    scanned.includes('src/adapters/fs/walk.ts'),
+    `the tree walk is not scanned; found: ${scanned.join(', ')}`,
+  );
+
+  // The gate's own tokenizer and specifier pattern, not a regex over the raw
+  // text. The first version of this test was `doesNotMatch(source, /node:fs/)`,
+  // which the thing it guards can walk around three ways — `node:fs/promises`,
+  // double quotes, a dynamic `import()` — and since `walk.ts` lives under
+  // `src/adapters/fs/` AD-1 *permits* `node:fs` there, so this is the only
+  // enforcement that the walk reads through `ConfinedReader` at all.
+  // `findUnanalysable` below denies the computed-specifier escape separately.
+  const scannedSource = scanSource(
+    await readFile(join(REPO_ROOT, 'src', 'adapters', 'fs', 'walk.ts'), 'utf8'),
+  );
+  const specifiers = [...scannedSource.withLiterals.matchAll(SPECIFIER_PATTERN)].flatMap((match) =>
+    match[2] === undefined ? [] : [match[2]],
+  );
+  assert.ok(specifiers.length > 0, 'no import specifiers found — the tokenizer saw nothing');
+
+  for (const specifier of specifiers) {
+    assert.notEqual(
+      gateKey(specifier),
+      'fs',
+      `the walk reads through ConfinedReader, not fs — found ${specifier}`,
+    );
+    const resolved = specifier.startsWith('.')
+      ? join('src/adapters/fs', specifier).split(sep).join('/')
+      : specifier;
+    assert.notEqual(
+      resolved,
+      'src/adapters/fs/list.ts',
+      'the walk must not reach the unconfined lister: AD-10’s exception is names-only, no recursion, no read',
+    );
+  }
+  assert.ok(
+    specifiers.some(
+      (specifier) => join('src/adapters/fs', specifier).split(sep).join('/') === 'src/adapters/fs/read.ts',
+    ),
+    `the walk must read through the confined reader; specifiers: ${specifiers.join(', ')}`,
+  );
+
+  assert.deepEqual(await findImportViolations(REPO_ROOT), []);
+  assert.deepEqual(await findMutatingOperations(REPO_ROOT), []);
+  assert.deepEqual(await findUnanalysable(REPO_ROOT), []);
+});
+
+test('the tree walk has a stated importer set, so its first consumer is a deliberate edit', async () => {
+  // The same enforcement shape as the two assertions around it, and for the
+  // same reason: AD-10's only mechanical protection is an exact importer set,
+  // so a new adapter that reads and recurses needs its own. Empty today —
+  // Story 1.7 is the first consumer, and adding it is an edit here.
+  assert.deepEqual(
+    await importersOf(REPO_ROOT, 'src/adapters/fs/walk.ts'),
+    [],
+    'nothing in the shipped source consumes the walk yet; Story 1.7 is the first',
   );
 });
 

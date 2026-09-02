@@ -13,12 +13,19 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, rm, symlink, writeFile, chmod } from 'node:fs/promises';
+import { mkdtemp, mkdir, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { canonical, toPlatform } from '../../src/adapters/fs/paths.ts';
-import { ConfinedReader, MAX_READ_BYTES } from '../../src/adapters/fs/read.ts';
+import {
+  ConfinedReader,
+  ConfinementError,
+  MAX_READ_BYTES,
+  trustedKind,
+  type ChildListing,
+} from '../../src/adapters/fs/read.ts';
+import { deniableDirectories, symlinksAvailable, whileDenied } from '../support/tree.ts';
 
 interface Fixture {
   readonly root: string;
@@ -79,22 +86,22 @@ test('a directory that cannot be read is unreadable, not absent', async (t) => {
   // `return` reported this as a pass, so on any root container the summary read
   // 369 passed and 0 skipped while this assertion had never once executed —
   // which is the failure this comment claimed to have avoided.
-  if (process.getuid?.() === 0) {
-    t.skip('needs a non-root user: root is not denied by a 0o000 mode');
+  //
+  // The question, and the denial itself, now come from `test/support/tree.ts`
+  // rather than from a private copy here: `whileDenied` restores the mode it
+  // found in a `finally` — not in an `after` hook, because the fixture
+  // registered its recursive delete first and the delete fails on a directory
+  // it cannot enter.
+  if (!deniableDirectories()) {
+    t.skip('needs a non-root POSIX user: root is not denied by a 0o000 mode');
     return;
   }
 
-  // Restored in `finally`, not in an `after` hook: the fixture registered its
-  // own cleanup first, so a hook here runs *after* the recursive delete and the
-  // delete fails on a directory it cannot enter.
-  await chmod(denied, 0o000);
-  try {
+  await whileDenied(denied, () => {
     const result = reader.readText('denied/x.txt');
     assert.equal(result.ok, false);
     assert.ok(!result.ok && /permission|EACCES/i.test(result.reason), result.ok ? '' : result.reason);
-  } finally {
-    await chmod(denied, 0o755);
-  }
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -118,8 +125,17 @@ test('a symlink inside the project pointing out of it is refused', async (t) => 
   // The case the whole design exists for. The link lives inside the tree, so
   // any check made on its spelling admits it; canonicalizing first is what
   // makes the question "where does this actually go".
+  //
+  // Guarded and typed, like every other link in the suite should be: unelevated
+  // Windows throws `EPERM` from `symlink`, which *errors* the test rather than
+  // skipping it, and an untyped link is the wrong kind of link there even with
+  // the privilege to make one.
+  if (!(await symlinksAvailable())) {
+    t.skip('needs symlinks: unelevated Windows cannot create them');
+    return;
+  }
   const { reader, root, outside } = await fixture(t);
-  await symlink(outside, join(root, 'escape'));
+  await symlink(outside, join(root, 'escape'), 'dir');
 
   assert.throws(() => reader.readText('escape/secret.txt'), /refusing to read outside/);
   assert.throws(() => reader.entryAt('escape'), /refusing to read outside/);
@@ -127,10 +143,14 @@ test('a symlink inside the project pointing out of it is refused', async (t) => 
 
 test('a symlink inside the project pointing back inside it is allowed', async (t) => {
   // The other direction, so the refusal is not simply "no symlinks".
+  if (!(await symlinksAvailable())) {
+    t.skip('needs symlinks: unelevated Windows cannot create them');
+    return;
+  }
   const { reader, root } = await fixture(t);
   await mkdir(join(root, 'real'));
   await writeFile(join(root, 'real', 'ok.txt'), 'fine\n');
-  await symlink(join(root, 'real'), join(root, 'alias'));
+  await symlink(join(root, 'real'), join(root, 'alias'), 'dir');
 
   const result = reader.readText('alias/ok.txt');
   assert.ok(result.ok, `expected a read, got ${JSON.stringify(result)}`);
@@ -230,4 +250,289 @@ test('a file over the read limit is refused, naming the size and the limit', asy
   const result = reader.readText('big.bin');
   assert.equal(result.ok, false);
   assert.ok(!result.ok && result.reason.includes(String(MAX_READ_BYTES)), result.ok ? '' : result.reason);
+});
+
+// ---------------------------------------------------------------------------
+// Enumeration
+//
+// The capability `ConfinedReader` did not have, and the one the walk in
+// `walk.ts` is built on. Two confinement checks matter here rather than one:
+// the directory before `readdir` touches it, and **every child again** before
+// it is handed back — because a child can be a symlink, which is exactly the
+// case where its spelling and its destination disagree.
+// ---------------------------------------------------------------------------
+
+/** `name state[/stage]` per child, so a missing sibling cannot hide. */
+function children(listing: ChildListing): readonly string[] {
+  assert.ok(listing.ok, `expected a listing, got ${JSON.stringify(listing)}`);
+  return listing.ok
+    ? listing.children.map((child) =>
+        child.state === 'present'
+          ? `${child.name} ${child.kind}`
+          : `${child.name} ${child.state}/${child.stage}`,
+      )
+    : [];
+}
+
+test('a directory enumerates its children, sorted, with their kinds', async (t) => {
+  const { reader, root } = await fixture(t);
+  await mkdir(join(root, 'sub'));
+  await writeFile(join(root, 'another.txt'), 'a');
+
+  assert.deepEqual(children(reader.childrenOf('.', 50)), [
+    'another.txt file',
+    'inside.txt file',
+    'sub directory',
+  ]);
+  assert.deepEqual(children(reader.childrenOf('sub', 50)), []);
+});
+
+test('a present child carries its resolved path, and that path is the identity', async (t) => {
+  const { reader, root } = await fixture(t);
+  const listing = reader.childrenOf('.', 50);
+  assert.ok(listing.ok);
+  const child = listing.ok ? listing.children.find((each) => each.name === 'inside.txt') : undefined;
+  assert.ok(child !== undefined && child.state === 'present');
+  assert.equal(
+    child !== undefined && child.state === 'present' ? toPlatform(child.path) : '',
+    toPlatform(canonical(join(root, 'inside.txt'))),
+  );
+});
+
+test('the child cap is required, sorts before it applies, and reports truncation', async (t) => {
+  const { reader, root } = await fixture(t);
+  for (const name of ['a.txt', 'b.txt', 'c.txt', 'd.txt']) {
+    await writeFile(join(root, name), name);
+  }
+
+  // Required rather than defaulted, on `listChildDirectories`' precedent: an
+  // unbounded listing must be impossible to ask for by accident.
+  for (const limit of [0, -1, 2.5, Number.NaN]) {
+    assert.throws(() => reader.childrenOf('.', limit), /whole limit of 1 or more/, String(limit));
+  }
+
+  const capped = reader.childrenOf('.', 2);
+  assert.deepEqual(children(capped), ['a.txt file', 'b.txt file']);
+  assert.equal(capped.ok && capped.truncated, true, 'a shortfall is reported, never silent');
+
+  const whole = reader.childrenOf('.', 5);
+  assert.equal(whole.ok && whole.truncated, false);
+  assert.equal(whole.ok ? whole.children.length : 0, 5);
+});
+
+test('a directory that is absent and one that is unreadable are different answers', async (t) => {
+  const { reader, root } = await fixture(t);
+
+  // The stage separates the two the way the failure actually happened: a path
+  // that is not there fails to *resolve*, and never reaches `readdir` at all.
+  const missing = reader.childrenOf('nope', 10);
+  assert.equal(missing.ok, false);
+  assert.equal(!missing.ok && missing.state, 'absent');
+  assert.equal(!missing.ok && missing.stage, 'resolve');
+
+  // A file is not a directory, and `ENOTDIR` is the same "not there" answer
+  // `entryAt` already gives, so the two surfaces cannot disagree. This one does
+  // resolve — the file exists — so it is `readdir` that refuses it, and the
+  // stage says so.
+  const notDirectory = reader.childrenOf('inside.txt', 10);
+  assert.equal(!notDirectory.ok && notDirectory.state, 'absent');
+  assert.equal(!notDirectory.ok && notDirectory.stage, 'read-directory');
+
+  if (!deniableDirectories()) {
+    t.skip('needs a non-root POSIX user: root is not denied by a 0o000 mode');
+    return;
+  }
+  const denied = join(root, 'denied');
+  await mkdir(denied);
+  await whileDenied(denied, () => {
+    const result = reader.childrenOf('denied', 10);
+    assert.equal(result.ok, false);
+    assert.equal(!result.ok && result.state, 'unreadable');
+    assert.equal(!result.ok && result.stage, 'read-directory');
+    assert.ok(!result.ok && /EACCES|permission/i.test(result.reason), !result.ok ? result.reason : '');
+  });
+});
+
+test('enumerating a directory outside the project is refused before any read', async (t) => {
+  const { reader, outside } = await fixture(t);
+  assert.throws(() => reader.childrenOf('..', 10), /refusing to read outside the project/);
+  assert.throws(() => reader.childrenOf(outside, 10), /refusing to read outside/);
+});
+
+test('a child that resolves out of the root is unchecked, and carries no path', async (t) => {
+  // The case enumeration exists to get right, and the reason a listing cannot
+  // be trusted on spelling alone: the link sits inside the tree, so any check
+  // made before resolution admits it.
+  if (!(await symlinksAvailable())) {
+    t.skip('needs symlinks: unelevated Windows cannot create them');
+    return;
+  }
+  const { reader, root, outside } = await fixture(t);
+  await symlink(outside, join(root, 'escape'), 'dir');
+
+  const listing = reader.childrenOf('.', 10);
+  assert.deepEqual(children(listing), ['escape unchecked/confinement', 'inside.txt file']);
+
+  const escape = listing.ok
+    ? listing.children.find((child) => child.name === 'escape')
+    : undefined;
+  assert.ok(escape !== undefined, 'a refused child is still reported, never dropped');
+  assert.ok(escape.state !== 'present', JSON.stringify(escape));
+  assert.equal(escape.state, 'unchecked');
+  assert.equal(escape.stage, 'confinement');
+  assert.equal('path' in escape, false, 'an out-of-tree child offers no identity to key');
+  assert.ok(
+    escape.reason.includes(outside),
+    'and the refusal names the destination it refused',
+  );
+});
+
+test('a child link pointing back inside the tree resolves to its target', async (t) => {
+  if (!(await symlinksAvailable())) {
+    t.skip('needs symlinks: unelevated Windows cannot create them');
+    return;
+  }
+  const { reader, root } = await fixture(t);
+  await mkdir(join(root, 'real'));
+  await symlink(join(root, 'real'), join(root, 'alias'), 'dir');
+
+  const listing = reader.childrenOf('.', 10);
+  assert.deepEqual(children(listing), ['alias directory', 'inside.txt file', 'real directory']);
+
+  const paths = listing.ok
+    ? listing.children.flatMap((child) => (child.state === 'present' ? [toPlatform(child.path)] : []))
+    : [];
+  assert.equal(
+    new Set(paths).size,
+    paths.length - 1,
+    'two names for one directory resolve to one path — which is what lets a walk dedupe them',
+  );
+});
+
+test('a dangling child is absent and an unresolvable one is unreadable, both at the resolve stage', async (t) => {
+  if (!(await symlinksAvailable())) {
+    t.skip('needs symlinks: unelevated Windows cannot create them');
+    return;
+  }
+  const { reader, root } = await fixture(t);
+  await symlink(join(root, 'nowhere'), join(root, 'gone'), 'file');
+  await symlink('loop', join(root, 'loop'), 'file');
+
+  assert.deepEqual(children(reader.childrenOf('.', 10)), [
+    'gone absent/resolve',
+    'inside.txt file',
+    'loop unreadable/resolve',
+  ]);
+
+  const listing = reader.childrenOf('.', 10);
+  const loop = listing.ok ? listing.children.find((child) => child.name === 'loop') : undefined;
+  // Existence first. `'path' in (loop ?? {})` was `false` for a *missing* entry
+  // too, so the assertion the comment below calls load-bearing would have held
+  // if the child had been dropped altogether — which is the one outcome this
+  // module must never produce.
+  assert.ok(loop !== undefined, 'an unresolvable child is reported, never dropped');
+  assert.ok(loop.state !== 'present', JSON.stringify(loop));
+  assert.match(loop.reason, /ELOOP|too many/i);
+  // The canonical form degrades to the *spelling* when `realpathSync.native`
+  // fails, and `ELOOP` is the cycle case — so an unresolved child must not
+  // offer a path for a caller to key an identity on. It does not have one.
+  assert.equal('path' in loop, false);
+});
+
+test('the keep predicate runs before the cap, so a cap is never spent on discards', async (t) => {
+  // `listChildDirectories`' hard-won lesson, applied here for the same reason:
+  // `.` sorts ahead of every letter, so a cap applied before the filter returns
+  // nothing but dot-directories and hides every real entry beside them. This is
+  // also the mechanism `walk`'s `exclude` is built on, and the *only* place the
+  // ordering is observable.
+  const { reader, root } = await fixture(t);
+  for (const name of ['.a', '.b', '.c', '.d']) await mkdir(join(root, name));
+  await writeFile(join(root, 'real.md'), 'x');
+
+  assert.deepEqual(children(reader.childrenOf('.', 2)), ['.a directory', '.b directory']);
+  assert.deepEqual(
+    children(reader.childrenOf('.', 2, (name) => !name.startsWith('.'))),
+    ['inside.txt file', 'real.md file'],
+  );
+
+  const filtered = reader.childrenOf('.', 2, (name) => !name.startsWith('.'));
+  assert.equal(filtered.ok && filtered.truncated, false, 'truncation counts kept children only');
+});
+
+test('a child reached through a non-directory is absent, not a crash', async (t) => {
+  // `ENOTDIR` from the resolver: the link names a path *through* a regular
+  // file, so there is nothing to resolve and nothing there. Same answer as a
+  // dangling link, which is correct — `entryAt` has said so since Story 1.5.
+  if (!(await symlinksAvailable())) {
+    t.skip('needs symlinks: unelevated Windows cannot create them');
+    return;
+  }
+  const { reader, root } = await fixture(t);
+  await symlink(join(root, 'inside.txt', 'deeper'), join(root, 'through'), 'file');
+
+  const listing = reader.childrenOf('.', 10);
+  assert.deepEqual(children(listing), ['inside.txt file', 'through absent/resolve']);
+  const through = listing.ok ? listing.children.find((child) => child.name === 'through') : undefined;
+  assert.ok(through !== undefined);
+  assert.ok(through.state !== 'present');
+  assert.match(through.reason, /ENOTDIR|not a directory/i);
+});
+
+test('a directory whose own path cannot be resolved is never enumerated', async (t) => {
+  // The other half of the confinement order, and the reason the directory
+  // argument is resolved rather than merely spelled-checked: with only a
+  // spelling check, `readdirSync` follows the link itself and can enumerate
+  // names from wherever it lands. Reported as a listing failure at the
+  // `resolve` stage instead, so nothing is read.
+  if (!(await symlinksAvailable()) || !deniableDirectories()) {
+    t.skip('needs symlinks and a non-root POSIX user');
+    return;
+  }
+  const { reader, root } = await fixture(t);
+  await mkdir(join(root, 'vault', 'inner'), { recursive: true });
+  await writeFile(join(root, 'vault', 'inner', 'secret.txt'), 'x');
+  await symlink(join(root, 'vault', 'inner'), join(root, 'reach'), 'dir');
+
+  await whileDenied(join(root, 'vault'), () => {
+    const listing = reader.childrenOf('reach', 10);
+    assert.equal(listing.ok, false, 'an unresolvable directory must not be listed');
+    assert.equal(!listing.ok && listing.stage, 'resolve');
+    assert.equal(!listing.ok && listing.state, 'unreadable');
+  });
+});
+
+test('a confinement refusal is a distinguishable error, not just a message', async (t) => {
+  // `walk.ts` has to tell a refusal apart from a defect, and matching on the
+  // message would make the two indistinguishable the moment the wording
+  // changes. The class is the contract; the message is the report.
+  const { reader, outside } = await fixture(t);
+  try {
+    reader.childrenOf(outside, 10);
+    assert.fail('expected a refusal');
+  } catch (error: unknown) {
+    assert.ok(error instanceof ConfinementError, `not a ConfinementError: ${String(error)}`);
+    assert.equal(toPlatform(error.root), toPlatform(reader.root));
+    assert.match(error.message, /refusing to read outside the project/);
+  }
+});
+
+test('a Dirent is trusted only for what it positively answers', () => {
+  // The `DT_UNKNOWN` rule, tested where it can actually be tested. A real
+  // `readdir` on any development filesystem fills `d_type`, so a test driven
+  // through `childrenOf` cannot tell this rule from `!isSymbolicLink()` — and
+  // that defective rule reads "unknown" as "not a link", skips the probe, and
+  // reports a real directory as `other` that the walk then never descends.
+  const dirent = (kind: 'directory' | 'file' | 'symlink' | 'unknown' | 'fifo') => ({
+    isDirectory: () => kind === 'directory',
+    isFile: () => kind === 'file',
+    isSymbolicLink: () => kind === 'symlink',
+  });
+
+  assert.equal(trustedKind(dirent('directory')), 'directory');
+  assert.equal(trustedKind(dirent('file')), 'file');
+  // Everything else has to be probed, and `unknown` is the one that matters:
+  // every `isX()` answers false, exactly as it does for a symlink.
+  assert.equal(trustedKind(dirent('symlink')), undefined);
+  assert.equal(trustedKind(dirent('unknown')), undefined, 'DT_UNKNOWN must be probed, not guessed');
+  assert.equal(trustedKind(dirent('fifo')), undefined);
 });

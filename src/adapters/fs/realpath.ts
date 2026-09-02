@@ -56,9 +56,43 @@ export function resolveRealPath(path: string): string {
  * and must not write a comment implying it can.
  */
 export function resolveRealPathNative(path: string): string {
+  const attempt = tryResolveRealPathNative(path);
+  return attempt.ok ? attempt.path : path;
+}
+
+/**
+ * What `realpathSync.native` said, failure included.
+ *
+ * The same call as `resolveRealPathNative`, with the answer it swallows. That
+ * swallowing is deliberate for the callers that only want a comparable form —
+ * recognition asks about markers that may be absent, and a missing path is not
+ * an error there — but it leaves a caller no way to tell "resolved" from
+ * "could not be resolved, here is the spelling instead". A walk cannot live
+ * with that: identity is the resolved absolute path, so a caller that keys one
+ * has to know the resolution actually happened. `statSync` is *not* a substitute
+ * probe, which is the correction that earned this function: it is a different
+ * syscall with a different failure set, so a path it accepts can still be one
+ * `realpathSync.native` refuses — `ENAMETOOLONG` on the expanded chain being
+ * the named case — and a `present` verdict taken from a stat would then carry
+ * an identity built from a spelling.
+ *
+ * One call site for `realpathSync.native` in the whole project, so the two
+ * behaviours cannot drift: `resolveRealPathNative` is this function with the
+ * failure discarded, rather than a second `try`/`catch` that might catch
+ * differently.
+ */
+export function tryResolveRealPathNative(
+  path: string,
+):
+  | { readonly ok: true; readonly path: string }
+  | { readonly ok: false; readonly code: string | undefined; readonly reason: string } {
   try {
-    return realpathSync.native(path);
-  } catch {
-    return path;
+    return { ok: true, path: realpathSync.native(path) };
+  } catch (error: unknown) {
+    return {
+      ok: false,
+      code: (error as { code?: string }).code,
+      reason: error instanceof Error ? error.message : String(error),
+    };
   }
 }
