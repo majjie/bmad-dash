@@ -31,6 +31,41 @@
  * that could be handed an already-checked path would eventually be handed one
  * that was not.
  *
+ * **One resolution answer is a value rather than a throw.** `resolveDeclared`
+ * is for a location the *project* declared — `story_location`, FR-74 — where
+ * being outside the root is a normal shape to report rather than a defect to
+ * stop on. It performs AD-10's sanitizer check and AD-9's containment check,
+ * and every *read* on this class still goes through `resolveWithin` and still
+ * throws.
+ *
+ * **What it does and does not touch, stated precisely, because an earlier
+ * version of this paragraph overstated it.** It claimed "no read at all" and
+ * that "a path outside the root by its spelling is refused before any syscall
+ * touches it". Neither survives measurement. `resolveDeclared` performs exactly
+ * one filesystem operation on the declared value: `realpathSync.native`, the
+ * *resolution* AD-9 mandates when it says such a value is "resolved and
+ * refused". That resolver follows the path's own links, so for a value that
+ * leads out of the root it necessarily touches the far end — `<root>/link` with
+ * `link → /etc` reads the link and then resolves `/etc`.
+ *
+ * The honest invariant, and it is the one that matters: **nothing outside the
+ * root is ever read.** No content is opened, no directory is enumerated, no
+ * `stat` is performed for kind or size, and nothing is served. What happens is
+ * resolution, and both alternatives to it were measured and are worse:
+ *
+ *   - Refusing from the spelling alone reports a **correct in-project location
+ *     as out-of-tree** whenever the project is reached through a symlinked
+ *     ancestor — `/tmp → /private/tmp` on macOS, any symlinked home — because
+ *     the root is canonical and the declared spelling is not, so the two are
+ *     not in the same form. Reproduced; it was this method's own defect.
+ *   - Admitting from the spelling alone lets a link inside the project that
+ *     points out of it be read, which is the case confinement exists for.
+ *
+ * So resolution happens, once, and the answer is decided on the resolved form
+ * — the same rule `resolveWithin` applies to every other path in this class,
+ * which is also what keeps `resolveDeclared` from disagreeing with the reader
+ * beside it about which paths are inside the project.
+ *
  * **Enumeration lives here too, and it has to.** AD-10's one scoped exception
  * is the CLI's suggestion scan — directory *names*, no recursion, no read —
  * which is not what a walk over the artifact tree does, so `list.ts` cannot
@@ -60,6 +95,7 @@ import {
   toPlatform,
   type CanonicalPath,
 } from './paths.ts';
+import { sanitizeDeclaredPath, type SegmentRule } from './segments.ts';
 // AD-8's stage vocabulary, shared rather than re-spelled here. A port may
 // depend on the domain; the reverse is what the purity gate forbids.
 import type { ReadStage, SignalState } from '../../domain/signal.ts';
@@ -235,6 +271,102 @@ export type ChildListing =
       readonly reason: string;
     };
 
+/**
+ * Where a **declared** location landed, as a value rather than as a throw.
+ *
+ * The one non-throwing resolution answer this reader offers, and the reason it
+ * is an exception rather than a softening of `resolveWithin`. Confinement
+ * throws because a path outside the root is "either a defect or an attempt, and
+ * both want to stop here and be named" — true of a path the *tool* composed.
+ * A `story_location` outside the root is neither: FR-74 says such a value is a
+ * normal per-project shape and `/custom/stories` is an explicitly tested one,
+ * and AD-9 says it is "recorded as out-of-tree and reported, never read and
+ * never served". A refusal that has to be *reported* cannot be an exception
+ * whose only sensible handling is to stop.
+ *
+ * The precedent is `src/cli/location.ts`, which wraps a marker-out-of-tree
+ * throw in a `try` to turn it into a typed `Refusal` — and records that
+ * uncaught, it reached the user as a Node stack trace and exit 1. This is the
+ * same conversion done at the source rather than at the caller, so no second
+ * caller has to remember the `try`.
+ *
+ * **Four answers, and the fourth is the one this type used to lie about.**
+ * `ok: true` once promised a path that was "canonical, resolved, and confirmed
+ * inside the root", over a value produced by `canonical` — which *degrades
+ * silently to the unresolved spelling* whenever `realpathSync.native` fails, as
+ * `paths.ts`'s own header says at length. Probed: a declared `nope/deeper`
+ * came back `ok: true` with nothing resolved, so the containment re-ask had
+ * checked a spelling, and a symlink created there afterwards would lead out
+ * with that record still standing. So resolution now goes through
+ * `canonicalWithResolution`, whose whole purpose is a caller that must not be
+ * degraded silently, and a path that could not be resolved gets its own answer
+ * rather than a promise nothing kept.
+ */
+export type DeclaredLocation =
+  | {
+      readonly ok: true;
+      /**
+       * Resolved by the platform's own resolver and confirmed inside the root.
+       *
+       * The full promise, and it is now backed: `resolved: true` came back from
+       * `canonicalWithResolution`, so symlinks in this path were followed
+       * before containment was asked. Safe to key by and safe to read.
+       */
+      readonly path: CanonicalPath;
+    }
+  | {
+      readonly ok: false;
+      readonly outcome: 'out-of-tree';
+      /**
+       * The path as resolved, for the report — **never** to read from.
+       *
+       * Absolute and normalized, so `..` is gone and the reported path is the
+       * place the value actually named. Symlinks are resolved too unless the
+       * resolver could not answer, in which case this is the spelling and the
+       * refusal was decided conservatively from it.
+       *
+       * **The path is all this variant carries, and that is deliberate.** It
+       * once carried a `reason` as well, which no caller consumed and which was
+       * a *second*, non-normative phrasing of a fact `EXPERIENCE.md`'s string
+       * index already owns — `Story location points outside the project:
+       * <path>. Not read.` — and which additionally printed the absolute
+       * project root. One fact, one sentence, and the sentence is the index's:
+       * `src/domain/sprint.ts` composes it from this path.
+       */
+      readonly path: CanonicalPath;
+    }
+  | {
+      readonly ok: false;
+      readonly outcome: 'unresolved';
+      /**
+       * Inside the root **by its spelling**, and the resolver could not answer.
+       *
+       * Not an error and usually not even a surprise: the ordinary cause is
+       * that the directory is not there, which for a configured location is a
+       * fact to report rather than a failure — FR-75 asks for sprint-derived
+       * views to be "unavailable rather than empty or broken", and an
+       * `in-tree` answer that meant nothing about whether the place existed
+       * could not express that. `EACCES` on an intermediate directory, `ELOOP`
+       * and `ENAMETOOLONG` arrive here too, which is why the resolver's own
+       * `code` travels with it rather than being flattened into the sentence.
+       *
+       * It carries no path a caller may read, deliberately: the value is a
+       * spelling, symlinks in it are unresolved, and containment therefore
+       * answered about the spelling. `reportedPath` is for the report only.
+       */
+      readonly reportedPath: CanonicalPath;
+      readonly code: string | undefined;
+      readonly reason: string;
+    }
+  | {
+      readonly ok: false;
+      readonly outcome: 'refused';
+      /** Which sanitizer rule fired, so a caller reports it rather than parses it. */
+      readonly rule: SegmentRule;
+      readonly component: string;
+      readonly reason: string;
+    };
+
 /** What a path turned out to be. `unreadable` is not the same as `absent`. */
 export type Entry =
   | { readonly kind: 'directory' }
@@ -281,6 +413,93 @@ export class ConfinedReader {
     const target = canonical(path, toPlatform(this.#root));
     if (!contains(this.#root, target)) throw new ConfinementError(target, this.#root);
     return target;
+  }
+
+  /**
+   * Resolve a location a project *declared*, and report where it landed.
+   *
+   * AD-10's two checks, in the order that makes each of them mean something:
+   *
+   *   1. **Sanitize the spelling** (`sanitizeDeclaredPath`). No filesystem
+   *      access at all, so a NUL, a separator inside a component, a hidden
+   *      name, a Windows drive or stream marker, or an over-long value is
+   *      refused before any syscall could carry it. `.` and `..` pass, because
+   *      in a declared location they are navigation and step 2 resolves them.
+   *      What step 2 is handed is the spelling **rebuilt from the components
+   *      that were checked**, not the raw string, so no platform can resolve a
+   *      decomposition different from the one that was validated.
+   *   2. **Resolve once, through `canonicalWithResolution`.** This is the
+   *      resolution AD-9 mandates ("resolved and refused") and the reason it is
+   *      not `canonical`: `canonical` degrades to the spelling in silence, so a
+   *      caller that must not be degraded silently uses the form that says
+   *      whether resolution happened. It is also the same resolution
+   *      `resolveWithin` performs for every other path in this class, which is
+   *      what keeps this method from disagreeing with the reader beside it
+   *      about which paths are inside the project.
+   *   3. **Ask containment on the best form there is, and say which it was.**
+   *      Resolved and inside → `ok`, with the full promise the type makes.
+   *      Resolved and outside → `out-of-tree`, reporting where it actually
+   *      went. Unresolved and inside *by spelling* → `unresolved`, which is a
+   *      real answer rather than a failure and never a readable path.
+   *      Unresolved and outside by spelling → `out-of-tree`, decided
+   *      conservatively from the spelling, which is the direction that cannot
+   *      admit anything by mistake.
+   *
+   * **The trade this order takes, stated because the previous version hid it.**
+   * Resolving first means the resolver touches the far end of a value that
+   * leads out of the root. Refusing from the spelling first would avoid that
+   * and was measured to be wrong: with the root canonicalized to
+   * `<base>/real/proj` and `<base>/alias → <base>/real`, a declared
+   * `<base>/alias/proj/stories` is the *same directory inside the project* and
+   * was reported out-of-tree, permanently, with no recovery — the ordinary
+   * macOS and symlinked-home shape. Both paths carried the `CanonicalPath`
+   * brand while not being in the same form, which is the one thing that brand
+   * exists to guarantee. Nothing outside the root is *read*: no content, no
+   * listing, no `stat` for kind or size. See this file's header.
+   *
+   * Never throws, for anything: this is the shape half of confinement, and a
+   * shape is reported.
+   */
+  resolveDeclared(declared: string): DeclaredLocation {
+    const checked = sanitizeDeclaredPath(declared);
+    if (!checked.ok) {
+      return {
+        ok: false,
+        outcome: 'refused',
+        rule: checked.rule,
+        component: checked.component,
+        reason: checked.reason,
+      };
+    }
+
+    const resolution = canonicalWithResolution(checked.normalized, toPlatform(this.#root));
+    const inside = contains(this.#root, resolution.path);
+
+    if (!resolution.resolved) {
+      // The value is the spelling, so containment answered about the spelling.
+      // Outside by that answer is a refusal — conservative, and the direction
+      // that cannot admit anything by mistake. Inside by that answer is *not*
+      // an admission: it is `unresolved`, which carries no readable path.
+      if (!inside) {
+        return { ok: false, outcome: 'out-of-tree', path: resolution.path };
+      }
+      return {
+        ok: false,
+        outcome: 'unresolved',
+        reportedPath: resolution.path,
+        code: resolution.code,
+        reason: resolution.reason,
+      };
+    }
+
+    if (!inside) {
+      return {
+        ok: false,
+        outcome: 'out-of-tree',
+        path: resolution.path,
+      };
+    }
+    return { ok: true, path: resolution.path };
   }
 
   /**

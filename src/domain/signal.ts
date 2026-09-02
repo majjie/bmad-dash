@@ -181,12 +181,21 @@ export type Readability =
  * recorded in the spec and in `deferred-work.md` rather than narrowed
  * silently.
  *
+ * **It says what identification did, not what the whole tool did**, and that
+ * took a correction. The sentence was "so nothing read it", which became false
+ * the moment a second consumer appeared: Story 1.11 opens
+ * `sprint-status.yaml` on every pass to resolve `story_location`, while no
+ * precedence level needs its content — so that entry carried a signal saying
+ * nothing had read a file the same pass had just read. The narrower sentence is
+ * true whoever else reads the file, and this signal's job is to stop a consumer
+ * reading "identified" as "the content is fine", which it still does.
+ *
  * Frozen, because it is one shared value on every entry a pass produces and a
  * consumer that mutated it would rewrite the signal on all of them.
  */
 export const UNREAD: Readability = Object.freeze({
   state: 'unchecked',
-  reason: 'no precedence level needed this content, so nothing read it',
+  reason: 'no precedence level needed this content, so identification never opened it',
 });
 
 /**

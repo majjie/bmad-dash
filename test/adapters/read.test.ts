@@ -592,3 +592,87 @@ test('a Dirent is trusted only for what it positively answers', () => {
   assert.equal(trustedKind(dirent('unknown')), undefined, 'DT_UNKNOWN must be probed, not guessed');
   assert.equal(trustedKind(dirent('fifo')), undefined);
 });
+
+// ---------------------------------------------------------------------------
+// `resolveDeclared` — the one non-throwing resolution answer
+// ---------------------------------------------------------------------------
+
+test('a declared location inside the project resolves, and one outside is a value', async (t) => {
+  // Tested in this file as well as through the pass, on the file-per-module
+  // pattern the suite follows: the four outcomes are this method's contract,
+  // and a contract only observed through two other layers is a contract nobody
+  // can read.
+  const { reader, root, outside } = await fixture(t);
+
+  const inside = reader.resolveDeclared('inside.txt');
+  assert.ok(inside.ok, `expected the in-project path to resolve: ${JSON.stringify(inside)}`);
+  assert.equal(inside.path, canonical(join(root, 'inside.txt')));
+
+  // A value rather than a throw, which is the whole reason this method exists
+  // beside `resolveWithin`: FR-74 makes an out-of-tree location a normal shape
+  // to report, and a refusal that has to be reported cannot be an exception.
+  const escaped = reader.resolveDeclared(outside.split(/[\\/]/).join('/'));
+  assert.equal(escaped.ok, false);
+  assert.equal(escaped.ok === false && escaped.outcome, 'out-of-tree');
+  assert.equal(escaped.ok === false && escaped.outcome === 'out-of-tree' && escaped.path, canonical(outside));
+  assert.doesNotThrow(() => reader.resolveDeclared('/etc'));
+});
+
+test('a declared location the resolver cannot answer is unresolved, never ok', async (t) => {
+  // **`ok: true` promised a resolution `canonical` does not deliver.**
+  // `canonical` degrades silently to the unresolved spelling whenever
+  // `realpathSync.native` fails, so a declared `nope/deeper` came back
+  // `{ok: true}` with nothing resolved — the containment re-ask had checked a
+  // spelling, and a symlink created there afterwards would lead out with that
+  // record still standing. `canonicalWithResolution` exists for exactly this
+  // caller.
+  const { reader } = await fixture(t);
+
+  const missing = reader.resolveDeclared('nope/deeper');
+  assert.equal(missing.ok, false, 'an unresolvable path must not claim to have resolved');
+  assert.equal(missing.ok === false && missing.outcome, 'unresolved');
+  assert.equal(missing.ok === false && missing.outcome === 'unresolved' && missing.code, 'ENOENT');
+});
+
+test('a declared location the sanitizer refuses never reaches the filesystem', async (t) => {
+  const { reader } = await fixture(t);
+  const refused = reader.resolveDeclared('docs/.hidden');
+  assert.equal(refused.ok, false);
+  assert.equal(refused.ok === false && refused.outcome, 'refused');
+  assert.equal(refused.ok === false && refused.outcome === 'refused' && refused.rule, 'leading-dot');
+});
+
+test('a declared link inside the project that points out of it is refused', async (t) => {
+  // The security-critical direction, at this altitude as well as through the
+  // pass: the spelling is in bounds and the destination is not.
+  if (!(await symlinksAvailable())) {
+    t.skip('this platform cannot create symlinks without elevation');
+    return;
+  }
+  const { reader, root, outside } = await fixture(t);
+  await symlink(outside, join(root, 'escape'), 'dir');
+
+  const escaped = reader.resolveDeclared('escape');
+  assert.equal(escaped.ok, false, 'a link leading out of the project must not resolve in-tree');
+  assert.equal(escaped.ok === false && escaped.outcome, 'out-of-tree');
+});
+
+test('a declared path reached through a symlinked ancestor of the root is in-tree', async (t) => {
+  // The opposite direction, and the defect that made this method disagree with
+  // every other path in the class: `resolveWithin` accepts such a path, and
+  // answering containment from the spelling refused it. `/tmp` is a symlink to
+  // `/private/tmp` on macOS, so this is the ordinary shape rather than an edge.
+  if (!(await symlinksAvailable())) {
+    t.skip('this platform cannot create symlinks without elevation');
+    return;
+  }
+  const { reader, root } = await fixture(t);
+  const base = join(root, '..');
+  await symlink(join(base, 'project'), join(base, 'alias'), 'dir');
+
+  const aliased = reader.resolveDeclared(
+    join(base, 'alias', 'inside.txt').split(/[\\/]/).join('/'),
+  );
+  assert.ok(aliased.ok, `the same file through an aliased ancestor is in the project: ${JSON.stringify(aliased)}`);
+  assert.equal(aliased.path, canonical(join(root, 'inside.txt')), 'reported at the canonical path');
+});

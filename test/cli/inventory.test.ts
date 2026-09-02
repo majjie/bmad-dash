@@ -1354,7 +1354,7 @@ test('an undecodable file under an artifact root is unchecked, never present', a
   const read = failedRead(inventory, '_bmad-output/planning-artifacts/prds/prd.md');
   assert.equal(read.state, 'unchecked');
   assert.equal('stage' in read, false, 'nothing was attempted, so there is no stage to name');
-  assert.match(read.reason, /nothing read it/);
+  assert.match(read.reason, /identification never opened it/);
   assert.equal(
     opened.some((path) => path.endsWith('prd.md') && path.includes('prds')),
     false,
@@ -1790,7 +1790,11 @@ test('a directory says its listing was read, not that nothing was', async (t) =>
   assert.deepEqual(directory.children, { available: true, names: ['SPEC.md'] });
   const listing = failedRead(inventory, '_bmad-output/specs/spec-bmad-dash');
   assert.equal(listing.state, 'unchecked', 'a directory holds no text, so none was read');
-  assert.doesNotMatch(listing.reason, /nothing read it/, 'its listing was read, and this said so');
+  assert.doesNotMatch(
+    listing.reason,
+    /identification never opened it/,
+    'its listing was read, and this said so',
+  );
   assert.match(listing.reason, /listing/);
 
   // And the file that genuinely was not read says the other thing.

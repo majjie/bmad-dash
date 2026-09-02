@@ -84,6 +84,17 @@
  * the other spelling — so a consumer opening a part by path may be opening a
  * name it never saw in `entries`. `deferred-work.md` carries it as an entry
  * against Story 1.9 and Epic 2.
+ *
+ * **One project-level fact is resolved here as well as the per-entry ones:**
+ * where the project configures its stories to live (FR-51, `story_location` in
+ * `sprint-status.yaml`). It belongs here for the reason everything else does —
+ * AD-9 puts resolution in the composition root and forbids a second discovery
+ * path — and it is derived from the entries this pass already built, so the
+ * tracking file is found by its recorded verdict rather than by a second
+ * search. Two properties to preserve when touching it: a value pointing
+ * outside the project is resolved and reported but **never read**, and *which*
+ * file supplies the value is decided by the authority's level-1 verdict rather
+ * than by walk order. See `storyLocationOf` and `trackingFiles`.
  */
 
 import { ConfinedReader, ConfinementError } from '../adapters/fs/read.ts';
@@ -113,6 +124,15 @@ import {
 import { interpret, type InterpretationState } from '../domain/interpretation.ts';
 import { runFactsOf, type RunFacts } from '../domain/runs.ts';
 import { LISTING_NOT_TEXT, UNREAD, type Readability } from '../domain/signal.ts';
+import { readUnfenced } from '../domain/frontmatter.ts';
+import {
+  STORY_LOCATION_FIELD,
+  TRACKING_FILE,
+  locateStories,
+  type FieldReading,
+  type Resolution,
+  type StoryLocation,
+} from '../domain/sprint.ts';
 
 /**
  * BMAD's output folder, and the only child of the project root this pass looks
@@ -292,6 +312,22 @@ export interface Inventory {
    * restore one, which is why `restored` is on the record rather than implied.
    */
   readonly aliases: readonly Alias[];
+  /**
+   * Where this project configures its stories to live, resolved once (FR-51).
+   *
+   * One record per pass rather than per entry, because it is a property of the
+   * project and not of an artifact — and resolved here for the reason every
+   * other derivation is: this is where the pass already composes, and a surface
+   * that resolved it itself would be a second discovery path (AD-9).
+   *
+   * **Always present, whatever the project looks like.** A project with no
+   * `sprint-status.yaml` gets the `absent` state rather than a missing field:
+   * FR-75 makes absence a normal shape, and a field that were sometimes
+   * undefined would let a surface render "no story location" for a project that
+   * simply had not been looked at. An `in-tree` state means the place resolved
+   * and is there; anything else names why nothing may be read from it.
+   */
+  readonly storyLocation: StoryLocation;
   /**
    * Suppressions beyond the walk's own record cap, counted rather than listed.
    *
@@ -718,6 +754,10 @@ export function takeInventory(
     skipped: log.recorded,
     skippedNotRecorded: log.overflow,
     aliases: listings.aliases,
+    // Derived from the entries the pass just built — so the tracking file is
+    // found by the recorded verdict rather than by a second search, and no path
+    // outside the root is read to answer it.
+    storyLocation: storyLocationOf(reader, entries),
     suppressedNotRecorded: result.suppressedNotRecorded,
   };
 }
@@ -882,4 +922,183 @@ function childrenFor(
   const bound = unfinished.get(entry.relative);
   if (bound !== undefined) return { available: false, reason: bound };
   return { available: true, names: byParent.get(entry.relative) ?? [] };
+}
+
+// ---------------------------------------------------------------------------
+// Where the stories live — FR-51, resolved once, at the end of the pass
+// ---------------------------------------------------------------------------
+
+/**
+ * Which artifacts in this project are the sprint tracking file.
+ *
+ * AD-4's rule applied to *finding* a file rather than to classifying one:
+ * `src/domain/identity.ts` already resolves `sprint-status.yaml` to the
+ * `sprint-tracking` family, so asking the verdict is free and asking again
+ * would be a second identification. Matching on the *name* here would be the
+ * re-derivation AD-4 forbids, and it would hardcode
+ * `_bmad-output/implementation-artifacts`, which the authority already knows.
+ *
+ * **Level 1 only, and that is the correction of a measured defect.** This took
+ * the first `identified`/`sprint-tracking` entry in walk order, on the premise
+ * that "a project with two is not a shape BMAD produces". The premise does not
+ * survive the authority's own level 4: `identity.ts`'s hint table resolves that
+ * family from a `sprint-status` name hint **anywhere in the tree**, so a stray
+ * `_bmad-output/architecture-x/sprint-status.yaml` was identified too — and,
+ * sorting before `implementation-artifacts`, it won. Measured: with the real
+ * file declaring `docs/real` and a stray one declaring `/etc`, the pass
+ * reported out-of-tree `/etc`. Sort order was deciding what the tool may read.
+ *
+ * So only a **level-1** verdict counts, which is the location rule: the file
+ * sitting where BMAD's sprint planning writes it, inside a document root the
+ * authority recognizes. A name hint elsewhere in the tree no longer nominates a
+ * configuration file for the whole project.
+ *
+ * Where there is still more than one, the caller reports the ambiguity rather
+ * than resolving it (FR-73's own rule, and the one this codebase applies to
+ * every other two-readings case). Narrowing happens *inside* the loop rather
+ * than in a predicate, so the `present` variant's `path` is available without a
+ * second check the typechecker cannot see through — which is also what removes
+ * the unreachable "not present" branch the caller used to carry.
+ */
+function trackingFiles(entries: readonly InventoryEntry[]): {
+  readonly paths: readonly CanonicalPath[];
+  readonly relatives: readonly string[];
+} {
+  const paths: CanonicalPath[] = [];
+  const relatives: string[] = [];
+  for (const candidate of entries) {
+    const walked = candidate.entry;
+    if (walked.state !== 'present' || walked.kind !== 'file') continue;
+    const verdict = candidate.identity;
+    if (verdict.outcome !== 'identified') continue;
+    if (verdict.family !== 'sprint-tracking') continue;
+    if (verdict.resolvedAt !== 'location') continue;
+    paths.push(walked.path);
+    relatives.push(walked.relative);
+  }
+  return { paths, relatives };
+}
+
+/**
+ * What `story_location` says, and where it lands — resolved once, reading
+ * nothing outside the root.
+ *
+ * The composition FR-51 needed, and the order of the steps is the correctness:
+ *
+ *   1. **Find the file by verdict**, or report `absent` — or `ambiguous`. No
+ *      `sprint-status.yaml` among the entries is FR-75's normal project shape,
+ *      answered from the walk's own output, so the pass does not probe a path
+ *      to discover that a file is missing. More than one is presented rather
+ *      than resolved; see `trackingFiles`.
+ *   2. **Read it, through the confined reader.** This is the first consumer in
+ *      the tool to open this file; level 1 identified it without reading it.
+ *      The read is a `readText` like any other, so it is resolved and
+ *      confinement-checked at the moment it happens, and its failure is Story
+ *      1.9's typed state and stage rather than a message to parse.
+ *   3. **Read the one scalar, then resolve it.** `readUnfenced` is the domain
+ *      reader's unfenced door, over a file with no `---`; `resolveDeclared` is
+ *      the adapter's non-throwing answer, which sanitizes the spelling and then
+ *      resolves it once. Nothing outside the root is *read* — that method's own
+ *      header states precisely what it does touch, and why the alternatives
+ *      were measured to be worse.
+ *
+ * `readText` throws only on a confinement refusal, and the path here came from
+ * the walk, which already resolved and confined it; a race there is the same
+ * shape `contentFor` handles, and it is handled the same way — as this record's
+ * own failure rather than as an aborted pass (AD-7).
+ */
+function storyLocationOf(reader: ConfinedReader, entries: readonly InventoryEntry[]): StoryLocation {
+  const found = trackingFiles(entries);
+  if (found.paths.length > 1) {
+    return locateStories({ kind: 'ambiguous', candidates: found.relatives });
+  }
+  const only = found.paths[0];
+  if (only === undefined) {
+    return locateStories({
+      kind: 'absent',
+      reason: `nothing in this project was identified as ${TRACKING_FILE}, which is a normal project shape`,
+    });
+  }
+
+  let read;
+  try {
+    read = reader.readText(toPlatform(only));
+  } catch (error: unknown) {
+    // A path the walk resolved inside the root resolving outside it moments
+    // later: a race rather than a shape, reported as this record's failure.
+    const reason = error instanceof Error ? error.message : String(error);
+    if (error instanceof ConfinementError) {
+      return locateStories({ kind: 'unreadable', stage: 'confinement', reason });
+    }
+    return locateStories({ kind: 'unreadable', stage: 'read', reason });
+  }
+  if (!read.ok) {
+    // The reader's own state carried through rather than flattened: a file that
+    // vanished between the walk and this read is `absent`, which is FR-75's
+    // shape and not a defect; anything else is a file we have and cannot use.
+    return read.state === 'absent'
+      ? locateStories({ kind: 'absent', stage: read.stage, reason: read.reason })
+      : locateStories({ kind: 'unreadable', stage: read.stage, reason: read.reason });
+  }
+
+  return locateStories({ kind: 'read', field: declaredLocation(reader, read.text) });
+}
+
+/**
+ * The `story_location` scalar, and what resolving it answered.
+ *
+ * AD-13's answers kept apart, which is the whole reason this is a function
+ * rather than a `fields.get`: `undefined` from a `Map` cannot tell "no such
+ * key" from "a key this reader declined", and `readUnfenced` reports the second
+ * in `skipped` precisely so the difference survives. A `?? ''` here would be
+ * the empty-success AD-13 forbids.
+ *
+ * **A key declared twice is declined**, and that is the answer this function
+ * had to grow. `readUnfenced` is first-wins and *reports* the repeat, and the
+ * report was being discarded — so `story_location: docs/stories` followed by
+ * `story_location: /etc` came back as `docs/stories` while every YAML parser,
+ * BMAD's own tooling included, takes the last. The dashboard would have named
+ * one location while the tool that wrote the file used the other. Two readings
+ * with nothing to prefer between them is the case this codebase declines
+ * everywhere else, so it is declined here.
+ */
+function declaredLocation(reader: ConfinedReader, text: string): FieldReading {
+  const block = readUnfenced(text);
+
+  if (block.duplicates.includes(STORY_LOCATION_FIELD)) {
+    return {
+      kind: 'declined',
+      reason: `${TRACKING_FILE} declares ${STORY_LOCATION_FIELD} more than once and nothing says which is meant: this reader takes the first and a YAML parser takes the last, so the two would disagree`,
+    };
+  }
+
+  const declared = block.fields.get(STORY_LOCATION_FIELD);
+  if (declared === undefined) {
+    return block.skipped.includes(STORY_LOCATION_FIELD)
+      ? {
+          kind: 'declined',
+          reason: `${TRACKING_FILE} has a ${STORY_LOCATION_FIELD} key with no value this reader will interpret`,
+        }
+      : { kind: 'undeclared' };
+  }
+  return { kind: 'value', value: declared, resolved: resolveDeclared(reader, declared) };
+}
+
+/** The adapter's answer, narrowed to the domain's four cases. */
+function resolveDeclared(reader: ConfinedReader, declared: string): Resolution {
+  const resolved = reader.resolveDeclared(declared);
+  if (resolved.ok) return { kind: 'in-tree', path: toPlatform(resolved.path) };
+  if (resolved.outcome === 'out-of-tree') {
+    return { kind: 'out-of-tree', path: toPlatform(resolved.path) };
+  }
+  if (resolved.outcome === 'unresolved') {
+    return { kind: 'unresolved', path: toPlatform(resolved.reportedPath), reason: resolved.reason };
+  }
+  // The sanitizer's rule is named in the sentence rather than carried as a type:
+  // the rule vocabulary lives in the filesystem adapter, and the domain may not
+  // import it (the purity gate forbids the direction).
+  return {
+    kind: 'refused',
+    reason: `${STORY_LOCATION_FIELD} was refused by the path-segment sanitizer (${resolved.rule} in ${JSON.stringify(resolved.component)}): ${resolved.reason}`,
+  };
 }

@@ -1,5 +1,6 @@
 /**
- * Top-level scalars out of a leading frontmatter block. Pure, and no library.
+ * Top-level scalars, out of a frontmatter block or out of a bare YAML file.
+ * Pure, and no library.
  *
  * FR-8's second precedence level asks one question of a document — does its
  * frontmatter declare a `title` or a `type` — and every field that can answer
@@ -11,8 +12,22 @@
  * measuring the trade settled it for this level rather than deferring it again
  * — bundling `yaml` grows `dist/` from about 34KB to about 264KB to buy
  * anchors, tags, merge keys, multi-document streams and flow collections, none
- * of which level 2 reads. The first bundled library still lands with config
- * parsing (FR-10), where nested structure is the point.
+ * of which level 2 reads. **No bundled library is anticipated any more**: this
+ * header used to say the first one "still lands with config parsing (FR-10),
+ * where nested structure is the point", and FR-10 is now deferred indefinitely,
+ * so there is no story queued that needs nested structure. If one ever is, that
+ * is the moment to measure the trade again — not a plan this file is waiting on.
+ *
+ * **Two entry points over one reader**, which is the whole of Story 1.11's
+ * change here. `readFrontmatter` reads a leading `---` block; `readUnfenced`
+ * reads the same zero-indent scalars out of a file that has no fence at all,
+ * which is what `sprint-status.yaml` is (FR-51 needs exactly one scalar out of
+ * it, `story_location`). Every rule below already handled that file — its
+ * `development_status` sub-map is indented and therefore skipped, its comment
+ * header is skipped, a valueless key is declined rather than invented — and the
+ * *only* thing standing between them was the opening-fence gate. A second
+ * hand-rolled reader beside this one would be free to drift from it, so there
+ * is one scan and two doors into it.
  *
  * **What it deliberately refuses to interpret**, each recorded rather than
  * silently flattened, because a reader that guesses at a shape it cannot read
@@ -77,6 +92,36 @@ const KEY = /^[A-Za-z_][A-Za-z0-9_.-]*$/;
 const FENCE = /^(?:---|\.\.\.)$/;
 
 /**
+ * What a run of zero-indent mapping lines yielded.
+ *
+ * Shared by both entry points, because both answer the same three questions
+ * about the same shape and a second copy of them would be two vocabularies for
+ * one reading. AD-13's rule lives in the split between `fields` and `skipped`:
+ * a key this reader declined is **not** the same fact as a key that was not
+ * there, and neither is an empty success.
+ */
+export interface ScalarBlock {
+  /** Top-level flat scalars, in the order they appeared. */
+  readonly fields: ReadonlyMap<string, string>;
+  /** Top-level keys whose value this reader declines to interpret, in order. */
+  readonly skipped: readonly string[];
+  /** Keys that appeared more than once; the first occurrence is the one in `fields`. */
+  readonly duplicates: readonly string[];
+  /**
+   * True when a `---` or `...` line stopped the scan.
+   *
+   * Shared by both doors rather than owned by the fenced one, and that took a
+   * correction: `readUnfenced` dropped this field on the argument that
+   * "terminated" was a claim about a block it has none of, which left **no
+   * caller able to tell that the scan had stopped early at all.** In an
+   * unfenced file the same line means a document boundary, and a reader that
+   * stops at one and cannot say so is the silent-truncation shape AD-13 exists
+   * against. Each door documents what it means by it; neither hides it.
+   */
+  readonly terminated: boolean;
+}
+
+/**
  * What a document's leading frontmatter block yielded.
  *
  * `present` is about the *block*, not about the fields: a document opening with
@@ -85,17 +130,9 @@ const FENCE = /^(?:---|\.\.\.)$/;
  * both apart — a document with no frontmatter did not decline to declare a
  * type, it had nowhere to declare one.
  */
-export interface FrontmatterBlock {
+export interface FrontmatterBlock extends ScalarBlock {
   /** True when the text opens with a `---` fence. */
   readonly present: boolean;
-  /** True when an opened block was closed. An unterminated block is reported, not guessed at. */
-  readonly terminated: boolean;
-  /** Top-level flat scalars, in the order they appeared. */
-  readonly fields: ReadonlyMap<string, string>;
-  /** Top-level keys whose value this reader declines to interpret, in order. */
-  readonly skipped: readonly string[];
-  /** Keys that appeared more than once; the first occurrence is the one in `fields`. */
-  readonly duplicates: readonly string[];
 }
 
 /**
@@ -220,36 +257,45 @@ function scalarOf(raw: string): Scalar {
 }
 
 /**
- * Read the leading frontmatter block of `text`.
+ * The text as lines, with the two invisible things that break a naive split
+ * already dealt with.
  *
- * Never throws and never returns a partial answer as a whole one: everything
- * it declined to read is named in `skipped`, so a caller can tell "no such
- * field" from "a field this reader does not interpret".
+ * A byte-order mark is invisible and would make an opening fence fail to match,
+ * turning a document with frontmatter into one without; a CRLF ending leaves a
+ * `\r` on every line, which would end up inside every value.
  */
-export function readFrontmatter(text: string): FrontmatterBlock {
+function linesOf(text: string): string[] {
+  const body = text.startsWith('\uFEFF') ? text.slice(1) : text;
+  return body.split('\n').map((line) => (line.endsWith('\r') ? line.slice(0, -1) : line));
+}
+
+/**
+ * Scan `lines` from `from` until a fence or the end, collecting zero-indent
+ * scalars.
+ *
+ * The one scan both entry points use. `terminated` says a fence stopped it,
+ * which `readFrontmatter` reports as its block being closed and `readUnfenced`
+ * uses for a different purpose: in an unfenced file a `---` line **starts a
+ * second YAML document**, and keys after it belong to that document rather than
+ * to this one, so the scan stops there too. Reading past it would let a
+ * second document's `story_location` answer for the first one's.
+ */
+function scan(lines: readonly string[], from: number): ScalarBlock {
   const fields = new Map<string, string>();
   const skipped: string[] = [];
   const duplicates: string[] = [];
-
-  // A byte-order mark is invisible and would make the opening fence fail to
-  // match, turning a document with frontmatter into one without.
-  const body = text.startsWith('\uFEFF') ? text.slice(1) : text;
-  const lines = body.split('\n').map((line) => (line.endsWith('\r') ? line.slice(0, -1) : line));
-
-  const opening = lines[0];
-  if (opening === undefined || opening.trimEnd() !== '---') {
-    return { present: false, terminated: false, fields, skipped, duplicates };
-  }
-
   let terminated = false;
-  for (let index = 1; index < lines.length; index += 1) {
+
+  for (let index = from; index < lines.length; index += 1) {
     const line = lines[index] ?? '';
     if (FENCE.test(line.trimEnd())) {
       terminated = true;
       break;
     }
     // Indentation first. See the header: this is the check that stops a nested
-    // `type:` four levels down being read as the document's own declaration.
+    // `type:` four levels down being read as the document's own declaration,
+    // and the same check is what keeps `sprint-status.yaml`'s
+    // `development_status` sub-map out of the top-level fields.
     if (line.startsWith(' ') || line.startsWith('\t')) continue;
     const trimmed = line.trim();
     if (trimmed === '' || trimmed.startsWith('#')) continue;
@@ -277,5 +323,72 @@ export function readFrontmatter(text: string): FrontmatterBlock {
     fields.set(key, scalar.text);
   }
 
-  return { present: true, terminated, fields, skipped, duplicates };
+  return { fields, skipped, duplicates, terminated };
+}
+
+/**
+ * Read the leading frontmatter block of `text`.
+ *
+ * Never throws and never returns a partial answer as a whole one: everything
+ * it declined to read is named in `skipped`, so a caller can tell "no such
+ * field" from "a field this reader does not interpret".
+ */
+export function readFrontmatter(text: string): FrontmatterBlock {
+  const lines = linesOf(text);
+  const opening = lines[0];
+  if (opening === undefined || opening.trimEnd() !== '---') {
+    return {
+      present: false,
+      terminated: false,
+      fields: new Map(),
+      skipped: [],
+      duplicates: [],
+    };
+  }
+  return { present: true, ...scan(lines, 1) };
+}
+
+/**
+ * Read the zero-indent scalars of a YAML file that has **no** fence.
+ *
+ * The entry point Story 1.11 needed and the one gate that was blocking it:
+ * `readFrontmatter` returns `present: false` for anything whose first line is
+ * not `---`, and `sprint-status.yaml` opens with a block of `#` comments. Every
+ * other rule in this file already handles that file correctly, so this is the
+ * same scan with the fence requirement removed rather than a second reader.
+ *
+ * **It is still not a YAML parser and must not become one.** Nested maps stay
+ * skipped by the indentation rule \u2014 which is what keeps `development_status`'s
+ * per-story statuses out of the top-level fields, and those statuses are Story
+ * 2.8's to read, not this reader's \u2014 sequences and flow collections stay
+ * declined, and a valueless key stays declined into `skipped` rather than
+ * invented as an empty string. That last one is AD-13 applied here: "no such
+ * key" and "a key that says nothing" are different answers, and neither is an
+ * empty success.
+ *
+ * `present` is deliberately absent from the return type: there is no block to
+ * be present, so a caller cannot read that fact off a shape with no honest
+ * value for it. `terminated` **is** present, and here it means the scan stopped
+ * at a document boundary rather than at the end of the file. That is the fact
+ * an earlier version withheld, leaving a caller unable to tell a complete
+ * reading from a truncated one.
+ */
+export function readUnfenced(text: string): ScalarBlock {
+  const lines = linesOf(text);
+  // **Start after a leading document-start marker.** This began at line 0
+  // unconditionally, and `scan`'s first act is the fence test, so a
+  // `sprint-status.yaml` whose first line is `---` terminated before a single
+  // key was read and came back with no fields at all. The caller then reported
+  // that as "declares no `story_location`" over a file that plainly declared
+  // one, which is the empty-success AD-13 forbids, produced by the very reader
+  // this story built to keep "nobody said anything" apart from "we could not
+  // tell". A leading `---` in YAML *opens* the first document, so its keys are
+  // this document's keys and the scan belongs after it.
+  //
+  // Only `---`, not `...`: a document-*end* marker on the first line means the
+  // document is already over, and skipping it would read the next document's
+  // keys as this one's. `scan` stops at it and `terminated` says so.
+  const opening = lines[0];
+  const from = opening !== undefined && opening.trimEnd() === '---' ? 1 : 0;
+  return scan(lines, from);
 }

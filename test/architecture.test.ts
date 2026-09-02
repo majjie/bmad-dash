@@ -816,10 +816,24 @@ test('identity is derived in one place, and that place is the pure layer', async
     ],
     'only the snapshot pass, the document model, the interpretation rule and the run facts read the authority',
   );
+  // Story 1.11's deliberate edit, and the reason it is deliberate rather than a
+  // quiet import: this set exists to stop the frontmatter reader becoming
+  // "something anything may key identity on", and the pass is now a second
+  // importer. What it reads through it is **not** an identity — it is the
+  // `story_location` scalar out of `sprint-status.yaml`, through the unfenced
+  // entry point, and the verdict for that file was decided by the authority at
+  // level 1 from its location without its content being opened. So the rule the
+  // set protects is intact: no consumer here derives a family from frontmatter
+  // except the authority. A render module or an adapter appearing in this list
+  // would be the failure it is for.
+  //
+  // The alternative was a second hand-rolled zero-indent scalar reader in the
+  // pass, which is two readers free to drift from each other over one file
+  // format — the trade this widening buys out of.
   assert.deepEqual(
     await importersOf(REPO_ROOT, 'src/domain/frontmatter.ts'),
-    ['src/domain/identity.ts'],
-    'level 2 is part of the authority, not a reader anything else may key identity on',
+    ['src/cli/inventory.ts', 'src/domain/identity.ts'],
+    'level 2 is part of the authority; the pass may read a configured location and nothing else',
   );
 });
 
@@ -860,10 +874,17 @@ test('the signal vocabulary and the interpretation rule are pure, with exact imp
   // adapter that belongs there: it returns a stage from this vocabulary rather
   // than spelling a fourth copy of it, and a port depending on the domain is
   // the permitted direction (the reverse is what the purity rule forbids).
+  //
+  // Story 1.11's addition is the third, and it is inside the pure layer:
+  // `src/domain/sprint.ts` reuses `Readability` and `ReadStage` for the
+  // tracking file's own signal rather than restating either. That is the
+  // *point* of the exact set rather than a strain on it — a fifth copy of the
+  // four states appearing somewhere is the failure, and a domain module reading
+  // this vocabulary is the fix.
   assert.deepEqual(
     await importersOf(REPO_ROOT, 'src/domain/signal.ts'),
-    ['src/adapters/fs/read.ts', 'src/cli/inventory.ts'],
-    'the signal vocabulary is shared by the reading adapter and the pass; a third importer is a decision',
+    ['src/adapters/fs/read.ts', 'src/cli/inventory.ts', 'src/domain/sprint.ts'],
+    'the signal vocabulary is shared by the reading adapter, the pass and the location rule; a fourth importer is a decision',
   );
   assert.deepEqual(
     await importersOf(REPO_ROOT, 'src/domain/interpretation.ts'),
@@ -904,6 +925,74 @@ test('the run facts are pure, with an exact importer set of their own', async ()
   // module's only dependency may be the authority beside it.
   const scanned = await collectSourceFiles(REPO_ROOT);
   assert.ok(scanned.includes('src/domain/runs.ts'), 'src/domain/runs.ts is not scanned by the purity gate');
+});
+
+test('the location vocabulary is pure, with an exact importer set of its own', async () => {
+  // Story 1.11's new domain module, on the same terms as the four beside it.
+  // The exact set is what makes the location answer a *recorded* one: FR-51 is
+  // resolved once, in the pass, and Story 1.12 renders what it recorded. A
+  // second importer here would most likely be a surface resolving
+  // `story_location` for itself, which is the second discovery path AD-9 exists
+  // to forbid — and the one whose mistake reads a file outside the project.
+  assert.deepEqual(
+    await importersOf(REPO_ROOT, 'src/domain/sprint.ts'),
+    ['src/cli/inventory.ts'],
+    'only the snapshot pass resolves the story location; Story 1.12 consumes what it recorded',
+  );
+
+  // And the purity rule reaches it: every rule in this file is of the form "no
+  // scanned file does X", which passes vacuously over a file the scan never
+  // opened. The frozen constraint has no `import type` exemption, so this
+  // module's only dependency may be the signal vocabulary beside it — no path
+  // type, no reader, no `node:fs`, which is also what makes "it never read
+  // anything" a property of the code rather than of a test.
+  const scanned = await collectSourceFiles(REPO_ROOT);
+  assert.ok(
+    scanned.includes('src/domain/sprint.ts'),
+    'src/domain/sprint.ts is not scanned by the purity gate',
+  );
+});
+
+test('the path-segment sanitizer is scanned, and importable only by the reading surface', async () => {
+  // AD-10's first check. The exact set is narrow on purpose: the sanitizer
+  // exists so that *one* place decides whether a content-derived segment may
+  // become a path, and a second importer is the beginning of a caller applying
+  // its own rules — or of the check being skipped by whoever forgot it. The
+  // reading surface is the one place a path is built and then read, so it is the
+  // one place the check belongs.
+  //
+  // A new module under `src/adapters/fs/` is the addition AD-1 exists for, so
+  // the first thing asserted is that the gate can see it at all: the generic
+  // import and mutation rules above are worth nothing over a file the scan never
+  // opened.
+  const scanned = await collectSourceFiles(REPO_ROOT);
+  assert.ok(
+    scanned.includes('src/adapters/fs/segments.ts'),
+    `the sanitizer is not scanned; found: ${scanned.join(', ')}`,
+  );
+
+  assert.deepEqual(
+    await importersOf(REPO_ROOT, 'src/adapters/fs/segments.ts'),
+    ['src/adapters/fs/read.ts'],
+    'the sanitizer runs where paths are read, and a second importer is a decision',
+  );
+
+  // And it touches nothing of its own — not the filesystem, and not even
+  // `node:path`. AD-1 *permits* `node:fs` under this directory, so the generic
+  // confinement rule says nothing here; the claim worth pinning is that the
+  // sanitizer is a pure decision over a string, which is what lets it run
+  // before any syscall could carry the value.
+  //
+  // The import set is **empty** rather than `['node:path']`, and that is the
+  // review round's finding rather than tidiness: `path.sep` was the module's
+  // one platform-dependent line, in a module whose whole doctrine is that a
+  // value meaning two things on two hosts is refused rather than resolved two
+  // ways. Removing the platform question removed the import with it.
+  const source = await readFile(join(REPO_ROOT, 'src', 'adapters', 'fs', 'segments.ts'), 'utf8');
+  const specifiers = [...scanSource(source).withLiterals.matchAll(SPECIFIER_PATTERN)].flatMap(
+    (match) => (match[2] === undefined ? [] : [match[2]]),
+  );
+  assert.deepEqual(specifiers, [], 'the sanitizer decides over a string and imports nothing at all');
 });
 
 test('the inventory pass has a stated importer set, so its first surface is a deliberate edit', async () => {

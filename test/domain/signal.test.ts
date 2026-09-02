@@ -220,8 +220,8 @@ test('a signal that read nothing carries no stage, and does not claim the conten
   );
   assert.doesNotMatch(
     reasonOf(LISTING_NOT_TEXT),
-    /nothing read it/,
-    "a directory's listing is read, so its reason must not say nothing read it",
+    /identification never opened it/,
+    "a directory's listing is read, so its reason must not borrow UNREAD's sentence",
   );
 });
 
