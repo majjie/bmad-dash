@@ -235,9 +235,17 @@ export type Entry =
  * A reader confined to one root.
  *
  * Constructed with the root, so confinement is a property of the object rather
- * than an argument someone can forget. Later stories widen this to a set of
- * permitted roots when a configured artifact location becomes the second
- * member; with one member a set would be an abstraction nothing uses.
+ * than an argument someone can forget.
+ *
+ * **One root, settled.** This comment used to promise that a later story would
+ * widen it to a *set* of permitted roots, once a configured artifact location
+ * became the second member. That widening is cancelled: AD-9's rule was
+ * narrowed to a single root on 2026-09-02, because the story that would have
+ * supplied the second member (FR-10, artifact roots from the project's own
+ * config) is deferred indefinitely. A second root is now an architecture
+ * change with a spine edit behind it, not an anticipated next step — so code
+ * here may rely on there being one, and a reader that needs to reach two
+ * places is a signal to revisit AD-9 rather than to add a member.
  */
 export class ConfinedReader {
   readonly #root: CanonicalPath;

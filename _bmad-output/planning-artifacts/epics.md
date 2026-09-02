@@ -137,7 +137,7 @@ From the architecture spine (19 architecture decisions, hexagonal paradigm, feat
 - AD-6: Ordering evidence travels on the item; unordered is a value, with a documented tiebreak.
 - AD-7: Typed degradation — never an exception aborting the pass, never a silent omission.
 - AD-8: Signal availability recorded per artifact and per signal as exactly one of present, absent, unreadable, unchecked.
-- AD-9: Project root and artifact roots resolved once in the composition root; permitted roots are a set, admission-checked.
+- AD-9: Project root resolved once in the composition root; exactly one permitted root, never widened (narrowed 2026-09-02; artifact roots from config are deferred with FR-10).
 - AD-10: Content-derived path segments sanitized and confinement-checked on every read.
 - AD-11: Currency mismatch surfaced on open with a refresh offer.
 - AD-12: Ephemeral single process; nothing persisted, no outbound network, literal `127.0.0.1`.
