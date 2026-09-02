@@ -214,8 +214,16 @@ function requireBound(name: string, value: number): void {
   }
 }
 
-/** `relative` for a child, keeping the starting directory spelled `.`. */
-function childRelative(parent: string, name: string): string {
+/**
+ * `relative` for a child, keeping the starting directory spelled `.`.
+ *
+ * Exported because a caller composing the same path has to compose it the same
+ * way: `src/cli/inventory.ts` builds a `relative` for every child its skip
+ * policy excludes — those never become entries, so the walk cannot hand it one
+ * — and a second copy of this one-liner is a second spelling of the walk's own
+ * convention, free to drift the moment either side changes.
+ */
+export function childRelative(parent: string, name: string): string {
   return parent === '.' ? name : `${parent}/${name}`;
 }
 

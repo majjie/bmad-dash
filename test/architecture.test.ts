@@ -11,8 +11,11 @@
  *      it does nothing to stop that directory calling `writeFile`. Read-only is
  *      a property of the operations, not of the file layout.
  *   3. **Purity.** `src/domain/` has no outgoing imports at all (frozen
- *      constraint). Written before the directory exists, because a prefix rule
- *      that has only ever seen an empty layer passes vacuously.
+ *      constraint). Written before the directory existed, because a prefix rule
+ *      that has only ever seen an empty layer passes vacuously. Story 1.7
+ *      created the layer, so the real-tree assertion is now load-bearing and
+ *      the scratch fixture beside it proves the rule fires rather than that the
+ *      layer is empty.
  *   4. **Analysability.** `process.getBuiltinModule`, `createRequire`, a
  *      dynamic `import()` with a non-literal specifier, and a computed member
  *      call inside a module that imports `fs` all reach an operation without a
@@ -38,6 +41,7 @@ import { fileURLToPath } from 'node:url';
 
 import {
   GATED_MODULES,
+  PURE_LAYER,
   SCANNED_ROOTS,
   SPECIFIER_PATTERN,
   collectSourceFiles,
@@ -541,9 +545,22 @@ test('an import that stays inside src/domain/ is permitted', async (t) => {
 });
 
 test('the purity rule is not merely passing vacuously on the real tree', async (t) => {
-  // `src/domain/` does not exist yet, so the real-tree assertion above is
-  // trivially true. This proves the rule fires when the layer does exist —
-  // which is the moment Story 1.5 adds its first file.
+  // Two halves, and the first one only started holding in Story 1.7: the layer
+  // now exists, so the real-tree assertion above is a claim about real files
+  // rather than about an empty prefix. The scratch fixture below stays, because
+  // "the layer is non-empty" and "the rule fires" are different facts and the
+  // second is the one the frozen constraint rests on.
+  const real = await collectSourceFiles(REPO_ROOT);
+  const pure = real.filter((file) => file.startsWith(PURE_LAYER));
+  // Counted, not enumerated: the claim is that the layer is non-empty and the
+  // scan reaches it, which is what makes the assertion above load-bearing. A
+  // list of filenames here would have to be edited by every future domain
+  // module while checking nothing that this does not.
+  assert.ok(
+    pure.length > 0,
+    `${PURE_LAYER} is empty, so the purity assertion above passes vacuously`,
+  );
+
   const root = await scratch(t);
   assert.deepEqual(await findDomainViolations(root), [], 'no layer, no findings');
 
@@ -755,12 +772,45 @@ test('the tree walk is scanned, reads through the confined reader, and never lis
 test('the tree walk has a stated importer set, so its first consumer is a deliberate edit', async () => {
   // The same enforcement shape as the two assertions around it, and for the
   // same reason: AD-10's only mechanical protection is an exact importer set,
-  // so a new adapter that reads and recurses needs its own. Empty today —
-  // Story 1.7 is the first consumer, and adding it is an edit here.
+  // so a new adapter that reads and recurses needs its own. Story 1.7 is that
+  // first consumer, and this line is the deliberate edit the set existed to
+  // require — it was asserted empty until the inventory pass landed.
   assert.deepEqual(
     await importersOf(REPO_ROOT, 'src/adapters/fs/walk.ts'),
+    ['src/cli/inventory.ts'],
+    'only the inventory pass composes the walk; a second consumer is a decision',
+  );
+});
+
+test('identity is derived in one place, and that place is the pure layer', async () => {
+  // AD-4's mechanical half. "Every other unit consumes the recorded verdict and
+  // never re-derives identity" is worth nothing as an intention: the cheapest
+  // way for it to break is a render module importing the authority to ask a
+  // question it should have been handed the answer to. So the authority has an
+  // exact importer set, like the walk and the unconfined lister, and the
+  // frontmatter reader — which is level 2's whole implementation — is
+  // importable only by the authority itself.
+  assert.deepEqual(
+    await importersOf(REPO_ROOT, 'src/domain/identity.ts'),
+    ['src/cli/inventory.ts'],
+    'only the snapshot pass asks the authority; everything else consumes the verdict',
+  );
+  assert.deepEqual(
+    await importersOf(REPO_ROOT, 'src/domain/frontmatter.ts'),
+    ['src/domain/identity.ts'],
+    'level 2 is part of the authority, not a reader anything else may key identity on',
+  );
+});
+
+test('the inventory pass has a stated importer set, so its first surface is a deliberate edit', async () => {
+  // Empty on purpose, and recorded as such in `deferred-work.md` rather than
+  // left for a reader to find an unreferenced module: Story 1.12 renders the
+  // inventory and is the first consumer. `esbuild` bundles from
+  // `src/cli/index.ts`, so nothing unreachable reaches `dist/`.
+  assert.deepEqual(
+    await importersOf(REPO_ROOT, 'src/cli/inventory.ts'),
     [],
-    'nothing in the shipped source consumes the walk yet; Story 1.7 is the first',
+    'nothing serves the inventory yet; Story 1.12 is the first, and adding it is an edit here',
   );
 });
 
