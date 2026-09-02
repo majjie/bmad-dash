@@ -205,7 +205,7 @@ Seed — verified current at authoring; the code owns this once it exists.
 | TypeScript | 5.x (devDependency) |
 | Node.js | 24 (floor: 22) |
 | markdown-it | 15.x |
-| yaml | 2.x |
+| yaml | 2.9.x — not yet added; bundled as a devDependency when it lands |
 | Preact | 10.x |
 | esbuild | 0.28.x (devDependency) |
 | HTTP server | `node:http` (built-in) |
@@ -215,6 +215,8 @@ Seed — verified current at authoring; the code owns this once it exists.
 Verified against the npm registry and nodejs.org on 2026-08-28.
 
 **The language is TypeScript, compiled.** Sources are `.ts`; esbuild compiles them to `dist/`, and the package ships compiled output so `npx` never builds. TypeScript and esbuild are devDependencies — the dependency constraint below governs *runtime* dependencies, which remain zero.
+
+**Third-party runtime code is bundled, not installed** (decided 2026-09-02 during Story 1.5 planning; takes effect when the first such library lands, which the config-parsing story now owns). A library of this kind is a devDependency that esbuild inlines into `dist/`, so it is real third-party code executing at runtime while `dependencies` stays empty. This is not a dodge of the constraint below — it satisfies both of that constraint's stated grounds exactly. Install latency on every `npx` invocation is unchanged, because there is still nothing to resolve; and the supply-chain surface is fixed at publish time by us rather than re-resolved on each user's machine, which for a tool whose promise is that it makes no outbound request of its own is the stronger position. What it does give up: a security fix in a bundled library reaches users only when we republish, so a bundled dependency is a maintenance commitment rather than a free lunch. Third-party licence text ships alongside ours. The count still matters — this makes each addition cheaper for the user, not cheaper for us.
 
 Node's native type stripping (stable in 24.12, default-on since 23.6) would remove the build step entirely, and was rejected for now on one ground: it requires raising the floor from 22 to 24.12, and Node 22 is a supported LTS line until 2027-04-30. The distribution argument that establishes Node's presence — BMAD itself installs via `npx` — establishes a runtime, not a version. `tsconfig.json` therefore sets `erasableSyntaxOnly`, keeping every source file natively strippable, so adopting stripping after Node 22 goes EOL is a deletion rather than a refactor. No enums, namespaces, parameter properties or decorators.
 

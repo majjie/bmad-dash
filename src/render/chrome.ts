@@ -83,11 +83,14 @@ export const REFRESH_HREF = '/';
  * artifact paths against this value, so a wrong one here is wrong everywhere
  * and looks authoritative while it is.
  *
- * What is *not* checked here: that the path exists, is a directory, or is
- * canonical. Existence and canonicalization are Story 1.5's, which resolves the
- * root and its artifact directories; a non-existent path therefore renders as a
- * project today. Recorded in `deferred-work.md` rather than half-implemented,
- * since a partial existence check is worse than an absent one.
+ * What is *not* checked here, and why that is now safe: existence,
+ * directory-ness and canonical form. Story 1.5 moved all three upstream — the
+ * composition root recognizes the project before the socket binds, and
+ * `StartServerOptions.projectRoot` is a `CanonicalPath`, so by the time a root
+ * reaches this function the type says it came from that recognition. This
+ * function keeps its own absoluteness check as the render layer's guard for a
+ * caller the type system does not reach, which is the same division as the
+ * server's runtime check.
  */
 export function assertProjectRoot(projectRoot: unknown): string {
   if (typeof projectRoot !== 'string' || projectRoot.trim() === '') {

@@ -34,6 +34,8 @@ import { tmpdir } from 'node:os';
 import { join, dirname, posix } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { makeProjectDir } from './support/project.ts';
+
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 
 interface Manifest {
@@ -83,7 +85,28 @@ function runBuilt(args: readonly string[]): Promise<{
     child.stdout.on('data', (chunk: string) => (stdout += chunk));
     child.stderr.on('data', (chunk: string) => (stderr += chunk));
     child.on('error', fail);
-    child.on('close', (code) => settle({ code, stdout, stderr }));
+
+    // Bounded, like its sibling in `server.test.ts`. This helper is for flags
+    // that answer and exit, so a child that keeps running means the assumption
+    // broke — and without this the suite hangs with no diagnostic instead of
+    // failing with one. Recorded as deferred after the Story 1.4 review and
+    // fixed here, because a mutation that made a refused target serve turned a
+    // failing test into a two-minute stall.
+    const timer = setTimeout(() => {
+      child.kill('SIGKILL');
+      fail(
+        new Error(
+          `runBuilt(${JSON.stringify(args)}) did not exit within ${TIMEOUT_MS}ms. ` +
+            `stdout: ${JSON.stringify(stdout)} stderr: ${JSON.stringify(stderr)}`,
+        ),
+      );
+    }, TIMEOUT_MS);
+    timer.unref();
+
+    child.on('close', (code) => {
+      clearTimeout(timer);
+      settle({ code, stdout, stderr });
+    });
   });
 }
 
@@ -101,18 +124,28 @@ const SYMLINK_FLAG_SETS: readonly (readonly string[])[] = [
   ['--preserve-symlinks', '--preserve-symlinks-main'],
 ];
 
+
 interface Served {
   readonly url: string;
   readonly status: number;
+  /** Collected so a test can assert what the page says, not only that it came. */
+  readonly body: string;
+  /** And what the process said about itself while serving. */
+  readonly stderr: string;
 }
 
 /**
  * Run `entry` with `node`, wait for the URL it prints, fetch it, then stop.
  * Rejects with a diagnostic — never hangs — if no URL arrives.
  */
-function serveVia(entry: string, cwd: string, flags: readonly string[] = []): Promise<Served> {
+function serveVia(
+  entry: string,
+  cwd: string,
+  flags: readonly string[] = [],
+  args: readonly string[] = [],
+): Promise<Served> {
   return new Promise<Served>((resolve, reject) => {
-    const child = spawn(process.execPath, [...flags, entry, '--no-open'], { cwd });
+    const child = spawn(process.execPath, [...flags, entry, '--no-open', ...args], { cwd });
     let stdout = '';
     let stderr = '';
     let settled = false;
@@ -149,7 +182,7 @@ function serveVia(entry: string, cwd: string, flags: readonly string[] = []): Pr
         return;
       }
       void statusOf(Number(port)).then(
-        (status) => finish(() => resolve({ url, status })),
+        ({ status, body }) => finish(() => resolve({ url, status, body, stderr })),
         (error: unknown) => finish(() => reject(error)),
       );
     });
@@ -168,11 +201,13 @@ function serveVia(entry: string, cwd: string, flags: readonly string[] = []): Pr
   });
 }
 
-function statusOf(port: number): Promise<number> {
-  return new Promise<number>((resolve, reject) => {
+function statusOf(port: number): Promise<{ status: number; body: string }> {
+  return new Promise((resolve, reject) => {
     const req = httpRequest({ host: '127.0.0.1', port, path: '/', method: 'GET' }, (res) => {
-      res.resume();
-      res.on('end', () => resolve(res.statusCode ?? 0));
+      let body = '';
+      res.setEncoding('utf8');
+      res.on('data', (chunk: string) => (body += chunk));
+      res.on('end', () => resolve({ status: res.statusCode ?? 0, body }));
     });
     req.on('error', reject);
     req.end();
@@ -231,8 +266,7 @@ for (const flags of SYMLINK_FLAG_SETS) {
   const label = flags.length === 0 ? 'no flags' : flags.join(' ');
 
   test(`through a symlink with ${label}, the CLI prints a URL and serves`, async (t) => {
-    const dir = await mkdtemp(join(tmpdir(), 'bmad-dash-link-'));
-    t.after(() => rm(dir, { recursive: true, force: true }));
+    const dir = await makeProjectDir(t, 'bmad-dash-link-');
 
     const link = join(dir, 'bmad-dash');
     await symlink(BUILT_ENTRY, link);
@@ -244,8 +278,7 @@ for (const flags of SYMLINK_FLAG_SETS) {
 
   test(`through a node_modules/.bin symlink with ${label}, the CLI serves`, async (t) => {
     // The layout `npx` and a global install actually create.
-    const consumer = await mkdtemp(join(tmpdir(), 'bmad-dash-consumer-'));
-    t.after(() => rm(consumer, { recursive: true, force: true }));
+    const consumer = await makeProjectDir(t, 'bmad-dash-consumer-');
 
     const binDir = join(consumer, 'node_modules', '.bin');
     await mkdir(binDir, { recursive: true });
@@ -259,8 +292,7 @@ for (const flags of SYMLINK_FLAG_SETS) {
 
 test('through a symlink to a symlink, the CLI still serves', async (t) => {
   // npm links can chain; realpath resolution must follow the whole chain.
-  const dir = await mkdtemp(join(tmpdir(), 'bmad-dash-chain-'));
-  t.after(() => rm(dir, { recursive: true, force: true }));
+  const dir = await makeProjectDir(t, 'bmad-dash-chain-');
 
   const first = join(dir, 'first');
   const second = join(dir, 'second');
@@ -273,8 +305,7 @@ test('through a symlink to a symlink, the CLI still serves', async (t) => {
 test('invoked as a copy at an unrelated path, the CLI still serves', async (t) => {
   // Not a symlink at all: proves the guard recognises the module by its own
   // realpath rather than by anything about the original location.
-  const dir = await mkdtemp(join(tmpdir(), 'bmad-dash-copy-'));
-  t.after(() => rm(dir, { recursive: true, force: true }));
+  const dir = await makeProjectDir(t, 'bmad-dash-copy-');
 
   const copy = join(dir, 'bmad-dash.js');
   await copyFile(BUILT_ENTRY, copy);
@@ -397,4 +428,59 @@ test('a real invocation actually reaches a platform launcher with the announced 
   );
   // And behind the end-of-options separator, so a URL cannot become an option.
   assert.ok(recorded.includes('--'), `no end-of-options separator in ${JSON.stringify(recorded)}`);
+});
+
+test('a real invocation shows the canonical root, and a non-project binds nothing', async (t) => {
+  // The seam, end to end through a real process. Recognition happens in the
+  // composition root and the canonical root has to survive all the way to the
+  // served page — where the header prints it — so this observes it at the
+  // consuming end rather than where it was produced.
+  const project = await makeProjectDir(t, 'bmad-dash-e2e-');
+  const served = await serveVia(BUILT_ENTRY, project);
+  assert.equal(served.status, 200);
+  assert.ok(
+    served.body.includes(project),
+    `the page does not name the resolved root ${project}`,
+  );
+
+  // And the refusal: a directory with one marker must exit 2 having bound
+  // nothing at all. "Nothing bound" is asserted by the absence of a URL on
+  // stdout, since there is no port to try connecting to.
+  const half = await mkdtemp(join(tmpdir(), 'bmad-dash-half-'));
+  t.after(() => rm(half, { recursive: true, force: true }));
+  await mkdir(join(half, '_bmad'), { recursive: true });
+
+  const refused = await runBuilt([half]);
+  assert.equal(refused.code, 2, `expected exit 2, got ${String(refused.code)}`);
+  assert.equal(refused.stdout, '', 'a refused target must announce no URL');
+  assert.match(refused.stderr, /is not a BMAD project/);
+  assert.match(refused.stderr, /_bmad-output is missing/);
+});
+
+test('a symlinked target is served as its real path, not as the link', async (t) => {
+  // The seam that a same-path fixture cannot test. When the target is already
+  // canonical, passing the raw argument and passing the resolved root are
+  // indistinguishable — so replacing one with the other passed the whole suite.
+  // Reaching the project through a symlink makes the two differ, and the page
+  // must show the real path, because every later story keys artifacts by it.
+  const project = await makeProjectDir(t, 'bmad-dash-symtarget-');
+  const holder = await mkdtemp(join(tmpdir(), 'bmad-dash-symlink-'));
+  t.after(() => rm(holder, { recursive: true, force: true }));
+
+  const link = join(holder, 'via-link');
+  await symlink(project, link);
+
+  const served = await serveVia(BUILT_ENTRY, holder, [], ['via-link']);
+  assert.equal(served.status, 200);
+  assert.ok(served.body.includes(project), `the page does not name the real root ${project}`);
+  assert.ok(!served.body.includes(link), `the page shows the link path ${link}`);
+
+  // And the stderr diagnostic, which is the line most likely to be pasted into
+  // a bug report. Reverting it to the raw argument passed the whole suite,
+  // leaving one run able to give two different answers to "which project".
+  assert.ok(
+    served.stderr.includes(`Target: ${project}`),
+    `the Target line does not name the real root: ${JSON.stringify(served.stderr)}`,
+  );
+  assert.ok(!served.stderr.includes(link), `the Target line shows the link path ${link}`);
 });

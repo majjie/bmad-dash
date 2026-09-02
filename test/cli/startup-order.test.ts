@@ -25,6 +25,8 @@ import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { run } from '../../src/cli/index.ts';
+import { makeProjectDir } from '../support/project.ts';
+import { canonical } from '../../src/adapters/fs/paths.ts';
 import type { ServerHandle } from '../../src/adapters/http/server.ts';
 
 /**
@@ -54,7 +56,7 @@ function stubHandle(): ServerHandle {
     port: 1,
     family: 'IPv4',
     addressInfo: { address: '127.0.0.1', port: 1, family: 'IPv4' },
-    projectRoot: PROJECT_ROOT,
+    projectRoot: canonical(PROJECT_ROOT),
     get socketErrorListeners(): number {
       return socket.listenerCount('error');
     },
@@ -194,7 +196,7 @@ for (const signal of ['SIGTERM', 'SIGINT', 'SIGHUP'] as const) {
   });
 }
 
-test('the root the composition root resolves is the root the server is given', async () => {
+test('the root the composition root resolves is the root the server is given', async (t) => {
   // The seam this story opened, asserted at the *consuming* end. Both halves
   // were already tested — `parseInvocation` resolves the argument, and the
   // render layer prints whatever root it is handed — with nothing crossing the
@@ -203,7 +205,10 @@ test('the root the composition root resolves is the root the server is given', a
   // `invocation.projectRoot` independently of what reaches `start`, so it
   // cannot catch this, and no other test reads a response body.
   let seen: unknown = '<never called>';
-  const target = '/tmp/bmad-dash-seam-check';
+  // A real project, because resolution now happens before the bind: a synthetic
+  // path exits 2 and `start` is never reached, which would make this pass for
+  // the wrong reason.
+  const target = await makeProjectDir(t, 'bmad-dash-seam-');
 
   const code = await run([target], {
     launch: () => Promise.resolve({ opened: true, command: 'stub' }),
@@ -384,5 +389,44 @@ test('an honoured port is not remarked on, and neither is the default', async ()
       onSignal: () => {},
     });
     assert.doesNotMatch(err.join(''), /was not available/, `${argv.join(' ') || '(default)'} should be quiet`);
+  }
+});
+
+test('a mistyped target exits 2 and an unreachable one exits 1', async (t) => {
+  // The CLI separates "you typed it wrong" from "it could not start", and a
+  // directory the tool is denied is the second kind: the invocation was fine
+  // and the environment was not. A wrapper script branching on the code needs
+  // those apart, and collapsing them back to 2 passed the whole suite.
+  const { mkdtemp, mkdir, chmod, rm } = await import('node:fs/promises');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+
+  const deps = {
+    start: () => Promise.resolve(stubHandle()),
+    launch: () => Promise.resolve({ opened: true as const, command: 'stub' }),
+    stdout: () => {},
+    stderr: () => {},
+    onSignal: () => {},
+  };
+
+  const base = await mkdtemp(join(tmpdir(), 'bmad-dash-exit-'));
+  t.after(() => rm(base, { recursive: true, force: true }));
+
+  // Usage errors: a path that is not there, and a directory that is not a project.
+  assert.equal(await run([join(base, 'nope')], deps), 2, 'an absent path is a usage error');
+  assert.equal(await run([base], deps), 2, 'a non-project is a usage error');
+
+  if (process.platform === 'win32' || process.getuid?.() === 0) return;
+
+  const project = join(base, 'project');
+  await mkdir(project);
+  for (const marker of ['_bmad', '_bmad-output']) {
+    await mkdir(join(project, marker), { recursive: true });
+  }
+  await chmod(base, 0o000);
+  try {
+    assert.equal(await run([project], deps), 1, 'an unreachable target is a startup failure');
+  } finally {
+    await chmod(base, 0o755);
   }
 });

@@ -545,3 +545,49 @@ test('the purity rule is not merely passing vacuously on the real tree', async (
 test('the scanned roots are the ones the assertions claim', () => {
   assert.deepEqual([...SCANNED_ROOTS], ['src', 'web', 'scripts']);
 });
+
+// ---------------------------------------------------------------------------
+// The gate must actually be looking at the files it claims to cover
+// ---------------------------------------------------------------------------
+
+test('the scan reaches every module in the filesystem adapter', async () => {
+  // The gate needed no *rule* change when the reading surface arrived — the
+  // planted-mutation checks below already covered the new files. What was
+  // missing is this: a positive assertion that the scan sees them at all.
+  //
+  // Every rule in this file is of the form "no scanned file does X", and each
+  // is satisfied by a scan that returns nothing. `SCANNED_ROOTS` is walked
+  // recursively, so a directory it silently stopped entering would turn the
+  // whole gate green — the same way a line-based scanner in this project
+  // degraded to a no-op while reporting success.
+  const { readdir } = await import('node:fs/promises');
+  const { join } = await import('node:path');
+
+  const adapterDir = join(REPO_ROOT, 'src', 'adapters', 'fs');
+  const onDisk = (await readdir(adapterDir)).filter((name) => name.endsWith('.ts')).sort();
+  assert.ok(onDisk.length >= 3, `expected the fs adapter's modules, found ${onDisk.join(', ')}`);
+
+  const scanned = await collectSourceFiles(REPO_ROOT);
+  for (const name of onDisk) {
+    const relative = `src/adapters/fs/${name}`;
+    assert.ok(
+      scanned.includes(relative),
+      `${relative} exists but the gate never scanned it. scanned: ${scanned.join(', ')}`,
+    );
+  }
+});
+
+test('the scan reaches the composition root and the render layer too', async () => {
+  const scanned = await collectSourceFiles(REPO_ROOT);
+  for (const required of [
+    'src/cli/index.ts',
+    'src/cli/location.ts',
+    'src/render/page.ts',
+    'src/adapters/http/server.ts',
+    'scripts/run-tests.ts',
+  ]) {
+    assert.ok(scanned.includes(required), `${required} is not scanned by the gate`);
+  }
+  // And the count is not allowed to collapse quietly.
+  assert.ok(scanned.length >= 12, `only ${String(scanned.length)} files scanned`);
+});

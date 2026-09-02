@@ -15,7 +15,7 @@ import { request as httpRequest, createServer, Agent } from 'node:http';
 import { connect } from 'node:net';
 import type { AddressInfo } from 'node:net';
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
-import { mkdir, mkdtemp, readFile, realpath, rm } from 'node:fs/promises';
+import { mkdir, readFile } from 'node:fs/promises';
 import { tmpdir, networkInterfaces } from 'node:os';
 import { join, dirname, resolve as resolvePath, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -26,6 +26,8 @@ import {
   LOOPBACK_ADDRESS,
 } from '../src/adapters/http/server.ts';
 import { parseInvocation, run } from '../src/cli/index.ts';
+import { makeProjectDir } from './support/project.ts';
+import { canonical, toPlatform } from '../src/adapters/fs/paths.ts';
 
 /**
  * A synthetic absolute root. Fixed rather than `process.cwd()` so a test's
@@ -33,7 +35,7 @@ import { parseInvocation, run } from '../src/cli/index.ts';
  * look nothing like this repository so a path leaking from the real filesystem
  * into an assertion is visible.
  */
-const PROJECT_ROOT = '/tmp/bmad-dash-test-project';
+const PROJECT_ROOT = canonical('/tmp/bmad-dash-test-project');
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -754,11 +756,13 @@ test('no argument resolves to the working directory, absolutely', () => {
 });
 
 test('a relative argument is reported as an absolute path by the running CLI', async (t) => {
-  const parent = await realpath(await mkdtemp(join(tmpdir(), 'bmad-dash-rel-')));
-  t.after(() => rm(parent, { recursive: true, force: true }));
+  const parent = await makeProjectDir(t, 'bmad-dash-rel-');
 
   const target = join(parent, 'project');
   await mkdir(target);
+  for (const marker of ['_bmad', '_bmad-output']) {
+    await mkdir(join(target, marker), { recursive: true });
+  }
   const relativeArgument = basename(target);
 
   // Run from `parent`, passing only the bare directory name.
@@ -770,8 +774,7 @@ test('a relative argument is reported as an absolute path by the running CLI', a
 });
 
 test('no argument targets the working directory and prints the URL to stdout', async (t) => {
-  const cwd = await realpath(await mkdtemp(join(tmpdir(), 'bmad-dash-cwd-')));
-  t.after(() => rm(cwd, { recursive: true, force: true }));
+  const cwd = await makeProjectDir(t, 'bmad-dash-cwd-');
 
   const cli = await startCli([], cwd);
   t.after(() => cli.stop());
@@ -782,8 +785,7 @@ test('no argument targets the working directory and prints the URL to stdout', a
 });
 
 test('an explicit path argument targets that path', async (t) => {
-  const target = await realpath(await mkdtemp(join(tmpdir(), 'bmad-dash-target-')));
-  t.after(() => rm(target, { recursive: true, force: true }));
+  const target = await makeProjectDir(t, 'bmad-dash-target-');
 
   const cli = await startCli([target], REPO_ROOT);
   t.after(() => cli.stop());
@@ -1056,14 +1058,24 @@ test('a server given no usable project root refuses to bind at all', async () =>
   // must stop the command; throwing inside a request handler would surface as
   // an uncaught exception and take the process down while the user watches a
   // browser tab hang.
+  // The casts are deliberate. Since Story 1.5 the option is a `CanonicalPath`,
+  // so a TypeScript caller cannot make this mistake — that is the stronger
+  // guard and it is the point of the brand. The runtime check remains for
+  // callers the type system does not reach: a JavaScript consumer, or a cast
+  // exactly like the one below. Asserting through the cast is what keeps the
+  // second guard honest rather than assumed-unreachable.
+  type Unchecked = Parameters<typeof startServer>[0]['projectRoot'];
   for (const bad of ['', '   ']) {
     await assert.rejects(
-      () => startServer({ projectRoot: bad }),
+      () => startServer({ projectRoot: bad as unknown as Unchecked }),
       /needs the resolved project root/,
     );
   }
   for (const bad of ['.', 'relative/path', '../sibling']) {
-    await assert.rejects(() => startServer({ projectRoot: bad }), /must be absolute/);
+    await assert.rejects(
+      () => startServer({ projectRoot: bad as unknown as Unchecked }),
+      /must be absolute/,
+    );
   }
 });
 

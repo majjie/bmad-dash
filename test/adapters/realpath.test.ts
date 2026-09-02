@@ -88,3 +88,35 @@ test('the empty string resolves like "." rather than throwing', () => {
   // and an empty string is not one of them.
   assert.equal(resolveRealPath(''), resolveRealPath('.'));
 });
+
+test('canonicalization goes through the platform resolver, not the JS one', async () => {
+  // Structural, because the behaviour that distinguishes them is unobservable
+  // on a case-sensitive volume — which is what CI and this machine both have.
+  // `realpathSync` resolves symlinks but returns the caller's spelling, so on
+  // macOS or Windows `/Foo` and `/foo` naming one directory would yield two
+  // `CanonicalPath` values and one project would become two identities.
+  //
+  // Swapping `.native` for the JS variant passed the entire suite, so the
+  // mechanism is pinned here in the same idiom the EPIPE ordering uses: assert
+  // the source, and record that the runtime branch is unverified on this
+  // platform rather than pretending otherwise.
+  const { readFile } = await import('node:fs/promises');
+  const { join, dirname } = await import('node:path');
+  const { fileURLToPath } = await import('node:url');
+  const root = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
+
+  const paths = await readFile(join(root, 'src', 'adapters', 'fs', 'paths.ts'), 'utf8');
+  assert.match(
+    paths,
+    /resolveRealPathNative\(absolute\)/,
+    'canonical() must resolve through the native resolver',
+  );
+  assert.doesNotMatch(
+    paths,
+    /resolveRealPath\(absolute\)/,
+    'the JS resolver returns the caller\u2019s spelling and does not fold case',
+  );
+
+  const realpath = await readFile(join(root, 'src', 'adapters', 'fs', 'realpath.ts'), 'utf8');
+  assert.match(realpath, /realpathSync\.native\(path\)/, 'the native variant must be the one called');
+});

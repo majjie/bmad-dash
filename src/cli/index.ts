@@ -14,6 +14,8 @@ import { fileURLToPath } from 'node:url';
 import { startServer, type ServerHandle } from '../adapters/http/server.ts';
 import { resolveRealPath } from '../adapters/fs/realpath.ts';
 import { openBrowser, type LaunchResult } from '../adapters/browser/open.ts';
+import { resolveLocation } from './location.ts';
+import { toPlatform } from '../adapters/fs/paths.ts';
 
 const USAGE = 'Usage: bmad-dash [path] [options]';
 const ACCEPTED =
@@ -370,6 +372,20 @@ export async function run(
    * before the server exists finds nothing to close and exits 0, which is the
    * right answer for an interrupted startup.
    */
+  // Before the socket, and before the shutdown handler: a target that is not a
+  // BMAD project must not bind, so there is nothing to shut down. This is also
+  // the first thing in the run that touches the filesystem.
+  const location = resolveLocation(invocation.projectRoot);
+  if (!location.ok) {
+    stderr(`${location.message}\n`);
+    // A permissions failure is not a usage error. The CLI separates 2 — "you
+    // typed it wrong" — from 1 — "it could not start" — and a directory the
+    // tool is denied is the second kind: the invocation was fine and the
+    // environment was not. A wrapper script branching on the code needs those
+    // apart.
+    return location.reason === 'unreadable' ? EXIT_FAILURE : EXIT_USAGE;
+  }
+
   let handle: ServerHandle | null = null;
   onSignal(
     createShutdownHandler({
@@ -383,7 +399,7 @@ export async function run(
 
   try {
     handle = await start({
-      projectRoot: invocation.projectRoot,
+      projectRoot: location.root,
       port: invocation.port,
       onError: (error) => {
         stderr(`Socket error after bind: ${error.message}\n`);
@@ -407,7 +423,7 @@ export async function run(
     );
   }
 
-  stderr(`Target: ${invocation.projectRoot}\n`);
+  stderr(`Target: ${toPlatform(location.root)}\n`);
   // Last of the readiness announcements. See the comment above before moving
   // anything below this line.
   stdout(`${handle.url}\n`);

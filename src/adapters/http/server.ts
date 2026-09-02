@@ -23,6 +23,7 @@ import type { AddressInfo } from 'node:net';
 
 import { renderPage } from '../../render/page.ts';
 import { assertProjectRoot } from '../../render/chrome.ts';
+import { toPlatform, type CanonicalPath } from '../fs/paths.ts';
 
 /**
  * The only interface this tool ever binds. Never a name, never a wildcard.
@@ -60,8 +61,17 @@ export interface StartServerOptions {
    * inside a request handler, which would take the process down, into a
    * compile error. It was optional and unread for two stories; the mirror of
    * the `--port` finding, where an option had no consumer at all.
+   *
+   * A `CanonicalPath`, not a string, from Story 1.5. The root must be the one
+   * the composition root *recognized* — existence checked, symlinks resolved,
+   * spelled as the filesystem spells it — because every later story keys
+   * artifact identity by it. As a bare string, handing over the raw argument
+   * instead of the resolved root typechecked, and only one end-to-end test
+   * stood between that substitution and shipping. The brand makes it a
+   * compile error, which is what this repo does with invariants it can move
+   * into the type system.
    */
-  readonly projectRoot: string;
+  readonly projectRoot: CanonicalPath;
   /**
    * Preferred port. `0` — the default — asks the OS for a free one. A preferred
    * port that cannot be bound falls back to `0`, so the port reported is always
@@ -85,7 +95,7 @@ export interface ServerHandle {
   /** The `net` layer's account of the bound socket, passed through untouched. */
   readonly addressInfo: BoundAddress;
   /** The root this server renders for, exactly as validated at start. */
-  readonly projectRoot: string;
+  readonly projectRoot: CanonicalPath;
   /**
    * How many `error` listeners are on the socket **right now**. Must be at
    * least one, permanently: exposed so a test can assert the invariant rather
@@ -312,7 +322,7 @@ function handleRequest(
   request: IncomingMessage,
   response: ServerResponse,
   bound: BoundAddress | null,
-  projectRoot: string,
+  projectRoot: CanonicalPath,
   onError: ((error: Error) => void) | undefined,
 ): void {
   if (bound === null) {
@@ -347,7 +357,7 @@ function handleRequest(
     // report beats a server that vanishes.
     let document: string;
     try {
-      document = renderPage(projectRoot);
+      document = renderPage(toPlatform(projectRoot));
     } catch (error: unknown) {
       onError?.(error instanceof Error ? error : new Error(String(error)));
       respondText(response, 500, 'The page could not be rendered.\n');

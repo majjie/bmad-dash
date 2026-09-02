@@ -28,3 +28,30 @@ export function resolveRealPath(path: string): string {
     return path;
   }
 }
+
+/**
+ * Resolve `path` through symlinks *and* through the filesystem's own idea of
+ * how it is spelled.
+ *
+ * `realpathSync.native` defers to the platform's resolver, which on a
+ * case-insensitive filesystem returns the casing actually stored on disk. That
+ * is what makes canonical paths comparable by bytes: `/Foo` and `/foo` naming
+ * one directory come back identically spelled, so nothing downstream has to
+ * fold case — and on a case-sensitive filesystem, where two directories really
+ * can differ only in case, nothing wrongly folds it either. The question is
+ * answered by the volume rather than guessed from the platform, which matters
+ * because a case-sensitive volume on a case-insensitive system is a real
+ * configuration.
+ *
+ * Kept separate from `resolveRealPath` rather than replacing it: that function
+ * serves the entry-point guard, which was earned by a defect, and its two
+ * callers must keep resolving by the same rule as each other rather than by the
+ * best available rule.
+ */
+export function resolveRealPathNative(path: string): string {
+  try {
+    return realpathSync.native(path);
+  } catch {
+    return path;
+  }
+}

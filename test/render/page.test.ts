@@ -22,6 +22,7 @@ import {
 } from '../../src/render/page.ts';
 import { STYLESHEET } from '../../src/render/stylesheet.ts';
 import { startServer } from '../../src/adapters/http/server.ts';
+import { canonical } from '../../src/adapters/fs/paths.ts';
 import { REFRESH_HREF } from '../../src/render/chrome.ts';
 
 /**
@@ -31,6 +32,7 @@ import { REFRESH_HREF } from '../../src/render/chrome.ts';
  * into an assertion is visible.
  */
 const PROJECT_ROOT = '/tmp/bmad-dash-test-project';
+const CANONICAL_ROOT = canonical(PROJECT_ROOT);
 
 /** Everything outside the inlined `<style>` element. */
 function markupOnly(document: string): string {
@@ -170,7 +172,7 @@ test('following the refresh link re-requests the surface and carries nothing acr
   // Refresh is navigation, not script: a page load builds a new snapshot. Two
   // successive GETs must therefore both succeed and, with nothing changed on
   // disk, produce byte-identical documents — no counter, no session, no state.
-  const handle = await startServer({ projectRoot: PROJECT_ROOT });
+  const handle = await startServer({ projectRoot: CANONICAL_ROOT });
   t.after(() => handle.close());
 
   const fetchPage = async (): Promise<{ status: number; body: string }> =>
@@ -194,7 +196,7 @@ test('following the refresh link re-requests the surface and carries nothing acr
 });
 
 test('the adapter serves exactly what render produces, headers unchanged', async (t) => {
-  const handle = await startServer({ projectRoot: PROJECT_ROOT });
+  const handle = await startServer({ projectRoot: CANONICAL_ROOT });
   t.after(() => handle.close());
 
   const response = await fetchRoot(handle.url);
