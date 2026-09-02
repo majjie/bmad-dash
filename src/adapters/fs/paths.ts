@@ -18,12 +18,15 @@
  * Once that has happened, canonical paths compare by bytes.
  *
  * **With one limit, stated here because this file used to overstate it.** A
- * path that does not exist cannot be resolved, and `canonical` returns it
- * absolute and normalized rather than throwing. That is deliberate and load
- * bearing — recognition's whole job is asking about markers that may be absent
- * — but it means the "symlinks resolved" half of the form holds only for paths
- * that exist, and the brand below certifies neither existence nor resolution.
- * `canonical` and `contains` each say what survives.
+ * path that `realpathSync.native` could not resolve — *for any reason* — is
+ * returned absolute and normalized rather than throwing. Not existing is the
+ * common reason and the deliberate one, because recognition's whole job is
+ * asking about markers that may be absent; but `resolveRealPathNative` in
+ * `realpath.ts` catches everything, so the fallback fires just as readily for a
+ * path that does exist and could not be read: `EACCES` on an intermediate
+ * directory, `ELOOP`, `ENAMETOOLONG`. Either way the "symlinks resolved" half
+ * of the form did not happen, and the brand below certifies neither existence
+ * nor resolution. `canonical` and `contains` each say what survives.
  */
 
 import { resolve, relative, isAbsolute, sep } from 'node:path';
@@ -32,18 +35,18 @@ import { resolveRealPathNative } from './realpath.ts';
 
 /**
  * A path that has been through `canonical`: absolute, normalized,
- * platform-shaped, and — if it exists — resolved through the platform's own
- * resolver.
+ * platform-shaped, and — if the platform's own resolver could resolve it —
+ * resolved through that resolver.
  *
  * A branded string rather than a bare one, so a caller cannot pass an
  * un-canonicalized path where a canonical one is required and have it
  * typecheck. That is the whole value — the mistake this file exists to prevent
  * is comparing two paths that were never put in the same form.
  *
- * **What the brand does not assert: that the path exists.** This said
- * "absolute, real", which reads as an existence guarantee the type cannot
- * carry — `canonical` brands a path that is not there, and the suite depends on
- * it doing so. So the brand certifies exactly one thing: that two values of
+ * **What the brand does not assert: that the path exists, or that it
+ * resolved.** This said "absolute, real", which reads as an existence guarantee
+ * the type cannot carry — `canonical` brands a path that is not there, and one
+ * that exists but could not be read, and the suite depends on it doing so. So the brand certifies exactly one thing: that two values of
  * this type were put in the same form and are therefore comparable to each
  * other. A consumer that needs the path to exist has to check, and to say that
  * it checked; `src/cli/location.ts` is where that happens for the project root.
@@ -57,15 +60,20 @@ export type CanonicalPath = string & { readonly __canonical: unique symbol };
  * result: an existing link inside the tree pointing outside it cannot pass a
  * containment check by virtue of its spelling.
  *
- * **A path that cannot be resolved is returned absolute and normalized, with
- * any symlinks in it still unresolved.** Missing paths are the ordinary case
- * here, so this does not throw. What that costs is precise: for a path that
- * does not exist, `contains` answers about the spelling rather than the
- * destination, so a path under a link that leaves the tree reads as inside it.
- * No read escapes as a result — the `stat` that follows resolves the link and
- * finds nothing at the far end — but the answer is about the spelling and not
- * about whatever later appears at it, so a passing containment check on a
- * missing path is not a durable claim.
+ * **A path `realpathSync.native` could not resolve is returned absolute and
+ * normalized, with any symlinks in it still unresolved.** Missing paths are the
+ * ordinary case here, so this does not throw — but "missing" is not the only
+ * case, because `resolveRealPathNative` catches every error the resolver can
+ * raise: a path denied by `EACCES` on an intermediate directory, or refused
+ * with `ELOOP` or `ENAMETOOLONG`, takes the same route while genuinely
+ * existing. What that costs is precise, and identical in every one of those
+ * cases: `contains` answers about the spelling rather than the destination, so
+ * a path under a link that leaves the tree reads as inside it. No read escapes
+ * as a result, because `ConfinedReader.resolveWithin` re-canonicalizes and
+ * re-asks containment on *every* operation rather than trusting an earlier
+ * answer — but the answer here is about the spelling and not about whatever is
+ * or later appears at the far end, so a passing containment check on an
+ * unresolvable path is not a durable claim.
  */
 export function canonical(path: string, from?: string): CanonicalPath {
   // `resolve` runs unconditionally, not only for relative input. An absolute
@@ -115,9 +123,11 @@ export function identical(a: CanonicalPath, b: CanonicalPath): boolean {
  * past this whether or not the path exists: `resolve` removed it before the
  * brand was applied.
  *
- * A symlink cannot either — **provided it exists.** For a path that does not,
- * there was nothing to resolve, and this answers about the spelling. See
- * `canonical` for why that is the deliberate trade and what it costs.
+ * A symlink cannot either — **provided the platform's resolver could resolve
+ * it.** For a path it could not, whether because the path is absent or because
+ * reading it was refused, there was nothing to resolve and this answers about
+ * the spelling. See `canonical` for why that is the deliberate trade and what
+ * it costs.
  */
 export function contains(root: CanonicalPath, child: CanonicalPath): boolean {
   if (identical(root, child)) return true;

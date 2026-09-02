@@ -10,6 +10,7 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { resolve } from 'node:path';
 
 import {
   parseInvocation,
@@ -299,14 +300,23 @@ test('an empty path argument is refused, not treated as the default', () => {
   const invocation = parseInvocation([''], CWD);
   assert.ok(!invocation.ok, 'an empty path must not parse as a serving invocation');
   assert.match(invocation.message, /Empty path argument/);
+  // Same shape as every sibling positional error: what is accepted, then the
+  // usage line. This one appended only `USAGE`, so the one argument error most
+  // likely to come from a wrapper script was the one that did not say what the
+  // tool takes.
+  assert.match(invocation.message, /Accepted arguments:/);
+  assert.match(invocation.message, /Usage: bmad-dash/);
 
   // Absent still means the current directory — that is the default, and it is
   // a different thing from an empty argument.
   assert.equal(serving([]).projectRoot, CWD);
 
   // And a path that is merely odd is still a path: one space names a directory
-  // called " ", which is legal and is not the working directory.
-  assert.equal(serving([' ']).projectRoot, `${CWD}/ `);
+  // called " ", which is legal and is not the working directory. Built with
+  // `resolve` rather than a literal `/`, so the claim does not smuggle in a
+  // POSIX separator — the assertion is about the argument being kept, not
+  // about how this platform spells a path.
+  assert.equal(serving([' ']).projectRoot, resolve(CWD, ' '));
 });
 
 test('a path literally named --help is still a path, after the separator', () => {

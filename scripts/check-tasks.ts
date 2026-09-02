@@ -73,7 +73,18 @@ if (spec.trim() === '') {
   process.exit(2);
 }
 
-const baseline = /^baseline_commit:\s*'([^']+)'/m.exec(spec)?.[1];
+/**
+ * The baseline, in any of the three ways YAML spells a scalar.
+ *
+ * This accepted single quotes only, so `baseline_commit: cef8da8` — valid YAML,
+ * and the form a human writing frontmatter by hand reaches for first — produced
+ * "No baseline_commit ... nothing to check against" and exit 2. A guard that
+ * refuses to read half the legal spellings of its own input is a guard that
+ * gets skipped, which is the failure mode this whole file is about.
+ */
+const baselineMatch =
+  /^baseline_commit:[ \t]*(?:'([^']+)'|"([^"]+)"|([^\s'"#]+))[ \t]*(?:#.*)?$/m.exec(spec);
+const baseline = baselineMatch?.[1] ?? baselineMatch?.[2] ?? baselineMatch?.[3];
 if (baseline === undefined) {
   process.stderr.write('No baseline_commit in the spec on stdin; nothing to check against.\n');
   process.exit(2);
@@ -99,25 +110,45 @@ try {
 /**
  * Files the diff since the baseline actually touches, tracked and untracked.
  *
- * **Both commands run from the repository root, and both report paths relative
- * to it.** That is not tidiness: `git diff --name-only` prints repo-relative
- * paths while `git ls-files --others` prints paths relative to the *current
- * directory*, so run from `src/` the same new file appeared as
- * `src/adapters/fs/read.ts` in one list and `read.ts` in the other. Every
- * untracked file a spec named then reported MISS and the checker exited 1 on
- * honest work — which is how a guard gets routed around. `--full-name` pins
- * `ls-files` to repo-relative whatever the cwd, and `-c diff.relative=false`
- * pins `diff` against a repository that configures the opposite.
+ * Two lists from two commands, and the only thing that matters is that they
+ * come back in **one path space** — because the comparison downstream is byte
+ * equality against what a spec wrote down. Three separate ways git will hand
+ * back the same file under two different names, each of which made this exit 1
+ * on honest work:
+ *
+ *   - **Relative to what.** `git diff --name-only` prints repo-relative paths
+ *     while `git ls-files --others` prints paths relative to the *current
+ *     directory*, so run from `src/` one new file was `src/adapters/fs/read.ts`
+ *     in one list and `read.ts` in the other. Fixed by running both from the
+ *     root, and pinned a second time by `--full-name` and
+ *     `-c diff.relative=false`, which hold whatever the cwd and whatever the
+ *     repository configures.
+ *   - **Spelled how.** With `core.quotePath` at its default, a non-ASCII path
+ *     comes back C-quoted and octal-escaped: `"src/caf\303\251.ts"`, not
+ *     `src/café.ts`. Measured on git 2.43.0, both commands do it. A ticked
+ *     accented filename therefore reported MISS — the same false accusation as
+ *     the cwd bug, in a different disguise.
+ *   - **Separated by what.** A newline in a filename is legal, and split on
+ *     newlines it becomes two entries that are each not a file.
+ *
+ * `-z` is what actually settles the last two: NUL-separated output is never
+ * quoted and never ambiguous, so the per-line `trim()` this used to need is
+ * gone with it. `-c core.quotePath=false` is kept as a second latch that says
+ * the intent out loud even if `-z` is ever dropped — like the two cwd latches,
+ * it is not independently observable end to end, so the argv test in
+ * `test/tooling/check-tasks.test.ts` is what holds it in place.
  */
-function changedFiles(baseline: string, repoRoot: string): Set<string> {
-  const tracked = git(['-c', 'diff.relative=false', 'diff', '--name-only', baseline], repoRoot);
+function changedFiles(since: string, root: string): Set<string> {
+  const tracked = git(
+    ['-c', 'diff.relative=false', '-c', 'core.quotePath=false', 'diff', '--name-only', '-z', since],
+    root,
+  );
   const untracked = git(
-    ['ls-files', '--others', '--exclude-standard', '--full-name'],
-    repoRoot,
+    ['-c', 'core.quotePath=false', 'ls-files', '--others', '--exclude-standard', '--full-name', '-z'],
+    root,
   );
-  return new Set(
-    [...tracked.split('\n'), ...untracked.split('\n')].map((line) => line.trim()).filter(Boolean),
-  );
+  // NUL-separated, with a trailing NUL, so the final split entry is empty.
+  return new Set([...tracked.split('\0'), ...untracked.split('\0')].filter(Boolean));
 }
 
 /**

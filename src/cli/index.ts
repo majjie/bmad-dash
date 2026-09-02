@@ -292,7 +292,9 @@ export function parseInvocation(argv: readonly string[], cwd: string): Invocatio
   if (given === '') {
     return {
       ok: false,
-      message: `Empty path argument. Omit it to target the current directory.\n${USAGE}`,
+      message:
+        'Empty path argument. Omit it to target the current directory.\n' +
+        `${ACCEPTED}\n${USAGE}`,
     };
   }
 

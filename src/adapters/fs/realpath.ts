@@ -47,6 +47,13 @@ export function resolveRealPath(path: string): string {
  * serves the entry-point guard, which was earned by a defect, and its two
  * callers must keep resolving by the same rule as each other rather than by the
  * best available rule.
+ *
+ * **Returns `path` unchanged on any failure, not only on a missing path.** The
+ * `catch` is bare, so `EACCES` on an intermediate directory, `ELOOP` and
+ * `ENAMETOOLONG` all take the same route as `ENOENT`. `paths.ts` documents what
+ * that costs and `test/adapters/paths.test.ts` pins it; the point of saying it
+ * here is that a caller cannot tell the reasons apart from the return value,
+ * and must not write a comment implying it can.
  */
 export function resolveRealPathNative(path: string): string {
   try {

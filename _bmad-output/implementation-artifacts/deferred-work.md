@@ -1,3 +1,25 @@
+## Keys
+
+One entry per finding. What is still open comes first — the block below, then
+each `## Deferred from:` heading in the order the rounds happened — and
+`## Resolved and closed` is last. Every entry carries `source_spec` and
+`summary`; everything carried over from a review also carries `evidence`. The
+rest are optional annotations, and every one of them is **append-only** — this
+file exists so nothing is lost, so a claim that turns out to be wrong is struck
+in place and corrected beside itself rather than edited away:
+
+| Key | Required | What it holds |
+|---|---|---|
+| `source_spec` | yes | the spec the finding came from, or `none` when it was split out of planning |
+| `summary` | yes | what is wrong, in the reviewer's terms |
+| `evidence` | on review findings | where it was confirmed, and why it was deferred rather than fixed |
+| `original` | no | the superseded text of a `summary`/`evidence` that has since been corrected, verbatim |
+| `revisit` / `triggers` | no | the story or condition that makes it due |
+| `findings_already_measured` | no | a decision taken during planning that the next story should not redo |
+| `closed` | no | how it ended: RESOLVED, SUPERSEDED, or CLOSED BY DECISION, with the date |
+| `mutations` | no | the mutation actually re-run against a resolution's test, and what failed |
+| `correction` | no | what a `closed:` or `mutations:` line above got wrong, dated, left standing beside it |
+
 - source_spec: `_bmad-output/implementation-artifacts/spec-1-1-run-the-command-and-reach-a-served-page.md`
   summary: The served page carries no hardening headers (nosniff, CSP, Referrer-Policy), and DNS-rebinding defence rests on Host alone with no Origin or Sec-Fetch-Site check.
   evidence: Real but premature — the page is a constant string today. Becomes load-bearing the moment Stories 1.12 and 2.1 render project content into it, and AD-19's rationale already anticipates the browser as the threat vector.
@@ -72,6 +94,7 @@
 
 - source_spec: `_bmad-output/implementation-artifacts/spec-1-1-run-the-command-and-reach-a-served-page.md`
   summary: (low) `readTotal` is coupled to the reporter's `ℹ` glyph, and counts subtests rather than test files. **The CRLF half of this finding was wrong and has been struck** — see evidence.
+  original: Restored verbatim 2026-09-02 at the user's decision, because the no-loss contract has to hold inside this file and not only in git history. The correction below stands — the CRLF half really is wrong — but the text it corrected is this: "summary: (low) `readTotal` requires the `ℹ` glyph and a bare `\n`" / "evidence: From the 2026-09-01 code review, located and verified there. Full text: `readTotal` requires the `ℹ` glyph and a bare `\n` [scripts/test-run-policy.ts:84] — `/^ℹ tests (\d+)$/gm` fails on a CRLF reporter line or a re-encoded stream, turning a green suite into "could not determine how many tests ran". It also counts subtests, so the floor measures something different fro" (the review's own text was truncated there when it was first recorded).
   evidence: From the 2026-09-01 code review. Re-examined 2026-09-02 while clearing easy wins. The original claimed `/^ℹ tests (\d+)$/gm` "fails on a CRLF reporter line", which is false: under `/m` JavaScript treats `\r` as a line terminator, so `$` matches before it. Measured on all three of `\n`, `\r\n` and bare `\r` — every one matches, with and without a `\r?`. A "fix" was written, found to be a no-op whose test passed either way, and reverted; `test/tooling/run-policy.test.ts` now pins the real behaviour as a characterization test so nobody re-fixes it. What remains genuinely open is the other half: the match depends on the reporter emitting `ℹ tests <n>`, so a reporter change turns a green suite into "could not determine how many tests ran" — which is the safe direction but still a coupling — and the count includes subtests, so the floor measures something other than the number of test files. Inert today: the suite reports `suites 0` and uses no subtests.
 
 - source_spec: `_bmad-output/implementation-artifacts/spec-1-1-run-the-command-and-reach-a-served-page.md`
@@ -124,6 +147,12 @@
   findings_already_measured: The parser decision was made and verified during 1.5 planning, so the next story should not redo it. `yaml@2.9.0` (ISC, no dependencies of its own, ships types) is to be a **devDependency bundled by esbuild**, not a runtime dependency — user decision, and the architecture spine records why. Measured: its node export is CommonJS and dynamically requires `process` and `buffer`, so an ESM bundle throws `Dynamic require of "process" is not supported` at import unless the build carries a banner such as `--banner:js='import{createRequire as __cr}from "node:module";const require=__cr(import.meta.url);'`. With that banner, parsing of flat scalars, one level of nesting and inline sequences is correct; the only dynamic requires in the output are those two builtins; and there is no `node:http`, `node:https`, `node:net`, `node:fs`, `node:child_process` or `fetch` anywhere in it. The bundle grows from about 34KB to about 264KB. `LICENSE-THIRD-PARTY` carrying yaml's ISC text must ship, taking the tarball from three files to four. Measured shapes it must handle: `config.yaml` is flat `key: scalar`; `sprint-status.yaml` has one level of nesting; artifact frontmatter has scalars and inline sequences.
   triggers: NFR-11's deferred automated enforcement comes due with this story, not before — a gate that reads source specifiers proves nothing once third-party code executes at runtime, so it must assert against `dist/` instead.
 
+## Deferred from: review of the deferred-findings cleanup batch (2026-09-02)
+
+Found while verifying the batch that put `scripts/check-tasks.ts` under test.
+The first two were opened by that work; the three `tickedTargets` entries came
+out of the review round on it and are deferred by decision, not by omission.
+
 - source_spec: `_bmad-output/implementation-artifacts/spec-land-deferred-findings-cleanup.md`
   summary: (low) The stale-`.js` guard is still scoped to `src/`, so a compiled leftover under `scripts/` or `web/` is invisible to it — `test/architecture.test.ts:134-138` filters `file.startsWith('src/')` while the gate scans three roots.
   evidence: Found 2026-09-02 while re-verifying the closed "Stale `.mjs` references" entry, whose closing note claims this consequence "no longer exists in the code". It does. The premise that justified the scoping ("`scripts/` is plain `.mjs` tooling") was deleted from the comment; the scoping itself was left. Harmless today because `scripts/` holds three `.ts` files and `web/` is empty, and it is a one-token change — but it is a guard narrower than the invariant it is named for, which is the shape of defect this list keeps recording.
@@ -131,6 +160,19 @@
 - source_spec: `_bmad-output/implementation-artifacts/spec-land-deferred-findings-cleanup.md`
   summary: (low) `changedFiles` in `scripts/check-tasks.ts` carries two latches for one invariant, and only one of them is observable end to end: `--full-name` and `-c diff.relative=false` are both redundant while the commands also run with `cwd: repoRoot`.
   evidence: Measured 2026-09-02 with git 2.43.0 while writing `test/tooling/check-tasks.test.ts`, not reasoned about. Run at the repository root, `ls-files --others` and `diff --name-only` are already repo-relative, so reverting either flag changes no verdict from any cwd — the spec's acceptance criterion for that mutation cannot be met by a black-box run. It is met instead by `both list commands are pinned repo-relative in the argv the checker issues`, which puts a logging `git` shim on PATH and asserts the argv. That test earns its keep (removing `cwd: repoRoot` *is* caught end to end, by two other tests, so the flags are the half that could vanish silently) but it is a whiter box than the rest of the suite. Two of its rows — the shim and the empty-PATH missing-git row — name-skip on `win32`, so the flag pinning and the ENOENT branch of `git()` are unverified on Windows. Comes due with the CI matrix decision in the "Repository hygiene, consolidated" entry.
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-land-deferred-findings-cleanup.md`
+  summary: (medium) `tickedTargets` in `scripts/check-tasks.ts` treats any leading backticked token containing a `.` as a path, so a task line that leads with an identifier — `` `t.skip` ``, `` `Promise.race` ``, `` `diff.relative=false` `` — is checked as a filename, misses, and exits 1 on honest work.
+  evidence: Found 2026-09-02 in the review of the batch that put the checker under test. The heuristic is "first backticked token, if it contains `/` or `.`", which cannot distinguish `src/a.ts` from `a.b`. This project's own task lines lead with a path by convention, so it is latent rather than live — but the failure it produces is the false accusation the checker's whole value depends on not producing, and the false accusation is what teaches a reader to stop trusting the guard. **Deferred rather than patched, deliberately:** every tightening trades one error for the other. Requiring a `/` misses a ticked `package.json` or `README.md` at the root; requiring a known extension needs a list that will be wrong; asking git whether the token is a path makes the heuristic depend on the diff it is checking against. Choosing among those is a decision about which error to prefer, and it should be made once, on purpose, rather than inside a cleanup batch.
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-land-deferred-findings-cleanup.md`
+  summary: (medium) `tickedTargets` matches only unindented, lowercase `- [x] `, so a nested sub-task or a `- [X] ` tick is invisible to the guard — it reports "every ticked task names a file the diff touches" without having looked at them.
+  evidence: Found 2026-09-02 in the same review. `line.startsWith('- [x] ')` fails on `  - [x] ` and on `- [X] `, both of which render as a ticked checkbox in every markdown tool and both of which a human will write. This is precisely the "a checker that finds nothing to check has become a no-op" shape the file's own header names as its reason to exist — and worse than the no-op case, because the `targets.length === 0` guard only fires when *nothing* matched: a spec with one top-level tick and six indented ones passes with one checked. Deferred with the entry above because the two share the parser and should be fixed in one pass.
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-land-deferred-findings-cleanup.md`
+  summary: (low) The baseline-verification block in `scripts/check-tasks.ts` runs `rev-parse --verify` with `stdio: 'ignore'`, so *any* failure is reported as "Rebased or amended since the spec was written?" — including an unreadable `.git`, a corrupt object database, or a sha that names a tree rather than a commit.
+  evidence: Found 2026-09-02 in the same review. The message sends the reader to edit the spec's frontmatter when the actual fault is in the repository, which is the same class of misdirection the `git()` wrapper's exit-2 separation exists to prevent — one level finer. Low because a rebased baseline really is the overwhelmingly common cause and the exit code (2, a broken check) is correct either way; the fix is to capture stderr and include it, which is a small change to a block that currently has a deliberate reason to `catch`.
+
 
 ## Resolved and closed
 
@@ -171,6 +213,7 @@ of which 15 were already closed, superseded, or triple-recorded.
   evidence: From the 2026-09-01 code review, located and verified there. Full text: `parsePattern` accepts a padded override and passes it through untrimmed [scripts/test-run-policy.ts:67-73] — `parseFloor` trims, this does not, so `' test/**/*.test.ts '` is accepted, matches nothing, and is reported as "discovery is collecting less than the whole suite" rather than as a bad patter
   closed: RESOLVED 2026-09-02. `parsePattern` trims like `parseFloor`, and a pattern that is only padding is still refused. Mutation-checked: removing the trim fails the new test in `test/tooling/run-policy.test.ts`.
   mutations: Re-run 2026-09-02, not inherited. Replaced `raw.trim()` with `raw` in `parsePattern`: `a padded pattern override is trimmed rather than passed through` failed, 12 pass / 1 fail. Restored. The claim holds.
+  correction: 2026-09-02, second review round. The `closed:` line above credits the fix with one thing it did not do: "a pattern that is only padding is still refused" was **pre-existing** behaviour. The `raw.trim() === ''` branch is there in `cef8da8`, unchanged — verified by reading it. The fix was the trim on the *accepted* path only. The new test's second assertion and this note both described the old branch as if it were new. Separately, that branch's message said the variable "is set but empty", which is inaccurate for `'   '` — set, and not empty; the wording is now "an empty or whitespace-only value".
 
 - source_spec: `_bmad-output/implementation-artifacts/spec-1-1-run-the-command-and-reach-a-served-page.md`
   summary: (low) Stale `.mjs` references, one of them load-bearing

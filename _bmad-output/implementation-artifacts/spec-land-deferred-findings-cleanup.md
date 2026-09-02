@@ -2,9 +2,9 @@
 title: 'Verify and land the deferred-findings cleanup'
 type: 'chore'
 created: '2026-09-02'
-status: 'in-progress'
+status: 'in-review'
 baseline_commit: 'cef8da80f3cf94a49a0732a90da43bdeba43435a'
-review_loop_iteration: 0
+review_loop_iteration: 1
 context:
   - '{project-root}/_bmad-output/implementation-artifacts/deferred-work.md'
 ---
@@ -68,7 +68,26 @@ Scenarios for `scripts/check-tasks.ts`, driven by piping a synthetic spec into i
 
 ## Spec Change Log
 
-_Empty — no review loopback yet._
+**Round 1 -> 2 (2026-09-02).** Review of the landed batch returned 18 patch
+findings; all were applied in a second commit on top rather than an amend, so
+the round is legible in history. Two were explicit user decisions: **fail on a
+non-zero skip count** rather than warn (the highest-severity finding — nothing
+consumed the `skipped` count, so the named-skips work had no automated effect
+at all), and **restore the superseded `readTotal` finding text alongside** its
+correction, so this project's no-loss contract holds inside `deferred-work.md`
+and not only in git history. Three findings about `tickedTargets` were deferred
+by decision rather than patched, and are now open entries.
+
+Two acceptance criteria were written against a mistaken premise and are
+recorded here rather than quietly reinterpreted. AC 1 asks that reverting
+`--full-name` fail the suite; AC 4's floor claim said "374 -> 384". Measured,
+`--full-name` and `-c diff.relative=false` are *redundant* while both commands
+run with `cwd` at the repository root, so no black-box run can observe them —
+the criterion is met by an argv-observing test with a logging `git` shim on
+PATH, which is a whiter box than the rest of the suite and is recorded as an
+open entry. And 374 was never a committed floor: relative to `baseline_commit`
+`cef8da8` the floor was **369**, staged to 374 by the uncommitted diff this
+spec landed.
 
 ## Verification
 
@@ -78,20 +97,32 @@ _Empty — no review loopback yet._
 - `node scripts/check-tasks.ts < _bmad-output/implementation-artifacts/spec-land-deferred-findings-cleanup.md` -- expected: exit 0, no `MISS`.
 - `cd src && node ../scripts/check-tasks.ts < ../_bmad-output/implementation-artifacts/spec-land-deferred-findings-cleanup.md` -- expected: identical verdict to the run from the root. This is the cwd-independence claim, checked on the real repository and not only on a fixture.
 
-**Observed (2026-09-02, git 2.43.0, Node v25.4.0):**
-- `npm test` -- exit 0. typecheck and build clean; `tests 384 / pass 384 / fail 0 / skipped 0`. `DEFAULT_MIN_TESTS` raised 374 -> 384.
-- `node --test --test-reporter=spec test/tooling/check-tasks.test.ts` -- 10 named tests, all passing, none skipped. Every I/O-matrix row is present; two tests carry a `win32` name-skip (the `git` shim on PATH and the empty-PATH missing-git row), which does not fire on this box.
+**Observed (2026-09-02, git 2.43.0, Node v25.4.0), after the round-2 patches:**
+- `npm test` -- exit 0. typecheck and build clean; `tests 399 / pass 399 / fail 0 / skipped 0`.
+- `DEFAULT_MIN_TESTS`: **369 -> 399**, never lowered. 369 is the value at `baseline_commit` `cef8da8`; 374 was an *intermediate* staged by the uncommitted diff this spec landed and never committed on its own; 384 was round 1; 399 is round 2. Stated this way so the never-lowered claim is auditable from this record alone.
+- `node --test --test-reporter=spec test/tooling/check-tasks.test.ts` -- 12 named tests, all passing, none skipped. Every I/O-matrix row is present, plus a non-ASCII-path row and a `baseline_commit`-spelling row. Three tests carry a `win32` name-skip (the `git` shim on PATH, the empty-PATH missing-git row) or a git-availability skip; none fire on this box.
 - Both `check-tasks.ts` runs -- exit 0 from the repository root and, byte-identically, from `src/`.
+- A skipped test now fails the run: verified end to end against a fixture whose only test calls `t.skip`, which reports `tests 1 / fail 0 / skipped 1`, clears a floor of 1, and used to exit 0.
 
-**Mutations run against the new test file** (each applied, the file re-run, then reverted):
+**Mutations re-run (each applied, the affected files re-run, then reverted; every file verified byte-identical afterwards):**
 
-| Mutation to `scripts/check-tasks.ts` | Result |
-|---|---|
-| `--full-name` dropped from `ls-files` | 9 pass / 1 fail -- `both list commands are pinned repo-relative in the argv the checker issues` |
-| `-c diff.relative=false` dropped from `diff` | 9 pass / 1 fail -- same test |
-| the baseline-verification block (`:86-97`) deleted | 9 pass / 1 fail -- `a baseline that is not a commit is a broken check, exit 2, naming the rebase`. A *different* test from the exit-1 one, which still passed: 1 and 2 are separately observed. |
-| `cwd: repoRoot` removed from both list commands | 7 pass / 3 fail -- `a ticked task naming an untracked file passes from a subdirectory`, `a repository configuring diff.relative=true is overridden, not obeyed`, and the argv test |
-| the `targets.length === 0` no-op guard deleted | 9 pass / 1 fail -- `a spec whose ticks name no file at all is a broken check, exit 2` |
-| `git()` exiting 1 instead of 2 | 8 pass / 2 fail -- `a spec piped in from outside a repository...` and `a missing git is a broken check...` |
+| # | Mutation | Result |
+|---|---|---|
+| A | `--full-name` dropped from `ls-files` | 11 pass / 1 fail -- the argv test |
+| B | baseline-verification block deleted | 11 pass / 1 fail -- `a baseline that is not a commit is a broken check...`, a *different* test from the exit-1 one, which still passed |
+| C | `-c diff.relative=false` dropped from `diff` | 11 pass / 1 fail -- the argv test |
+| D | `cwd: repoRoot` removed from both list commands | 8 pass / 4 fail -- the subdirectory row, the `diff.relative=true` row, the non-ASCII row, the argv test |
+| E | `targets.length === 0` no-op guard deleted | 11 pass / 1 fail -- `a spec whose ticks name no file at all...` |
+| F | `git()` exiting 1 instead of 2 | 10 pass / 2 fail -- the not-a-repository and missing-git rows |
+| G | `-z` and `core.quotePath=false` dropped (back to a newline split) | 10 pass / 2 fail -- `a ticked non-ASCII path is not accused...` and the argv test |
+| H | baseline regex narrowed back to single quotes only | 11 pass / 1 fail -- `a baseline_commit is read unquoted and double-quoted...` |
+| I | skip check removed from `summarize` | 36 pass / 5 fail across the unit and end-to-end files |
+| J | runner passes a hardcoded allowance of 99 instead of the parsed one | 19 pass / 1 fail -- `the runner fails on a skipped test that cleared the floor` |
+| K | `parseAllowedSkips` validation disabled | 39 pass / 2 fail -- the unit rejection row and its end-to-end sibling |
+| L | `scripts/` dropped from the `child_process` allowance | 35 pass / 3 fail -- including the new `the gated modules and their permitted prefixes are the ones claimed` |
+| O | empty-positional guard disabled | 34 pass / 2 fail -- the `parseInvocation` row *and* the new end-to-end `run([''])` assertion |
 
-Note on the first two rows: run with `cwd` at the repository root, both flags are *redundant* -- measured, not assumed -- so no black-box run can tell whether they are present. They are observed instead by putting a logging `git` shim on `PATH` and asserting the argv, which is why that test exists and why it is whiter-box than its neighbours. Recorded as an open entry in `deferred-work.md`.
+Two notes on what these mutations show rather than prove:
+
+- **D is the load-bearing latch, not A/C/G.** Removing `cwd: repoRoot` breaks four tests behaviourally; the flags on their own are only observable through the argv shim. That asymmetry is the open entry, not a defect.
+- **L confirms the round-2 finding about the gate enumeration.** Narrowing the allowance makes the gate fail *loudly* — three tests, including the AD-1 import check — so the file enumeration was never what protected it. The new `GATED_MODULES` assertion is what makes *widening* the allowance a deliberate edit.

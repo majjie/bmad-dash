@@ -9,10 +9,14 @@
  *   2. A pattern that matches nothing exits 0. Discovery breaking looks exactly
  *      like discovery passing.
  *   3. A run killed by a signal can leave no summary at all.
+ *   4. A skipped test still counts toward `ℹ tests`, so a guard that skips
+ *      itself clears the floor and the run stays green. Naming the skips made
+ *      them legible in the log; nothing read them.
  *
- * So the pattern is recursive, and the reported total is checked against a
- * floor. Every decision lives in `test-run-policy.ts`, which is unit-tested;
- * this file is only the plumbing.
+ * So the pattern is recursive, the reported total is checked against a floor,
+ * and a non-zero skip count fails unless an allowance says otherwise. Every
+ * decision lives in `test-run-policy.ts`, which is unit-tested; this file is
+ * only the plumbing.
  */
 
 import { spawn } from 'node:child_process';
@@ -20,6 +24,8 @@ import { spawn } from 'node:child_process';
 import {
   MIN_ENV,
   PATTERN_ENV,
+  SKIPS_ENV,
+  parseAllowedSkips,
   parseFloor,
   parsePattern,
   summarize,
@@ -29,7 +35,7 @@ import {
  * Raise this when you add tests; never lower it to make a run pass. It exists
  * so a suite that quietly stops collecting cannot report success.
  */
-const DEFAULT_MIN_TESTS = 384;
+const DEFAULT_MIN_TESTS = 399;
 
 /** Recursive on purpose: `**` is expanded by the test runner, not the shell. */
 const DEFAULT_PATTERN = 'test/**/*.test.ts';
@@ -46,8 +52,15 @@ if (!pattern.ok) {
   process.exit(1);
 }
 
+const allowedSkips = parseAllowedSkips(process.env[SKIPS_ENV]);
+if (!allowedSkips.ok) {
+  process.stderr.write(`FAIL: ${allowedSkips.message}\n`);
+  process.exit(1);
+}
+
 const minTests = floor.value;
 const globPattern = pattern.value;
+const skipAllowance = allowedSkips.value;
 
 const child = spawn(process.execPath, ['--test', '--test-reporter=spec', globPattern], {
   stdio: ['inherit', 'pipe', 'inherit'],
@@ -72,6 +85,7 @@ child.on('close', (code: number | null, signal: string | null) => {
     output: captured,
     minTests,
     pattern: globPattern,
+    allowedSkips: skipAllowance,
   });
   if (outcome.message !== undefined) {
     process.stderr.write(`\nFAIL: ${outcome.message}\n`);

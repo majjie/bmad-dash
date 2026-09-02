@@ -424,6 +424,12 @@ test('a mistyped target exits 2', async (t) => {
 
   assert.equal(await run([join(base, 'nope')], deps), 2, 'an absent path is a usage error');
   assert.equal(await run([base], deps), 2, 'a non-project is a usage error');
+  // The empty argument was only ever covered at the `parseInvocation` unit
+  // level, and it is the case most likely to arrive from a real caller — a
+  // wrapper script's `bmad-dash "$TARGET"` with `TARGET` unset. Asserted here
+  // through `run`, because refusing it in the parser is worth nothing if the
+  // composition root does not carry the code out.
+  assert.equal(await run([''], deps), 2, 'an empty path argument is a usage error');
 });
 
 test('an unreachable target exits 1, not 2', async (t) => {
@@ -435,10 +441,15 @@ test('an unreachable target exits 1, not 2', async (t) => {
   const { tmpdir } = await import('node:os');
   const { join } = await import('node:path');
 
-  // Skipped rather than silently returned. This is the *only* assertion in the
-  // suite that distinguishes exit 1 from exit 2, so a run that could not make
-  // it has to say so — otherwise a root container reports a full green suite
-  // with the distinction untested.
+  // Skipped rather than silently returned. The claim here used to be that this
+  // is the only assertion in the suite distinguishing exit 1 from exit 2, and
+  // that was false: `test/server.test.ts` ("a failure to start exits 1,
+  // distinct from the usage code 2") does so unconditionally, with no skip. The
+  // accurate claim is narrower and still worth a named skip — this is the only
+  // assertion covering the *unreadable-target* branch at `src/cli/index.ts`,
+  // where a permissions failure has to come back as 1 rather than 2. A root
+  // container cannot reach it, so a run that could not make it has to say so
+  // rather than report a full green suite.
   if (process.platform === 'win32' || process.getuid?.() === 0) {
     t.skip('needs POSIX permissions and a non-root user');
     return;

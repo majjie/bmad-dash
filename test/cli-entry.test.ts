@@ -230,22 +230,40 @@ test('the files whitelist publishes the directory holding the bin', async () => 
       `${BIN_RELATIVE} — the installed package would expose a command pointing at nothing`,
   );
 
-  // Every whitelisted entry must be something that actually exists, so a stale
-  // entry cannot sit in the manifest looking like a shipped directory. The
-  // assertion used to check only that the entry was a non-empty string, which
-  // is not the claim this comment makes — a deleted directory still reads as a
-  // perfectly good string.
+  // Every whitelisted **literal** entry must be something that actually
+  // exists, so a stale entry cannot sit in the manifest looking like a shipped
+  // directory. The assertion used to check only that the entry was a non-empty
+  // string, which is not the claim this comment makes — a deleted directory
+  // still reads as a perfectly good string.
+  //
+  // Scoped to literal entries on purpose: npm's `files` accepts glob patterns
+  // and `!` negations, and `dist/**` or `!**/*.map` are correct manifest
+  // entries that exist on disk under no such name. Asserting existence over
+  // those would fail the moment someone writes a legitimate pattern, and a
+  // test that fails for being right is a test that gets deleted. Resolving the
+  // globs instead would mean reimplementing npm's matcher here, which is worse
+  // than checking the entries that need no matcher.
+  const GLOB_OR_NEGATION = /[*?[\]{}!]/;
+  let literals = 0;
   for (const entry of files) {
     assert.ok(
       typeof entry === 'string' && entry.length > 0,
       `files contains a non-path entry: ${JSON.stringify(entry)}`,
     );
+    if (GLOB_OR_NEGATION.test(entry)) continue;
+    literals += 1;
     await assert.doesNotReject(
       () => access(join(REPO_ROOT, entry)),
       `files lists ${JSON.stringify(entry)}, which does not exist — a stale entry ` +
         `looks like a shipped directory and publishes nothing`,
     );
   }
+  // And the scoping must not become the whole story: if every entry were a
+  // pattern this loop would assert nothing at all, silently.
+  assert.ok(
+    literals > 0,
+    `files is entirely patterns (${JSON.stringify(files)}), so nothing was checked for existence`,
+  );
 });
 
 test('the build writes exactly the path bin advertises', () => {

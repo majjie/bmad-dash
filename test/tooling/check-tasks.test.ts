@@ -74,12 +74,44 @@ function childEnv(extra: Readonly<Record<string, string>> = {}): NodeJS.ProcessE
   // Inherited from this process, it makes a nested `node --test` skip its
   // files. The checker is not a test runner, but the child of a child might be.
   delete env.NODE_TEST_CONTEXT;
-  // A stray GIT_DIR/GIT_WORK_TREE from the caller would point the checker at
-  // this repository instead of the fixture.
-  delete env.GIT_DIR;
-  delete env.GIT_WORK_TREE;
+  // Every ambient channel into git's view of the world. Pointing
+  // `GIT_CONFIG_GLOBAL` at the null device is not enough on its own:
+  // `GIT_CONFIG_COUNT`/`GIT_CONFIG_PARAMETERS` inject settings directly, with
+  // higher precedence than any file, so an ambient `diff.relative=true` would
+  // defeat the isolation the override row depends on — and that row would then
+  // pass for the wrong reason. The rest redirect the repository itself.
+  for (const name of [
+    'GIT_CONFIG_COUNT',
+    'GIT_CONFIG_PARAMETERS',
+    'GIT_CEILING_DIRECTORIES',
+    'GIT_COMMON_DIR',
+    'GIT_INDEX_FILE',
+    'GIT_DIR',
+    'GIT_WORK_TREE',
+    'GIT_OBJECT_DIRECTORY',
+    'GIT_ALTERNATE_OBJECT_DIRECTORIES',
+  ]) {
+    delete env[name];
+  }
   return env;
 }
+
+/**
+ * Whether git can be run at all, asked once.
+ *
+ * Without this the fixture-based tests *error* on a box with no git rather than
+ * skipping, which reports a broken environment as a failing guard. Named, not
+ * silent: `scripts/run-tests.ts` now fails a run that skips, so a skip here is
+ * a decision someone has to look at.
+ */
+const GIT_AVAILABLE = ((): boolean => {
+  try {
+    execFileSync('git', ['--version'], { stdio: 'ignore', env: childEnv() });
+    return true;
+  } catch {
+    return false;
+  }
+})();
 
 interface Ran {
   readonly code: number | null;
@@ -140,6 +172,15 @@ function runChecker(
       resolve({ code, signal, stdout, stderr });
     });
 
+    // `child.on('error')` does not cover the stdin stream. Several rows here
+    // make the checker exit *before* it drains stdin — the empty-PATH row never
+    // reaches the read at all — and an EPIPE on an unhandled stream would be
+    // thrown as an unhandled `'error'` event, taking down the whole test
+    // process instead of failing one test. The write failing is not itself a
+    // finding: the child's exit code is what these tests assert on.
+    child.stdin.on('error', () => {
+      /* the close handler above carries the verdict */
+    });
     child.stdin.end(spec, 'utf8');
   });
 }
@@ -175,7 +216,14 @@ interface Fixture {
  * Both kinds matter because the checker unions two different git commands to
  * find them, and those commands disagreed about what a path is relative to.
  */
-async function fixture(t: { after: (fn: () => unknown) => void }): Promise<Fixture> {
+async function fixture(t: {
+  after: (fn: () => unknown) => void;
+  skip: (reason: string) => void;
+}): Promise<Fixture | undefined> {
+  if (!GIT_AVAILABLE) {
+    t.skip('git is not on PATH, so there is no repository to check against');
+    return undefined;
+  }
   const root = await realpath(await mkdtemp(join(tmpdir(), 'bmad-dash-tasks-')));
   t.after(() => rm(root, { recursive: true, force: true }));
 
@@ -202,7 +250,9 @@ async function fixture(t: { after: (fn: () => unknown) => void }): Promise<Fixtu
 // ---------------------------------------------------------------------------
 
 test('a ticked task naming a modified tracked file passes, run from the root', async (t) => {
-  const { root, baseline } = await fixture(t);
+  const repo = await fixture(t);
+  if (repo === undefined) return;
+  const { root, baseline } = repo;
 
   const ran = await runChecker(
     specText(baseline, [
@@ -225,7 +275,9 @@ test('a ticked task naming a modified tracked file passes, run from the root', a
 });
 
 test('a ticked task naming an untracked file passes from a subdirectory', async (t) => {
-  const { root, baseline, deep } = await fixture(t);
+  const repo = await fixture(t);
+  if (repo === undefined) return;
+  const { root, baseline, deep } = repo;
 
   // The regression this file's subject was fixed for. `git ls-files --others`
   // reports paths relative to the *current directory* while `git diff
@@ -246,7 +298,9 @@ test('a ticked task naming an untracked file passes from a subdirectory', async 
 });
 
 test('a repository configuring diff.relative=true is overridden, not obeyed', async (t) => {
-  const { root, baseline, deep } = await fixture(t);
+  const repo = await fixture(t);
+  if (repo === undefined) return;
+  const { root, baseline, deep } = repo;
   gitIn(root, ['config', 'diff.relative', 'true']);
 
   // `diff.relative=true` makes `git diff` print paths relative to the cwd and
@@ -270,7 +324,9 @@ test('a repository configuring diff.relative=true is overridden, not obeyed', as
 // ---------------------------------------------------------------------------
 
 test('a ticked task naming a file the diff never touches is a finding, exit 1', async (t) => {
-  const { root, baseline, deep } = await fixture(t);
+  const repo = await fixture(t);
+  if (repo === undefined) return;
+  const { root, baseline, deep } = repo;
 
   const spec = specText(baseline, [
     '- [x] `nested/deep/tracked.ts` -- honest',
@@ -294,7 +350,9 @@ test('a ticked task naming a file the diff never touches is a finding, exit 1', 
 // ---------------------------------------------------------------------------
 
 test('a baseline that is not a commit is a broken check, exit 2, naming the rebase', async (t) => {
-  const { root } = await fixture(t);
+  const repo = await fixture(t);
+  if (repo === undefined) return;
+  const { root } = repo;
 
   // What a rebase or an amend leaves behind. Reported as exit 1 it would read
   // as "the story lied"; reported as a stack trace it would send the reader to
@@ -313,6 +371,10 @@ test('a baseline that is not a commit is a broken check, exit 2, naming the reba
 });
 
 test('a spec piped in from outside a repository is a broken check, exit 2', async (t) => {
+  if (!GIT_AVAILABLE) {
+    t.skip('git is not on PATH, so "not a repository" is not the failure under test');
+    return;
+  }
   const outside = await realpath(await mkdtemp(join(tmpdir(), 'bmad-dash-notrepo-')));
   t.after(() => rm(outside, { recursive: true, force: true }));
 
@@ -338,7 +400,9 @@ test('a missing git is a broken check, exit 2, and not an unbacked tick', async 
     t.skip('the empty-PATH trick is POSIX-only');
     return;
   }
-  const { root, baseline } = await fixture(t);
+  const repo = await fixture(t);
+  if (repo === undefined) return;
+  const { root, baseline } = repo;
 
   // With nothing on PATH the very first git call throws ENOENT. Unguarded that
   // was an uncaught exception and exit 1 — the code that means "the story
@@ -355,7 +419,9 @@ test('a missing git is a broken check, exit 2, and not an unbacked tick', async 
 });
 
 test('a spec whose ticks name no file at all is a broken check, exit 2', async (t) => {
-  const { root, baseline } = await fixture(t);
+  const repo = await fixture(t);
+  if (repo === undefined) return;
+  const { root, baseline } = repo;
 
   // A checker with nothing to check has become a no-op reporting success,
   // which is precisely how the guard this one replaced degraded.
@@ -374,7 +440,9 @@ test('a spec whose ticks name no file at all is a broken check, exit 2', async (
 });
 
 test('an empty stdin and a spec with no baseline are both broken checks, exit 2', async (t) => {
-  const { root } = await fixture(t);
+  const repo = await fixture(t);
+  if (repo === undefined) return;
+  const { root } = repo;
 
   // Both are misuse rather than a finding, and both used to be indistinguishable
   // from one.
@@ -399,7 +467,9 @@ test('both list commands are pinned repo-relative in the argv the checker issues
     t.skip('the shell shim on PATH is POSIX-only');
     return;
   }
-  const { root, baseline, deep } = await fixture(t);
+  const repo = await fixture(t);
+  if (repo === undefined) return;
+  const { root, baseline, deep } = repo;
 
   // Why observe the argv rather than only the verdict: the checker also runs
   // both commands *with cwd set to the repository root*, which by itself makes
@@ -435,12 +505,99 @@ test('both list commands are pinned repo-relative in the argv the checker issues
 
   const issued = (await readFile(log, 'utf8')).split('\n').filter(Boolean);
 
-  assert.ok(
-    issued.some((line) => /^-c diff\.relative=false diff --name-only \S+$/.test(line)),
-    `the diff must override diff.relative; issued:\n${issued.join('\n')}`,
+  const diffCommand = issued.find((line) => line.includes(' diff '));
+  const listCommand = issued.find((line) => line.includes('ls-files'));
+  assert.ok(diffCommand !== undefined, `no diff issued:\n${issued.join('\n')}`);
+  assert.ok(listCommand !== undefined, `no ls-files issued:\n${issued.join('\n')}`);
+
+  // Every latch, named, so removing any one of them fails here.
+  for (const required of ['-c diff.relative=false', '-c core.quotePath=false', '-z']) {
+    assert.ok(
+      diffCommand.includes(required),
+      `the diff must carry ${required}; issued: ${diffCommand}`,
+    );
+  }
+  for (const required of ['-c core.quotePath=false', '--full-name', '-z']) {
+    assert.ok(
+      listCommand.includes(required),
+      `ls-files must carry ${required}; issued: ${listCommand}`,
+    );
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Spellings of the input the guard has to accept
+// ---------------------------------------------------------------------------
+
+test('a ticked non-ASCII path is not accused, though git quotes it by default', async (t) => {
+  const repo = await fixture(t);
+  if (repo === undefined) return;
+  const { root, baseline, deep } = repo;
+
+  // The cwd bug in a different disguise, and the same false accusation on
+  // honest work. Measured on git 2.43.0: with `core.quotePath` at its default,
+  // both list commands return `"src/caf\303\251.ts"` — C-quoted and
+  // octal-escaped — so the byte comparison against `src/café.ts` missed and
+  // the checker exited 1. A filename containing a newline is legal too, and
+  // split on newlines it became two entries that are each not a file.
+  const accented = 'nested/deep/caf\u00e9-r\u00e9sum\u00e9.ts';
+  const cyrillic = 'nested/deep/\u0444\u0430\u0439\u043b.ts';
+  await writeFile(join(root, accented), 'export const a = 1;\n');
+  await writeFile(join(root, cyrillic), 'export const b = 2;\n');
+
+  // Tracked as well as untracked: `diff` quotes too, so one list being right
+  // would not be enough.
+  gitIn(root, ['add', '--', accented]);
+
+  const spec = specText(baseline, [
+    `- [x] \`${accented}\` -- committed-index path, comes back from git diff`,
+    `- [x] \`${cyrillic}\` -- untracked path, comes back from ls-files`,
+    '- [x] `nested/deep/tracked.ts` -- and the plain one still works',
+  ]);
+
+  for (const cwd of [root, deep]) {
+    const ran = await runChecker(spec, cwd);
+    assert.equal(ran.code, 0, `expected exit 0 in ${cwd}. stderr: ${ran.stderr}\n${ran.stdout}`);
+    assert.doesNotMatch(ran.stdout, /MISS/, ran.stdout);
+    assert.ok(ran.stdout.includes(accented), `the accented path must be reported: ${ran.stdout}`);
+    assert.ok(ran.stdout.includes(cyrillic), `the cyrillic path must be reported: ${ran.stdout}`);
+    // And nothing octal-escaped leaked into the report.
+    assert.doesNotMatch(ran.stdout, /\\3\d\d/, `a quoted path reached the output: ${ran.stdout}`);
+  }
+});
+
+test('a baseline_commit is read unquoted and double-quoted, not only single-quoted', async (t) => {
+  const repo = await fixture(t);
+  if (repo === undefined) return;
+  const { root, baseline } = repo;
+
+  // All three are valid YAML for the same scalar, and only one was accepted.
+  // `baseline_commit: <sha>` is what a human writing frontmatter by hand
+  // reaches for first, and it produced "No baseline_commit ... nothing to
+  // check against" — a guard declining to read its own input.
+  for (const rendered of [`${baseline}`, `'${baseline}'`, `"${baseline}"`, `${baseline}   `]) {
+    const spec = [
+      '---',
+      `baseline_commit: ${rendered}`,
+      '---',
+      '',
+      '- [x] `nested/deep/tracked.ts` -- honest',
+      '',
+    ].join('\n');
+    const ran = await runChecker(spec, root);
+    assert.equal(
+      ran.code,
+      0,
+      `baseline_commit: ${rendered} should be read. stderr: ${ran.stderr}`,
+    );
+    assert.match(ran.stdout, /ok {3}nested\/deep\/tracked\.ts/);
+  }
+
+  // And a line that genuinely carries no value is still a broken check.
+  const empty = await runChecker(
+    '---\nbaseline_commit:\n---\n\n- [x] `nested/deep/tracked.ts` -- honest\n',
+    root,
   );
-  assert.ok(
-    issued.some((line) => /^ls-files --others --exclude-standard --full-name$/.test(line)),
-    `ls-files must be pinned with --full-name; issued:\n${issued.join('\n')}`,
-  );
+  assert.equal(empty.code, 2, `expected exit 2, got ${String(empty.code)}`);
+  assert.match(empty.stderr, /No baseline_commit in the spec on stdin/);
 });

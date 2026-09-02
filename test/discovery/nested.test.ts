@@ -154,6 +154,73 @@ test('the runner passes when the floor is met', async (t) => {
 });
 
 /**
+ * A throwaway project whose only test skips itself.
+ *
+ * The floor cannot see this: a skipped test is still counted in `ℹ tests`, so
+ * the run reports `tests 1 / fail 0 / skipped 1`, clears a floor of 1, and
+ * exits 0. Measured before the check existed.
+ */
+async function skippingFixture(): Promise<string> {
+  const root = await mkdtemp(join(tmpdir(), 'bmad-dash-skip-'));
+  await writeFile(join(root, 'package.json'), '{"type":"module"}\n');
+  await mkdir(join(root, 'test'), { recursive: true });
+  await writeFile(
+    join(root, 'test', 'top.test.ts'),
+    "import test from 'node:test';\n" +
+      "test('guards something only a non-root box can reach', (t) => {\n" +
+      "  t.skip('stands in for the real platform guards');\n" +
+      '});\n',
+  );
+  return root;
+}
+
+test('the runner fails on a skipped test that cleared the floor', async (t) => {
+  const root = await skippingFixture();
+  t.after(() => rm(root, { recursive: true, force: true }));
+
+  const ran = await runNode([RUNNER], root, {
+    BMAD_DASH_TEST_PATTERN: 'test/**/*.test.ts',
+    BMAD_DASH_TEST_MIN: '1',
+  });
+
+  // The hazard, pinned from the other side: the floor is met and nothing
+  // failed, and the run must still be red.
+  assert.match(ran.output, /ℹ tests 1$/m);
+  assert.match(ran.output, /ℹ fail 0$/m);
+  assert.match(ran.output, /ℹ skipped 1$/m);
+  assert.notEqual(ran.code, 0, `a skipped guard must fail the build, got: ${ran.output}`);
+  assert.match(ran.output, /1 test\(s\) skipped/);
+});
+
+test('an explicit skip allowance lets the same run through', async (t) => {
+  const root = await skippingFixture();
+  t.after(() => rm(root, { recursive: true, force: true }));
+
+  const ran = await runNode([RUNNER], root, {
+    BMAD_DASH_TEST_PATTERN: 'test/**/*.test.ts',
+    BMAD_DASH_TEST_MIN: '1',
+    BMAD_DASH_TEST_ALLOW_SKIPS: '1',
+  });
+
+  assert.equal(ran.code, 0, ran.output);
+});
+
+test('an unreadable skip allowance is refused rather than read as generous', async (t) => {
+  const root = await skippingFixture();
+  t.after(() => rm(root, { recursive: true, force: true }));
+
+  for (const bad of ['', ' ', 'abc', '-1', 'true']) {
+    const ran = await runNode([RUNNER], root, {
+      BMAD_DASH_TEST_PATTERN: 'test/**/*.test.ts',
+      BMAD_DASH_TEST_MIN: '1',
+      BMAD_DASH_TEST_ALLOW_SKIPS: bad,
+    });
+    assert.notEqual(ran.code, 0, `an allowance of ${JSON.stringify(bad)} must not be accepted`);
+    assert.match(ran.output, /BMAD_DASH_TEST_ALLOW_SKIPS must be a whole number/);
+  }
+});
+
+/**
  * The floor's own guard.
  *
  * `Number('abc')` is `NaN` and every `<` comparison against `NaN` is false, so
@@ -191,7 +258,9 @@ test('the runner refuses an empty pattern override', async (t) => {
   const ran = await runNode([RUNNER], root, { BMAD_DASH_TEST_PATTERN: '' });
 
   assert.notEqual(ran.code, 0);
-  assert.match(ran.output, /BMAD_DASH_TEST_PATTERN is set but empty/);
+  // "set but empty" was the old wording, and it was inaccurate for `'   '` —
+  // set, and not empty. The branch always refused whitespace-only input.
+  assert.match(ran.output, /BMAD_DASH_TEST_PATTERN is set to an empty or whitespace-only value/);
 });
 
 test('a valid floor override is still honoured', async (t) => {

@@ -25,6 +25,7 @@ export type Parsed<T> = Accepted<T> | Rejected;
 
 export const MIN_ENV = 'BMAD_DASH_TEST_MIN';
 export const PATTERN_ENV = 'BMAD_DASH_TEST_PATTERN';
+export const SKIPS_ENV = 'BMAD_DASH_TEST_ALLOW_SKIPS';
 
 /**
  * Validate the floor override rather than coercing it.
@@ -67,7 +68,12 @@ export function parsePattern(raw: string | undefined, fallback: string): Parsed<
   if (raw.trim() === '') {
     return {
       ok: false,
-      message: `${PATTERN_ENV} is set but empty; that matches no files. Unset it to use the default.`,
+      // "set but empty" was wrong for `'   '`, which is set and is not empty.
+      // This branch has always refused whitespace-only input; only the wording
+      // was inaccurate about which inputs reach it.
+      message:
+        `${PATTERN_ENV} is set to an empty or whitespace-only value; that matches no files. ` +
+        'Unset it to use the default.',
     };
   }
   // Trimmed, like `parseFloor`. Untrimmed, `' test/**/*.test.ts '` was accepted,
@@ -94,6 +100,66 @@ export function readTotal(output: string): number | undefined {
   return last === undefined ? undefined : Number(last);
 }
 
+/**
+ * How many tests the reporter said it **skipped**.
+ *
+ * Read for the same reason the total is, and it is the half that was missing.
+ * A skipped test still counts toward `ℹ tests`, so a guard that skips itself
+ * clears the floor: measured, a suite with one guard forced to skip reports
+ * `fail 0 / skipped 1`, passes the floor and exits 0. Every named skip in this
+ * project guards a branch that only a POSIX non-root box can reach — the
+ * exit-1-versus-2 distinction, symlink creation, a `git` shim on PATH — which
+ * is exactly the set a CI container running as root silently stops testing.
+ * Naming the skips made them visible in the log; nothing read them.
+ *
+ * Last match, like `readTotal`, and for the same reason: a nested runner's
+ * output can be quoted in an assertion message.
+ */
+export function readSkipped(output: string): number | undefined {
+  const matches = [...output.matchAll(/^ℹ skipped (\d+)$/gm)];
+  const last = matches.at(-1)?.[1];
+  return last === undefined ? undefined : Number(last);
+}
+
+/**
+ * How many skipped tests this run is allowed to have.
+ *
+ * Defaults to zero, and the override exists so that a run which *intends* to
+ * skip — a deliberate partial run, or a platform where a named skip is the
+ * honest answer — can say so out loud rather than by having nobody look. A
+ * count rather than a boolean, so the allowance names how much it is excusing:
+ * `${SKIPS_ENV}=4` stops covering the fifth skip.
+ *
+ * Zero is accepted here, unlike in `parseFloor`, because zero is this knob's
+ * default rather than a way of switching it off — `${SKIPS_ENV}=0` and an unset
+ * variable mean the same strict thing. Validated rather than coerced for the
+ * same reason as the floor, and trimmed and refused when blank for the same
+ * reason as the pattern: an unreadable allowance must not read as a generous
+ * one.
+ */
+export function parseAllowedSkips(raw: string | undefined, fallback = 0): Parsed<number> {
+  if (raw === undefined) return { ok: true, value: fallback };
+
+  const trimmed = raw.trim();
+  if (trimmed === '' || !/^\d+$/.test(trimmed)) {
+    return {
+      ok: false,
+      message:
+        `${SKIPS_ENV} must be a whole number of tolerated skips, got ${JSON.stringify(raw)}. ` +
+        'Refusing to run: an unreadable allowance would read as an unlimited one, and a ' +
+        'skipped guard is a guard that did not run. Unset it to allow none.',
+    };
+  }
+  const parsed = Number(trimmed);
+  if (!Number.isSafeInteger(parsed)) {
+    return {
+      ok: false,
+      message: `${SKIPS_ENV} is not a readable count: ${JSON.stringify(raw)}.`,
+    };
+  }
+  return { ok: true, value: parsed };
+}
+
 export interface Outcome {
   readonly exitCode: number;
   readonly message: string | undefined;
@@ -112,6 +178,7 @@ export function summarize(run: {
   readonly output: string;
   readonly minTests: number;
   readonly pattern: string;
+  readonly allowedSkips: number;
 }): Outcome {
   if (run.signal !== null) {
     return { exitCode: 1, message: `the test runner was killed by ${run.signal}.` };
@@ -134,6 +201,30 @@ export function summarize(run: {
         `only ${String(total)} tests ran, expected at least ${String(run.minTests)}. ` +
         `Discovery is collecting less than the whole suite — check the pattern ${run.pattern} ` +
         'before assuming the code is fine. A pattern matching nothing exits 0 on its own.',
+    };
+  }
+
+  // Skips are checked after the floor, because "the suite stopped collecting"
+  // is the bigger fact and should be the message when both are true.
+  const skipped = readSkipped(run.output);
+  if (skipped === undefined) {
+    return {
+      exitCode: 1,
+      message:
+        'the summary carried a test count but no skip count. The reporter changed; ' +
+        'a run whose skips cannot be read is not evidence that nothing was skipped.',
+    };
+  }
+
+  if (skipped > run.allowedSkips) {
+    return {
+      exitCode: 1,
+      message:
+        `${String(skipped)} test(s) skipped, and at most ${String(run.allowedSkips)} ` +
+        'is allowed. A skipped test is a branch nobody checked, and every named skip here ' +
+        'guards something only a POSIX non-root box can reach — so a run that skips is ' +
+        `usually a container running as root, not a passing suite. Set ${SKIPS_ENV} to the ` +
+        'number you are prepared to excuse if the skips are deliberate.',
     };
   }
 

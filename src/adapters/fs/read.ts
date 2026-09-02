@@ -13,12 +13,19 @@
  *      the caller. Canonicalization comes first because that is what makes the
  *      check meaningful: a `..` segment, and an *existing* symlink pointing
  *      outside the tree, have both been resolved away by the time containment
- *      is asked, so neither passes by virtue of its spelling. For a path that
- *      does not exist there is nothing to resolve and containment answers about
- *      the spelling instead — see `canonical`. No read escapes as a result,
- *      since the `stat` below resolves the link and finds nothing at the far
- *      end; the point of saying so here is that the guarantee is narrower than
- *      this paragraph used to claim.
+ *      is asked, so neither passes by virtue of its spelling. For a path
+ *      `realpathSync.native` could not resolve there is nothing to resolve,
+ *      and containment answers about the spelling instead — see `canonical`.
+ *      No read escapes as a result, and the reason is **not** that the far end
+ *      is empty: it is that `resolveWithin` runs on every single operation, so
+ *      the containment question is re-asked, against a freshly canonicalized
+ *      path, at the moment of each read. A file that does appear at the far end
+ *      of an escaping link therefore resolves *then* and is refused then —
+ *      `test/adapters/paths.test.ts` asserts exactly that, with
+ *      `entryAt('escape/secret.txt')` throwing. What the spelling-only answer
+ *      costs is narrower than it looks: a containment check on an unresolvable
+ *      path is not a durable claim about that path, but no read is ever
+ *      performed on the strength of an earlier check.
  *
  * There is no way for a caller to skip the check. That is the design: a reader
  * that could be handed an already-checked path would eventually be handed one

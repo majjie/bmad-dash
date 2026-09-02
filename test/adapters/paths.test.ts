@@ -15,7 +15,7 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, rm, symlink, writeFile, stat } from 'node:fs/promises';
+import { mkdtemp, mkdir, rm, symlink, writeFile, stat, chmod } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, sep } from 'node:path';
 
@@ -175,19 +175,27 @@ test('the resolution limit is where the comments now say it is, not wider', asyn
   // A characterization test, and deliberately so: it pins the *limit* the doc
   // comments in `paths.ts` were narrowed to state, rather than blessing it.
   //
-  // `canonical` cannot resolve a path that is not there, so it returns it
-  // absolute and normalized with the symlink in it intact — which means
-  // `contains` answers about the spelling and reports an escaping path as
-  // inside. The comments used to claim this could not happen. It can; what
-  // cannot happen is a read escaping, because the `stat` at the far end finds
-  // nothing. If someone later makes `canonical` throw or resolve differently,
-  // this test is the one that has to be reconsidered along with those comments.
+  // `canonical` returns a path its resolver could not resolve absolute and
+  // normalized, with any symlink in it intact — which means `contains` answers
+  // about the spelling and reports an escaping path as inside. The comments
+  // used to claim this could not happen. It can; what cannot happen is a read
+  // escaping, and the reason is that `resolveWithin` re-canonicalizes and
+  // re-asks containment on every operation — not that the far end is empty.
+  // Both halves are asserted below. If someone later makes `canonical` throw
+  // or resolve differently, this test is the one that has to be reconsidered
+  // along with those comments.
+  if (process.platform === 'win32') {
+    t.skip('creating a directory symlink needs elevation on Windows');
+    return;
+  }
   const root = await scratch(t);
   const project = join(root, 'project');
   const outside = join(root, 'outside');
   await mkdir(project);
   await mkdir(outside);
-  await symlink(outside, join(project, 'escape'));
+  // The `'dir'` type is required on Windows and ignored elsewhere; without it
+  // this throws EPERM unelevated rather than skipping.
+  await symlink(outside, join(project, 'escape'), 'dir');
 
   // The link's own target resolves and is correctly refused.
   assert.ok(!contains(canonical(project), canonical(join(project, 'escape'))));
@@ -213,6 +221,50 @@ test('the resolution limit is where the comments now say it is, not wider', asyn
     /refusing to read outside the project/,
     'an existing path out of the tree is still refused',
   );
+});
+
+test('an unresolvable path that DOES exist takes the same fallback', async (t) => {
+  // The half the narrowed comments still got wrong. They said "a path that does
+  // not exist cannot be resolved", which reads as if existence were the
+  // condition. It is not: `resolveRealPathNative` catches everything, so a path
+  // that exists and cannot be *read* — EACCES on an intermediate directory —
+  // comes back exactly as spelled too, with any symlink in it unresolved.
+  //
+  // Skipped by name rather than returned silently: root ignores the mode bits,
+  // so on a root container this branch is unreachable and the run must say so.
+  // `scripts/run-tests.ts` fails a run that skips, which is what makes it say.
+  if (process.platform === 'win32' || process.getuid?.() === 0) {
+    t.skip('needs POSIX permissions and a non-root user');
+    return;
+  }
+
+  const root = await scratch(t);
+  const blocked = join(root, 'blocked');
+  const inner = join(blocked, 'inner');
+  await mkdir(inner, { recursive: true });
+  await writeFile(join(inner, 'present.txt'), 'x');
+
+  // Resolvable while readable, so the comparison below is against a real
+  // resolution rather than against a path that never resolved at all.
+  assert.equal(toPlatform(canonical(inner)), inner, 'readable and resolvable');
+
+  await chmod(blocked, 0o000);
+  try {
+    // It exists. It just cannot be resolved, and the fallback fires identically
+    // to the missing-path case.
+    const denied = canonical(join(inner, 'present.txt'));
+    assert.equal(
+      toPlatform(denied),
+      join(inner, 'present.txt'),
+      'an EACCES path is returned as spelled, exactly like an absent one',
+    );
+    assert.ok(
+      contains(canonical(root), denied),
+      'and containment answers about the spelling, for the same reason',
+    );
+  } finally {
+    await chmod(blocked, 0o755);
+  }
 });
 
 test('an absolute path is normalized even when it does not exist', async (t) => {

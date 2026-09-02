@@ -38,6 +38,7 @@ import { fileURLToPath } from 'node:url';
 import { dirname } from 'node:path';
 
 import {
+  GATED_MODULES,
   SCANNED_ROOTS,
   collectSourceFiles,
   describeDomain,
@@ -110,10 +111,13 @@ test('the scan actually reaches every root it claims, tooling included', async (
     'src/adapters/fs/realpath.ts',
     'scripts/run-tests.ts',
     'scripts/test-run-policy.ts',
-    // The one `scripts/` file whose `child_process` allowance is load-bearing:
-    // `check-tasks.ts` shells out to git for its entire purpose. A spot-check
-    // that omits it cannot detect the allowance being narrowed away, and the
-    // file would then fail the gate for doing exactly what it exists to do.
+    // `check-tasks.ts` shells out to git for its entire purpose, so it is the
+    // one `scripts/` file whose `child_process` allowance is load-bearing.
+    // Being scanned is what this row asserts, and that is all it asserts: if
+    // the allowance were narrowed the gate would *fail loudly* on this file
+    // rather than go quiet, so the enumeration is not what protects it. It is
+    // here so the scan is known to reach the file at all — the earlier version
+    // of this comment claimed both things at once, which cannot be right.
     'scripts/check-tasks.ts',
   ]) {
     assert.ok(files.includes(expected), `${expected} not scanned; found: ${files.join(', ')}`);
@@ -549,6 +553,21 @@ test('the purity rule is not merely passing vacuously on the real tree', async (
 
 test('the scanned roots are the ones the assertions claim', () => {
   assert.deepEqual([...SCANNED_ROOTS], ['src', 'web', 'scripts']);
+});
+
+test('the gated modules and their permitted prefixes are the ones claimed', () => {
+  // The allowance itself, pinned — which the file-enumeration rows do not do.
+  // Narrowing `child_process` would make `scripts/check-tasks.ts` fail the gate
+  // with a violation, so losing the allowance is loud; *widening* it is silent,
+  // and this is what makes a new prefix a deliberate edit here rather than a
+  // quiet grant. `scripts/` is the entry the tooling depends on: the ledger
+  // checker shells out to git for its whole purpose.
+  assert.deepEqual([...GATED_MODULES.keys()].sort(), ['child_process', 'fs']);
+  assert.deepEqual(
+    [...(GATED_MODULES.get('child_process') ?? [])],
+    ['src/adapters/git/', 'src/adapters/browser/', 'scripts/'],
+  );
+  assert.deepEqual([...(GATED_MODULES.get('fs') ?? [])], ['src/adapters/fs/']);
 });
 
 // ---------------------------------------------------------------------------
