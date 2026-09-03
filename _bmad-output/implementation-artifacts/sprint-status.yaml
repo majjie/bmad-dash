@@ -29,7 +29,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 # - Retrospective appends its action items to action_items; the status view surfaces open ones
 generated: 08-28-2026 20:15
-last_updated: 09-03-2026 12:23
+last_updated: 09-03-2026 12:32
 project: bmad-dash
 project_key: NOKEY
 tracking_system: file-system
@@ -158,7 +158,7 @@ action_items:
     action: "PROCESS: put the story key in each commit subject or trailer, so a retrospective
       can attribute change volume mechanically (P1)"
     owner: "Jamie"
-    status: open
+    status: done
     ref: "_bmad-output/implementation-artifacts/epic-1-retro-2026-09-03.md"
   - id: "epic-1-retro-item-11-process-standing-review-check-when-a-com"
     epic: 1
@@ -166,12 +166,12 @@ action_items:
       the test that fails if the mechanism is removed; the epic's dominant defect
       class, seven instances (P4)"
     owner: "Jamie"
-    status: open
+    status: done
     ref: "_bmad-output/implementation-artifacts/epic-1-retro-2026-09-03.md"
   - id: "epic-1-retro-item-12-process-treat-i-o-matrix-completeness-as"
     epic: 1
     action: "PROCESS: treat I/O-matrix completeness as a spec gate - three stories'
       principal defect landed in a combination the matrix did not enumerate (P6)"
     owner: "Jamie"
-    status: open
+    status: done
     ref: "_bmad-output/implementation-artifacts/epic-1-retro-2026-09-03.md"

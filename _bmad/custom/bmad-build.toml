@@ -35,4 +35,48 @@ persistent_facts = [
   "MUTATION AS THE STANDARD OF EVIDENCE — before marking a spec's tasks complete, break each invariant the story claims to enforce and confirm the suite fails. A test that passes proves nothing about what it would catch. Record which mutations were run and what failed. Prefer deterministic assertions over probabilistic ones: where a race or an ordering is the risk, assert the order of observable events rather than sampling a timing window, because a defect present 16% of the time passes a sixteen-run check most of the time.",
 
   "TASK LEDGER HONESTY — verify each task line against the code before ticking it, not against your own report of having done it, and not against a proxy you chose after the fact. MECHANICALLY: a task line names a file in backticks; before ticking it, confirm THAT FILE appears in the diff since the baseline commit. `scripts/check-tasks.ts` does this and must be run before any spec's tasks are marked complete. This clause exists because the story immediately after this standing fact was written ticked two tasks whose files were never touched — the verification script that was supposed to catch it grepped a *different* file for an adjacent-looking string and passed, which is the same asserted-rather-than-observed failure applied to the act of verifying. Two false ticks reached a completed story in this project (a signal handler that was never registered, request bodies that were never drained). Where the implementation deliberately diverges from a task line, amend the line to describe what was built and why, rather than ticking a claim that is not true.",
+
+  "COMMIT ATTRIBUTION — every commit this workflow creates carries a `Story: <key>` trailer naming the sprint-status story key it belongs to, e.g. `Story: 1-7-identify-what-each-artifact-is`. The subject line stays readable prose; the trailer is what a machine reads. Added 2026-09-03 from the Epic 1 retrospective (item 10): the retro's `git_evidence.py` pre-pass returned `stories: []` for all 25 commits against all 13 story ids, because nothing in a prose subject names a story, so change volume could not be attributed and had to be hand-mapped. This is a standing fact rather than a workflow key because bmad-build's `customize.toml` exposes nothing commit-related and `step-05-present.md` is a shipped file.",
+
+  "MATRIX COMPLETENESS — before presenting a spec, cross the I/O matrix's own dimensions and name every combination that has no row. Each is then either given a row or explicitly stated to be impossible, with the reason. Added 2026-09-03 from the Epic 1 retrospective (item 12): three of the epic's later stories had their principal defect in a combination the matrix never enumerated, while every enumerated row was built correctly — 1.8's suppression cap (a row for the alias case, none for the cap overflowing), 1.9's interpretation of an artifact that is not present (a row for recognized-but-uninterpretable, none for absent), and 1.10's slug leak at the heading and title levels (rows for every name-based case, none for a declared or structural one). The rows that get written get built; the combinations left out are where the defects land.",
 ]
+
+# The verification-gap reviewer, with one check added.
+#
+# Keyed arrays of tables merge by `id`, and `instruction` is a scalar inside the
+# table — so this entry replaces the shipped one wholesale and has to carry its
+# whole instruction, not just the addition. The only difference from the shipped
+# text is the paragraph beginning "One check in addition".
+#
+# Added 2026-09-03 from the Epic 1 retrospective (item 11). A comment asserting a
+# mechanism the code does not enforce was the dominant defect class across all
+# eleven review rounds of the epic — seven instances, found one at a time rather
+# than as a class:
+#   - `ChildStage` documented as "pinned as a subset by the typecheck", which it
+#     was not: the stages were inline literals the type never saw.
+#   - `LEVEL_LABELS` documented as "pinned against the index", by a test that
+#     compared them to a literal typed into the test file.
+#   - `INVENTORY_BUDGET`'s bounds called "roughly two orders of magnitude clear",
+#     where one of the two was 2.4x.
+#   - "Nothing outside the root is touched at any point", while the same function
+#     issued a readlink on /etc through an in-root symlink.
+#   - Three separate comments stating that a page load builds a new snapshot,
+#     while the served page was frozen at bind time for the life of the socket.
+# The check is cheap and the question is always the same one.
+[[workflow.review_layers]]
+id = "verification-gap"
+name = "Verification Gap Reviewer"
+instruction = """
+Launch a context-free subagent with this prompt:
+
+Read `{skill-root}/review-prompts/verification-gap.md` completely and follow it as your review instructions.
+
+One check in addition to that file's own method. Where a comment, doc block or type documents a *mechanism* — that something is pinned by the typecheck, enforced by a gate, read out of a named document rather than copied, total by construction, or cannot happen for a stated reason — identify the test that fails if that mechanism is removed. Name it. If no test fails, the claim is unenforced and that is the finding, whether or not the code currently behaves correctly: the comment tells a future reader that a guarantee exists, and the next edit will rely on it.
+
+Review content:
+
+{diff_output}
+
+Do not invoke any skill. If the instruction file is unreadable, report that exact failure and stop. Return only the review result.
+
+"""

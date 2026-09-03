@@ -612,6 +612,14 @@ reasoning. The sixth is the usual unconsumed-export tally.
   correction: This closes the retrospective's finding A1 but not A2 — `src/adapters/http/server.ts` importing `src/adapters/fs/paths.ts` is still an edge the amended table does not grant, and it is still unenforced. It is action item 4, owned by the dev loop.
   triggers: none — closed.
 
+## Reconciled from: epic 1 retrospective items 10-12 (2026-09-03)
+
+- source_spec: `_bmad-output/implementation-artifacts/epic-1-retro-2026-09-03.md`
+  summary: RESOLVED 2026-09-03 — items 10, 11 and 12, all three landed as overrides in `_bmad/custom/bmad-build.toml` through the `bmad-customize` flow. Item 10 and item 12 are new `[workflow] persistent_facts` entries (COMMIT ATTRIBUTION, MATRIX COMPLETENESS); item 11 replaces the `[[workflow.review_layers]]` entry keyed `id = "verification-gap"`.
+  evidence: User decision, epic 1 retrospective walkthrough. Each carries its retrospective evidence in the file itself, so a future reader sees what the clause prevents rather than only what it requires. Verified with `uv run --no-cache _bmad/scripts/resolve_customization.py --skill .claude/skills/bmad-build --key workflow`: six `persistent_facts` resolve where four did, and `verification-gap`'s instruction carries the added paragraph while `blind-hunter` and `edge-case-hunter` come through from the base unchanged.
+  correction: Item 10 is a standing fact rather than a workflow key **because there is no key**. `bmad-build`'s `customize.toml` exposes nothing commit-related and the commit itself is written by `step-05-present.md:59`, a shipped file carrying "DO NOT EDIT -- overwritten on every update". So the trailer is a fact the workflow carries, not a setting it reads, and it will hold only as long as the standing facts are actually honoured — unlike `scripts/check-tasks.ts`, nothing mechanically fails a commit that omits the trailer.
+  triggers: none — closed. But note the cost of item 11's shape: keyed arrays-of-tables merge by `id` and `instruction` is a scalar inside the table, so the override reproduces the shipped instruction in full. A future BMad update that improves the shipped `verification-gap` text will not reach this project — the override wins and keeps its copy. Accepted knowingly by the user. If the shipped layer changes, this entry is the trace for why the project did not see it.
+
 ## Resolved and closed
 
 Kept verbatim rather than deleted — this file exists so nothing is lost, and a
