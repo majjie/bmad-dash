@@ -428,15 +428,26 @@ export function projectInventory(inventory: Inventory): InventoryView {
   }
 
   return {
-    // **Narrower than `Inventory.complete`, deliberately.** The walk's own
-    // `complete` also goes false for a single entry it could not read and for
-    // any name it suppressed — facts that are already on the affected entry's
-    // own row. Reporting them again as "the scan did not finish" would be
-    // false: the scan did finish. What this claims is only the thing the row
-    // cannot say, which is that something is missing from the list *entirely*
-    // — a bound was reached, or a name was left out past a record cap and
-    // nobody can name it.
+    // **Narrower than `Inventory.complete`, deliberately — with one exception
+    // that the narrowing argument does not reach.** The walk's own `complete`
+    // also goes false for a single entry it could not read and for any name it
+    // suppressed — facts that are already on the affected entry's own row.
+    // Reporting them again as "the scan did not finish" would be false: the
+    // scan did finish. What this claims is only the thing the row cannot say,
+    // which is that something is missing from the list *entirely* — a bound was
+    // reached, or a name was left out past a record cap and nobody can name it.
+    //
+    // **`startEntry` is that exception, because it is the one entry with no
+    // row.** `Inventory` keeps the project root out of `entries` on purpose
+    // (the root is what was walked, not something found in it), so "it is on
+    // the affected entry's own row" is true of everything here except the root
+    // itself. Measured: over a root the walk could not enumerate, the pass said
+    // `complete: false` with `startEntry: unreadable`, this returned `true`, and
+    // the page reported a finished scan of an empty project — a project the tool
+    // could not open, presented as one it read fine. Pinned from both sides in
+    // `test/render/inventory.test.ts`.
     complete:
+      inventory.startEntry.state === 'present' &&
       inventory.truncations.length === 0 &&
       inventory.skippedNotRecorded === 0 &&
       inventory.suppressedNotRecorded === 0,

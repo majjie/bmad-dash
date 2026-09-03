@@ -731,6 +731,19 @@ export function inventoryTiles(view: InventoryView): readonly TileOptions[] {
     // `No sprint tracking in this project.` adds nothing to `A BMAD project,
     // with no artifacts yet.` Any other location state implies a tracking file,
     // which implies a row.
+    // **Only a *finished* scan has earned this sentence.** `PROJECT_EMPTY` is a
+    // positive claim about what the project holds, and a scan that stopped
+    // short cannot make it — it said so anyway for a root the walk could not
+    // read, which is the defect this branch was corrected for.
+    //
+    // When the scan did not finish, the scan tile above is the whole answer and
+    // this tile is dropped rather than repeating it. The alternative was to
+    // reuse `SCAN_STOPPED` here, which put one sentence on the page twice; the
+    // scan tile already spans the row and is raised, so a reader has been told.
+    // No new copy is invented either way: the string index has no row for a
+    // root that could not be read, and adding one is a UX decision this does
+    // not own.
+    if (!view.complete) return [scan];
     return [scan, { label: ARTIFACTS_TILE_LABEL, content: { empty: PROJECT_EMPTY } }];
   }
   // **`FAMILIES` is walked here rather than in the projection**, so every family

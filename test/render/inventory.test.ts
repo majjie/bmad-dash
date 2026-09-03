@@ -74,7 +74,7 @@ import { projectInventory } from '../../src/cli/index.ts';
 import { ConfinedReader } from '../../src/adapters/fs/read.ts';
 import { canonical, toPlatform } from '../../src/adapters/fs/paths.ts';
 import { EMPTY_INVENTORY, observeRun } from '../support/cli.ts';
-import { makeTree, symlinksAvailable } from '../support/tree.ts';
+import { deniableDirectories, makeTree, symlinksAvailable } from '../support/tree.ts';
 import {
   AMBIGUOUS_BOTH_ROW,
   CERTAIN_ROW,
@@ -509,6 +509,85 @@ test('a stage and an ambiguity survive the projection, over a tree that has both
   assert.ok(html.includes(`${CONTENT_SIGNAL_LABEL} ${SIGNAL_LABELS.unreadable}`));
   assert.ok(html.includes('<code class="artifact-stage">decode</code>'));
   assert.ok(html.includes(AMBIGUOUS_RUN_OR_SHARDED));
+});
+
+test('a project root the pass could not read is not reported as a finished scan', async (t) => {
+  // **The one loss the narrowing argument does not cover, one level up.**
+  // `projectInventory` narrows the pass's `complete` on the grounds that a
+  // per-entry failure is "already on the affected entry's own row" — true for
+  // everything in `entries`, and false for exactly one thing: `Inventory`
+  // deliberately keeps the project root *out* of `entries`, so `startEntry` has
+  // no row and nothing else carries its state.
+  //
+  // Measured before this test existed: over a root the walk could not
+  // enumerate, the pass reported `complete: false` with `startEntry:
+  // unreadable`, the projection returned `complete: true`, and the page said
+  // "The scan finished. Artifacts examined: 0." beside "A BMAD project, with no
+  // artifacts yet." A project the tool could not open, reported as an empty one
+  // it read fine.
+  if (!deniableDirectories()) {
+    t.skip('needs POSIX permissions and a non-root user');
+    return;
+  }
+  const root = await makeTree(t, [
+    { dir: '_bmad' },
+    { file: '_bmad-output/planning-artifacts/prds/prd.md', text: '---\ntitle: A PRD\n---\n' },
+  ]);
+
+  // `0o111` and not `0o000`: search but not read. Recognition only `stat`s the
+  // two markers, which needs `+x` on the root and not `+r`, so the CLI still
+  // resolves the project and the *walk* is what fails — which is the shape that
+  // reaches this defect. A `0o000` root fails recognition instead and never
+  // gets here. Restored in a `finally` rather than an `after` hook, because
+  // `makeTree` registered its recursive delete first and that delete cannot
+  // enter a directory it may not read.
+  const { chmod } = await import('node:fs/promises');
+  await chmod(root, 0o111);
+  try {
+    const inventory = takeInventory(new ConfinedReader(canonical(root)));
+    assert.notEqual(
+      inventory.startEntry.state,
+      'present',
+      'the fixture must produce a root the walk could not read',
+    );
+    assert.equal(inventory.complete, false, "the pass's own answer");
+
+    const view = projectInventory(inventory);
+    assert.equal(view.complete, false, 'and the projection must not widen it back');
+
+    const html = render(view);
+    assert.ok(html.includes(SCAN_STOPPED), 'the page says the scan did not finish');
+    assert.ok(
+      !html.includes(PROJECT_EMPTY),
+      'and does not also claim the project is empty, which it cannot know',
+    );
+  } finally {
+    await chmod(root, 0o755);
+  }
+});
+
+test('an incomplete scan does not claim the project is empty', () => {
+  // The render half of the same defect, pinned without a filesystem. The
+  // empty-project sentence is a positive claim about what is there; a scan that
+  // stopped has not earned it. `SCAN_STOPPED` is reused rather than new copy
+  // being invented, because `EXPERIENCE.md` has no row for a root that could
+  // not be read and inventing one is a UX decision this fix does not own.
+  const stopped = render(viewOf({ groups: [], complete: false }));
+  assert.ok(!stopped.includes(PROJECT_EMPTY), 'no empty-project claim on an unfinished scan');
+  assert.ok(stopped.includes(SCAN_STOPPED));
+  // And exactly once. Reusing the sentence as the artifacts tile's empty reason
+  // was the first fix here and it put one fact on the page twice, which this
+  // retrospective had just flagged elsewhere as its own defect.
+  assert.equal(
+    stopped.split(SCAN_STOPPED).length - 1,
+    1,
+    'the sentence appears once, not once per tile',
+  );
+
+  // And the complete case is unchanged: a project that really is empty still
+  // says so, so the guard above cannot be satisfied by never saying it.
+  const empty = render(viewOf({ groups: [], complete: true }));
+  assert.ok(empty.includes(PROJECT_EMPTY), 'a genuinely empty project still says so');
 });
 
 test('a second spelling with no row of its own is reported on the page', async (t) => {

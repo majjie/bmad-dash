@@ -29,7 +29,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 # - Retrospective appends its action items to action_items; the status view surfaces open ones
 generated: 08-28-2026 20:15
-last_updated: 09-03-2026 11:55
+last_updated: 09-03-2026 12:06
 project: bmad-dash
 project_key: NOKEY
 tracking_system: file-system
@@ -88,7 +88,7 @@ action_items:
       view, so an unreadable project root is not reported as a finished scan of an
       empty project (retro finding E1/F1)"
     owner: "dev loop"
-    status: open
+    status: done
     ref: "_bmad-output/implementation-artifacts/epic-1-retro-2026-09-03.md"
   - id: "epic-1-retro-item-2-pin-the-five-unpinned-projection-seams-r"
     epic: 1
