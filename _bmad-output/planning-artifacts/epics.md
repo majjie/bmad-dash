@@ -114,7 +114,7 @@ This document provides the complete epic and story breakdown for bmad-dash, deco
 - NFR-8: A ~24,000-word document opens and navigates without perceptible delay.
 - NFR-9: Server binds explicitly to `127.0.0.1` and no other interface, by literal address rather than the name `localhost`.
 - NFR-10: File serving confined to the target project's artifact tree; path traversal prevented.
-- NFR-11: No telemetry, analytics or outbound network requests of any kind.
+- NFR-11: No telemetry or analytics is added, and nothing in the product's purpose requires an outbound network request. **Advisory, not a gate** (reclassified 2026-09-03 by user decision) — held by code discipline and review; no network-module gate is owed, and a bundled dependency is not an outbound request.
 - NFR-12: Works on Linux, macOS and Windows.
 - NFR-13: Environments where a browser cannot be launched remain usable via the reported URL.
 - NFR-14: The dense default view is fully keyboard navigable.
@@ -157,7 +157,7 @@ From the UX design contract (DESIGN.md + EXPERIENCE.md), both final. 24 colour t
 
 - UX-DR1: Implement the token layer as the single source of visual values — 24 colour, 8 typography, 4 motion, 12 spacing, 5 radius tokens. No component may carry a hex, px or rem literal; every value resolves through a token.
 - UX-DR2: Implement tonal elevation as the only depth mechanism. Three levels of the surface-container ladder govern peer surfaces; a surface nested inside another is relative to its container and takes two ladder steps of separation, because one step is below the ratio at which a tonal boundary reads as an edge. Since nesting exhausts the ladder, hover and other transient states change the outline rather than the surface. No shadow, gradient or blur anywhere in the system. *(Amended 2026-09-01: previously read "three levels ... at rest", which contradicted the core-artifact card's own tokens; DESIGN.md's Elevation & Depth section was rewritten and this followed.)*
-- UX-DR3: Declare IBM Plex Sans, Mono and Serif with system fallback stacks — **no font file is shipped and none is fetched**, because NFR-11 forbids any outbound request *(verb corrected 2026-09-03: the requirement said "Load", which the implementation deliberately does not do)* — and apply the mono role semantically: any string originating from the filesystem or naming a machine state is monospaced.
+- UX-DR3: Declare IBM Plex Sans, Mono and Serif with system fallback stacks — **no font file is shipped and none is fetched**, because a CDN face is an outbound request from the reader's browser, which NFR-11 advises against and which would also disclose tool usage and cost the startup budget (NFR-7) — three reasons, each standing alone *(verb corrected 2026-09-03: the requirement said "Load", which the implementation deliberately does not do)* — and apply the mono role semantically: any string originating from the filesystem or naming a machine state is monospaced.
 - UX-DR4: Enforce two type floors — content text at or above `body-dense`, labels and badges at or above 11px. Density is achieved by compressing spacing, never by shrinking type.
 - UX-DR5: Build the `tile` component: uppercase label in `on-surface-variant`, content below, one kind of information per tile, meaningful when its data is empty, partial or unavailable.
 - UX-DR6: Build `tile-raised`, identical but one ladder step higher, at most one per surface.

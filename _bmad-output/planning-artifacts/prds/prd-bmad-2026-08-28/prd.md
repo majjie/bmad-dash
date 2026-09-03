@@ -301,7 +301,7 @@ The primary job. Per §2.3 this surfaces risk; it does not judge correctness.
 - **NFR-9** The server binds explicitly to `127.0.0.1` and to no other interface, so it is reachable only from the same machine. Binding is by literal address rather than by the name `localhost`, which can resolve to other addresses, and never to `0.0.0.0`. The honest limit of this guarantee: on a shared machine, other local users and processes can still reach a loopback port.
 - **NFR-10** File serving is confined to the target project's artifact tree; path traversal outside it is prevented.
 - **NFR-17** Every path segment derived from project content is sanitized before use. BMAD run-folder names are built from free-text slugs (`spec-{slug}`, `{topic_slug}`) that no BMAD component sanitizes, and those names reach the tool as filesystem paths and as URL components. They are treated as untrusted input on both surfaces.
-- **NFR-11** No telemetry, analytics, or outbound network requests of any kind (§5).
+- **NFR-11** *(Advisory, not a gate — reclassified 2026-09-03 by user decision. The original intent was no telemetry, and read-only access held by code discipline; read as an enforcement obligation it was being raised at every turn and had started to govern decisions it never spoke to.)* No telemetry or analytics is added, and nothing in the product's purpose requires an outbound network request (§5). Held by code discipline and review rather than by an automated gate. **No gate on network modules is owed, and adding a bundled dependency is not an outbound request** — this advisory says nothing about whether a library may be used.
 
 ### Environment portability
 

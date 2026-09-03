@@ -8,8 +8,11 @@
  * disk. So this reads exactly that shape and says so; it is not a YAML parser
  * and must not become one.
  *
- * Why not `yaml`: NFR-11's dependency gate is a deferred decision, and
- * measuring the trade settled it for this level rather than deferring it again
+ * Why not `yaml`: measuring the trade settled it for this level. (This comment
+ * used to open by citing "NFR-11's dependency gate", which was never a thing
+ * NFR-11 said — it is about telemetry and outbound requests, and a bundled
+ * parser opens no socket. Corrected 2026-09-03 with NFR-11's reclassification;
+ * the bundle-size measurement below was always the actual reason.)
  * — bundling `yaml` grows `dist/` from about 34KB to about 264KB to buy
  * anchors, tags, merge keys, multi-document streams and flow collections, none
  * of which level 2 reads. **No bundled library is anticipated any more**: this
