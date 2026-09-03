@@ -2,7 +2,7 @@
 title: 'Open an artifact at its own URL'
 type: 'feature'
 created: '2026-09-03'
-status: 'in-review'
+status: 'done'
 baseline_commit: '6c8922cf4e28c45b58a8a94a27723313c5be3bd6'
 review_loop_iteration: 0
 context: []
@@ -107,3 +107,76 @@ context: []
 
 **Manual checks:**
 - Serve this repository, follow a row's link, and confirm the URL survives a reload and the browser back button. Then request `/artifact/../../etc/passwd` in every encoding and confirm a 404 with no read attempted.
+
+## Suggested Review Order
+
+**The grammar — start here**
+
+- The whole design: build from the relative path, encode per segment, never sanitize.
+  [`url.ts:131`](../../src/domain/url.ts#L131)
+
+- Decode, then normalize, in that order — and refuse a segment that decodes to a separator.
+  [`url.ts:225`](../../src/domain/url.ts#L225)
+
+- Where every traversal spelling collapses before anything looks at it.
+  [`url.ts:161`](../../src/domain/url.ts#L161)
+
+- The parse side, and the one place the section marker is found before decoding.
+  [`url.ts:264`](../../src/domain/url.ts#L264)
+
+**Why traversal is not a threat**
+
+- Resolution is a scan of the view's rows. Nothing here can reach a filesystem.
+  [`artifact.ts:92`](../../src/render/artifact.ts#L92)
+
+- The route: parse, look up, serve or 404 — and the section field parsed then dropped.
+  [`server.ts:537`](../../src/adapters/http/server.ts#L537)
+
+**The surface**
+
+- One malformed path costs one link, not the whole Dashboard.
+  [`inventory.ts:660`](../../src/render/inventory.ts#L660)
+
+- The shell, and the facts shared with the row so the two accounts cannot drift.
+  [`artifact.ts:115`](../../src/render/artifact.ts#L115)
+
+- The shared facts themselves — one renderer, two surfaces.
+  [`inventory.ts:678`](../../src/render/inventory.ts#L678)
+
+- Refresh is now per-surface, required rather than defaulted.
+  [`chrome.ts:128`](../../src/render/chrome.ts#L128)
+
+- The verbatim-HTML sink, now with an importer set behind its safety claim.
+  [`page.ts:135`](../../src/render/page.ts#L135)
+
+- The response headers, stated once now that a second surface needs them.
+  [`server.ts:139`](../../src/adapters/http/server.ts#L139)
+
+**The two rules that must move together**
+
+- Cancels the base underline.
+  [`stylesheet.ts:499`](../../src/render/stylesheet.ts#L499)
+
+- Restores it on the path — removing this was green at 936/936 before review.
+  [`stylesheet.ts:518`](../../src/render/stylesheet.ts#L518)
+
+**The tests that carry the story's claims**
+
+- Two paths a sanitizer would collapse keep two distinct URLs — the encoder's whole point.
+  [`url.test.ts:83`](../../test/domain/url.test.ts#L83)
+
+- Confinement, asserted in both directions rather than as an absence.
+  [`server.test.ts:1755`](../../test/server.test.ts#L1755)
+
+- The underline pair, which nothing observed until review.
+  [`stylesheet.test.ts:619`](../../test/render/stylesheet.test.ts#L619)
+
+- Row and page agree on every fact, cross-checked between the two renders.
+  [`artifact.test.ts:214`](../../test/render/artifact.test.ts#L214)
+
+- A row becomes a link to the URL the grammar builds.
+  [`inventory.test.ts:1642`](../../test/render/inventory.test.ts#L1642)
+
+- The project's first keyboard assertion: focus order and `Enter`.
+  [`inventory.test.ts:1736`](../../test/render/inventory.test.ts#L1736)
+
