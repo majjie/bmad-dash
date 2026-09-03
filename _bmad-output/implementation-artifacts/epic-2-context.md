@@ -8,7 +8,8 @@ Epic 1 made every artifact findable and correctly identified; Epic 2 makes each 
 
 ## Stories
 
-- Story 2.1: Open an artifact at its own URL
+- Story 2.1: Serve every response from one snapshot
+- Story 2.1a: Open an artifact at its own URL
 - Story 2.2: Know when what you are reading has moved
 - Story 2.3: Get from the tool to your editor
 - Story 2.4: Read a memlog as a decision trail
@@ -66,7 +67,7 @@ Viewers consume the scan's recorded identification verdict and never re-derive i
 
 ## Cross-Story Dependencies
 
-- **Story 2.1 founds the epic** — artifact URL, snapshot-scoped response, cached rendering parse. Stories 2.2 and 2.3 complete the shell that 2.4 to 2.8 inherit.
+- **Stories 2.1 and 2.1a found the epic**, split on 2026-09-03 at the build workflow's multi-goal checkpoint. **2.1** is the snapshot lifecycle alone: one immutable snapshot per refresh carrying an identity, every response recording the identity it came from, no in-place mutation, and the currency probe read at the moment of open. **2.1a** is the artifact URL, the server-rendered content and the rendering parse cached for that snapshot's lifetime — it carries FR-18 and the original title. The order is fixed by the dependency: 2.1a's cache keys to 2.1's snapshot identity. Stories 2.2 and 2.3 then complete the shell that 2.4 to 2.8 inherit.
 - **Stories 2.4 to 2.8 are independent of each other** once the shell exists.
 - **Stories 2.9 to 2.11 are one chain, and the permalink is why.** Section identity must be settled while page division is written, not retrofitted: dividing a document is exactly what a permalink has to survive. The rail consumes the same section model.
 - **From Epic 1:** identification precedence and its recorded verdict, whole and sharded documents handled alike including the ambiguous case, sprint-tracking location with out-of-tree reporting, tokens, shared components, global chrome, confinement on every read.
