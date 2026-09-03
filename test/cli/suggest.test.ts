@@ -298,6 +298,26 @@ test('a project two levels below the target is found', async (t) => {
   assert.deepEqual(offered(suggestions(base)), [invocation(project)]);
 });
 
+test('a target whose own name looks like a placeholder still gets a suggestion', async (t) => {
+  if (process.platform === 'win32') {
+    t.skip('an angle bracket is not legal in a Windows path');
+    return;
+  }
+  // The failure this pins is a guard denying the whole output. `NO_CANDIDATE`
+  // interpolates the target path, so a directory called `<script>` put a string
+  // matching the placeholder pattern *into* the filled sentence -- and the old
+  // private filler checked for unfilled placeholders by re-scanning that
+  // sentence, so it threw out of the scan instead of printing a command. The
+  // person who most needs the suggestion is the one whose path is unusual.
+  const base = await scratch(t);
+  const odd = join(base, '<script>');
+  await mkdir(odd, { recursive: true });
+
+  const text = suggestions(odd);
+  assert.ok(text.includes('<script>'), `the target path was not reported:\n${text}`);
+  assert.ok(text.includes('No directory holding'), `the index sentence is missing:\n${text}`);
+});
+
 test('a project three levels below the target is out of bounds', async (t) => {
   // The depth bound, from the side that proves it is a bound. Without this the
   // "two levels" claim is satisfied by any walker that goes at least two deep.

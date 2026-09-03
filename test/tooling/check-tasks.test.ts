@@ -368,6 +368,52 @@ test('a baseline that is not a commit is a broken check, exit 2, naming the reba
   assert.match(ran.stderr, /[Rr]ebased or amended/);
   assert.doesNotMatch(ran.stderr, /\n\s+at /, 'a report, not a stack trace');
   assert.doesNotMatch(ran.stdout, /MISS/, 'nothing was checked, so nothing may be reported');
+  // The other half of the row below: `--quiet` keeps git silent for an object
+  // that is merely absent, so the overwhelmingly common cause reports the one
+  // sentence and gains no second-guessing line.
+  assert.doesNotMatch(ran.stderr, /git said:/, 'an absent sha needs no git message');
+});
+
+test('a repository-level failure is reported in git own words, not as a rebase', async (t) => {
+  if (process.platform === 'win32') {
+    t.skip('the shell shim on PATH is POSIX-only');
+    return;
+  }
+  const repo = await fixture(t);
+  if (repo === undefined) return;
+  const { root, baseline } = repo;
+
+  // Every non-zero exit from `rev-parse --verify` used to read as "rebased or
+  // amended -- update the spec", which sends the reader to edit frontmatter
+  // when the fault is an unreadable `.git`, a corrupt object database, or a sha
+  // naming a tree rather than a commit. The rebase reading stays, because it is
+  // nearly always right; what is added is what git actually said when it said
+  // anything, so the uncommon case is diagnosable instead of misdirected.
+  const realGit = execFileSync('/bin/sh', ['-c', 'command -v git'], { encoding: 'utf8' }).trim();
+  assert.ok(realGit !== '', 'git must be on PATH for this test to mean anything');
+
+  const shimDir = await realpath(await mkdtemp(join(tmpdir(), 'bmad-dash-gitfail-')));
+  t.after(() => rm(shimDir, { recursive: true, force: true }));
+  const shim = join(shimDir, 'git');
+  await writeFile(
+    shim,
+    '#!/bin/sh\n' +
+      'case " $* " in\n' +
+      "  *' --verify '*) printf 'fatal: unable to read tree deadbeef\\n' >&2; exit 128 ;;\n" +
+      'esac\n' +
+      `exec ${JSON.stringify(realGit)} "$@"\n`,
+  );
+  await chmod(shim, 0o755);
+
+  const ran = await runChecker(
+    specText(baseline, ['- [x] `nested/deep/tracked.ts` -- uncheckable, but not because of a rebase']),
+    root,
+    { PATH: `${shimDir}:${process.env.PATH ?? ''}` },
+  );
+
+  assert.equal(ran.code, 2, `expected exit 2, got ${String(ran.code)}. stderr: ${ran.stderr}`);
+  assert.match(ran.stderr, /git said: fatal: unable to read tree deadbeef/);
+  assert.doesNotMatch(ran.stderr, /\n\s+at /, 'a report, not a stack trace');
 });
 
 test('a spec piped in from outside a repository is a broken check, exit 2', async (t) => {

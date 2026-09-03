@@ -63,6 +63,7 @@ import {
   toPlatform,
   type CanonicalPath,
 } from '../adapters/fs/paths.ts';
+import { fillIndexString } from '../render/html.ts';
 import { MARKERS, markerList, resolveLocation } from './location.ts';
 
 /**
@@ -141,22 +142,6 @@ export const NO_CANDIDATE =
   'No directory holding <markers> is in the ancestors of <path>, or within <n> levels below it.';
 export const SCAN_INCOMPLETE = 'The scan did not finish, so a project may be missing: <reasons>.';
 export const CANDIDATES_ELIDED = '<n> more not listed.';
-
-/**
- * Substitute an index string's placeholders, refusing to emit an unfilled one.
- *
- * The throw is the point: `<n>` reaching a terminal is the visible half of
- * having edited the index and not the call, and a message that ships a literal
- * angle bracket is the kind of defect a reader reports rather than a suite.
- */
-function fill(template: string, values: Readonly<Record<string, string>>): string {
-  const filled = template.replace(/<([a-z]+)>/g, (whole, key: string) => values[key] ?? whole);
-  const unfilled = /<[a-z]+>/.exec(filled);
-  if (unfilled !== null) {
-    throw new Error(`unfilled placeholder ${unfilled[0]} in ${JSON.stringify(template)}`);
-  }
-  return filled;
-}
 
 // ---------------------------------------------------------------------------
 // How the tool was invoked
@@ -418,10 +403,10 @@ function report(state: {
   if (candidates.length === 1) {
     lines.push(ONE_CANDIDATE, '');
   } else if (candidates.length > 1) {
-    lines.push(fill(MANY_CANDIDATES, { n: String(candidates.length) }), '');
+    lines.push(fillIndexString(MANY_CANDIDATES, { n: String(candidates.length) }), '');
   } else {
     lines.push(
-      fill(NO_CANDIDATE, {
+      fillIndexString(NO_CANDIDATE, {
         markers: markerList(),
         path: shown,
         n: String(MAX_DEPTH_BELOW),
@@ -433,10 +418,10 @@ function report(state: {
     lines.push(`    ${command} ${shellQuote(candidate)}${tail === '' ? '' : ` ${tail}`}`);
   }
   const elided = candidates.length - Math.min(candidates.length, MAX_SUGGESTIONS);
-  if (elided > 0) lines.push('', fill(CANDIDATES_ELIDED, { n: String(elided) }));
+  if (elided > 0) lines.push('', fillIndexString(CANDIDATES_ELIDED, { n: String(elided) }));
 
   const why = reasons(skipped, wide, exhausted);
-  if (why.length > 0) lines.push('', fill(SCAN_INCOMPLETE, { reasons: why.join('; ') }));
+  if (why.length > 0) lines.push('', fillIndexString(SCAN_INCOMPLETE, { reasons: why.join('; ') }));
 
   return lines;
 }

@@ -94,15 +94,25 @@ const repoRoot = git(['rev-parse', '--show-toplevel']).trim();
 
 // Named specifically, because this is the failure a rebase or an amend
 // produces and "could not run git diff" sends the reader to look at git.
+//
+// stderr is captured rather than discarded, and appended when git actually
+// said something. `--quiet` means an object that is merely *absent* exits 1
+// silently, so the common case -- a rebased baseline -- still reports exactly
+// the sentence above and nothing more. What used to be lost is the uncommon
+// case: an unreadable `.git`, a corrupt object database, or a sha naming a
+// tree rather than a commit all arrive here too, and all of them were reported
+// as "update your spec frontmatter" while the fault was in the repository.
 try {
   execFileSync('git', ['rev-parse', '--verify', '--quiet', `${baseline}^{commit}`], {
     cwd: repoRoot,
-    stdio: 'ignore',
+    stdio: ['ignore', 'ignore', 'pipe'],
   });
-} catch {
+} catch (error: unknown) {
+  const said = String((error as { stderr?: Buffer | string }).stderr ?? '').trim();
   process.stderr.write(
     `baseline_commit ${baseline} is not a commit in ${repoRoot}. ` +
-      'Rebased or amended since the spec was written? Update it before checking.\n',
+      'Rebased or amended since the spec was written? Update it before checking.\n' +
+      (said === '' ? '' : `git said: ${said}\n`),
   );
   process.exit(2);
 }
