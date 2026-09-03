@@ -13,7 +13,6 @@
  * surface is rendered from rather than by a special-purpose one.
  */
 
-import { digestOf } from '../../src/domain/snapshot.ts';
 import type { ArtifactRow, FamilyGroup, InventoryView } from '../../src/render/inventory.ts';
 
 /** A filename a repository can legally contain, and which is markup if unescaped. */
@@ -169,11 +168,6 @@ export const FULL_INVENTORY_VIEW: InventoryView = {
   artifactCount: 11,
   namesLeftOut: 13,
   aliases: [{ name: '_bmad-output/specs/link.md', reportedAt: '_bmad-output/specs/SPEC.md' }],
-  // Arbitrary but fixed: this fixture exercises every row shape the surface
-  // can render, which has nothing to do with *which* snapshot it came from.
-  // `test/render/inventory.test.ts` asserts the real derivation over a live
-  // pass instead.
-  snapshotId: digestOf(['test/support/inventory.ts', 'FULL_INVENTORY_VIEW']),
   groups: [
     {
       family: 'prd',

@@ -65,15 +65,6 @@ export const LOOPBACK_ADDRESS = '127.0.0.1';
 export const MAX_PORT = 65535;
 
 /**
- * Carries the served view's identity (AD-17), on the 200 and `HEAD` paths
- * only. `respondText` and the 405 path are untouched: none of those responses
- * consult a snapshot, so none has an identity to carry — see
- * `SnapshotId`'s own header in `src/domain/snapshot.ts` for what the value is
- * derived from.
- */
-export const SNAPSHOT_ID_HEADER = 'x-bmad-snapshot-id';
-
-/**
  * The default port for the scheme this adapter serves. A client omits the port
  * from `Host` when it is the scheme default, so on port 80 a browser sends a
  * bare `Host: 127.0.0.1`. Only http is served here, so 443 is deliberately not
@@ -432,16 +423,9 @@ function handleRequest(
     // the pass is built not to throw at all (AD-7), but it reads a filesystem
     // that can change between two requests, which is the one honest reason a
     // second request can fail where the first succeeded.
-    //
-    // The view is held onto rather than discarded after `renderPage` consumes
-    // it: its `snapshotId` is what AD-17 asks this response to record, and it
-    // is a fact about the *view*, not about the document string `renderPage`
-    // returns.
-    let view: InventoryView;
     let document: string;
     try {
-      view = inventory();
-      document = renderPage(toPlatform(projectRoot), view);
+      document = renderPage(toPlatform(projectRoot), inventory());
     } catch (error: unknown) {
       onError?.(error instanceof Error ? error : new Error(String(error)));
       respondText(response, 500, 'The page could not be rendered.\n');
@@ -450,7 +434,6 @@ function handleRequest(
     response.writeHead(200, {
       'content-type': 'text/html; charset=utf-8',
       'cache-control': 'no-store',
-      [SNAPSHOT_ID_HEADER]: view.snapshotId,
     });
     response.end(document);
     return;

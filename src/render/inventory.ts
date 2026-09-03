@@ -54,7 +54,6 @@ import {
 import type { InterpretationState } from '../domain/interpretation.ts';
 import type { DateSignal, Reuse } from '../domain/runs.ts';
 import { SIGNAL_LABELS, type ReadStage, type SignalState } from '../domain/signal.ts';
-import type { SnapshotId } from '../domain/snapshot.ts';
 import { outOfTreeReport, type LocationState } from '../domain/sprint.ts';
 import type { TileContent, TileOptions } from './components.ts';
 import { fillIndexString, markup, type Markup } from './html.ts';
@@ -400,13 +399,6 @@ export interface InventoryView {
   /** Second spellings the walk dropped, which have no row of their own. */
   readonly aliases: readonly AliasReport[];
   readonly groups: readonly FamilyGroup[];
-  /**
-   * AD-17: this response's identity, derived from the facts above rather than
-   * minted. Two views built from an unchanged project carry the same id;
-   * anything that changes what is rendered changes it. See
-   * `src/cli/index.ts`'s `snapshotIdOf` for what is folded in and why.
-   */
-  readonly snapshotId: SnapshotId;
 }
 
 /** One name the walk dropped, and where the artifact behind it is reported. */

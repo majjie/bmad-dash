@@ -654,37 +654,6 @@ function unfinishedListings(
 }
 
 /**
- * Freeze `value` and everything reachable from it through own enumerable
- * properties and array elements.
- *
- * AD-3 calls a snapshot *immutable*; measured before this, it was immutable by
- * type only — `Object.isFrozen(inventory)` was `false`, and `skipped` was
- * handed out as the very array `skipPolicy` pushed into, so a caller holding a
- * reference to it could still mutate the snapshot everyone else was reading.
- * `Object.freeze` is shallow, so this recurses through the whole graph
- * `takeInventory` returns rather than freezing only the top-level object.
- *
- * Applied once, at `takeInventory`'s one return site, to a graph that is never
- * touched again after this call: nothing under `entries`, `skipped` or
- * `aliases` is shared with a later pass, so there is no risk of freezing a
- * value some other in-flight computation still means to write to.
- *
- * A `WeakSet` guards a cycle turning this into an infinite recursion, though
- * nothing in `Inventory`'s shape is expected to have one — every field here is
- * a tree built fresh by this call, not a graph with back-references.
- */
-function deepFreeze<T>(value: T, seen: WeakSet<object> = new WeakSet()): T {
-  if (value === null || typeof value !== 'object') return value;
-  if (seen.has(value)) return value;
-  seen.add(value);
-  Object.freeze(value);
-  for (const key of Object.getOwnPropertyNames(value)) {
-    deepFreeze((value as Record<string, unknown>)[key], seen);
-  }
-  return value;
-}
-
-/**
  * Take the inventory of `reader`'s root.
  *
  * `reader` is the confined reader for the project root — the one root AD-9
@@ -765,7 +734,7 @@ export function takeInventory(
     });
   }
 
-  return deepFreeze({
+  return {
     root: result.root,
     // The walk always reports its starting directory as its own entry; the
     // fallback is for the shape of the type rather than for a reachable state,
@@ -790,7 +759,7 @@ export function takeInventory(
     // outside the root is read to answer it.
     storyLocation: storyLocationOf(reader, entries),
     suppressedNotRecorded: result.suppressedNotRecorded,
-  });
+  };
 }
 
 /**

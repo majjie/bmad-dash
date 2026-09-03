@@ -36,7 +36,6 @@ import type {
   StoryLocationReport,
 } from '../render/inventory.ts';
 import { toPlatform, type CanonicalPath } from '../adapters/fs/paths.ts';
-import { digestOf, type SnapshotId } from '../domain/snapshot.ts';
 
 const USAGE = 'Usage: bmad-dash [path] [options]';
 const ACCEPTED =
@@ -430,93 +429,41 @@ export function projectInventory(inventory: Inventory): InventoryView {
     groups.push({ family, rows: byFamily.get(family) ?? [], notes: notesFor(family, inventory) });
   }
 
-  // **Narrower than `Inventory.complete`, deliberately — with one exception
-  // that the narrowing argument does not reach.** The walk's own `complete`
-  // also goes false for a single entry it could not read and for any name it
-  // suppressed — facts that are already on the affected entry's own row.
-  // Reporting them again as "the scan did not finish" would be false: the
-  // scan did finish. What this claims is only the thing the row cannot say,
-  // which is that something is missing from the list *entirely* — a bound was
-  // reached, or a name was left out past a record cap and nobody can name it.
-  //
-  // **`startEntry` is that exception, because it is the one entry with no
-  // row.** `Inventory` keeps the project root out of `entries` on purpose
-  // (the root is what was walked, not something found in it), so "it is on
-  // the affected entry's own row" is true of everything here except the root
-  // itself. Measured: over a root the walk could not enumerate, the pass said
-  // `complete: false` with `startEntry: unreadable`, this returned `true`, and
-  // the page reported a finished scan of an empty project — a project the tool
-  // could not open, presented as one it read fine. Pinned from both sides in
-  // `test/render/inventory.test.ts`.
-  const complete =
-    inventory.startEntry.state === 'present' &&
-    inventory.truncations.length === 0 &&
-    inventory.skippedNotRecorded === 0 &&
-    inventory.suppressedNotRecorded === 0;
-  // The rows actually placed, not `entries.length`: the output folder is
-  // excluded above, and a count that included it would contradict the list
-  // the reader can see.
-  const artifactCount = groups.reduce((total, group) => total + group.rows.length, 0);
-  // The skip policy's whole tally, recorded names and the overflow count
-  // together, because the reader's question is how many names were not
-  // examined and neither half answers it alone.
-  const namesLeftOut = inventory.skipped.length + inventory.skippedNotRecorded;
-
   return {
-    complete,
-    artifactCount,
-    namesLeftOut,
+    // **Narrower than `Inventory.complete`, deliberately — with one exception
+    // that the narrowing argument does not reach.** The walk's own `complete`
+    // also goes false for a single entry it could not read and for any name it
+    // suppressed — facts that are already on the affected entry's own row.
+    // Reporting them again as "the scan did not finish" would be false: the
+    // scan did finish. What this claims is only the thing the row cannot say,
+    // which is that something is missing from the list *entirely* — a bound was
+    // reached, or a name was left out past a record cap and nobody can name it.
+    //
+    // **`startEntry` is that exception, because it is the one entry with no
+    // row.** `Inventory` keeps the project root out of `entries` on purpose
+    // (the root is what was walked, not something found in it), so "it is on
+    // the affected entry's own row" is true of everything here except the root
+    // itself. Measured: over a root the walk could not enumerate, the pass said
+    // `complete: false` with `startEntry: unreadable`, this returned `true`, and
+    // the page reported a finished scan of an empty project — a project the tool
+    // could not open, presented as one it read fine. Pinned from both sides in
+    // `test/render/inventory.test.ts`.
+    complete:
+      inventory.startEntry.state === 'present' &&
+      inventory.truncations.length === 0 &&
+      inventory.skippedNotRecorded === 0 &&
+      inventory.suppressedNotRecorded === 0,
+    // The rows actually placed, not `entries.length`: the output folder is
+    // excluded above, and a count that included it would contradict the list
+    // the reader can see.
+    artifactCount: groups.reduce((total, group) => total + group.rows.length, 0),
+    // The skip policy's whole tally, recorded names and the overflow count
+    // together, because the reader's question is how many names were not
+    // examined and neither half answers it alone.
+    namesLeftOut: inventory.skipped.length + inventory.skippedNotRecorded,
     aliases: inventory.aliases.map(aliasReport),
     groups,
-    // AD-17: the identity of *this response's content*, so two pages can be
-    // told apart at all. See `snapshotIdOf` for what it is derived from and why.
-    snapshotId: snapshotIdOf(groups, complete, artifactCount, namesLeftOut),
   };
-}
-
-/**
- * The view's own identity (AD-17), derived from the facts this projection just
- * built rather than minted.
- *
- * **Digests the view, and that is deliberately conservative.** The inputs are
- * this projection's own facts, so the id identifies *what is rendered* —
- * exactly "all content in one response comes from one snapshot". Any change
- * anywhere in the project changes the id; that is not minimal, but a finer key
- * is a later optimisation with its own cache-coherence argument, and this
- * story does not make one.
- *
- * **Which facts, and why these.** Each row's `path` is what distinguishes one
- * artifact from another with the same identity outcome; `identity.outcome` and
- * `readability.state` are the two axes most of the page's own wording is drawn
- * from, so a change in either is a change the reader would actually see.
- * `complete`, `artifactCount` and `namesLeftOut` are the scan's own report on
- * itself, which no row carries — a bound newly reached, or a name newly lost
- * past a record cap, changes nothing about any individual row and still must
- * change the id. Every other field the domain records (a hand-written
- * `reason`, an ambiguous verdict's second reading, run facts, an alias) never
- * reaches the page as anything the projection did not already fold into one of
- * these — see `projectInventory`'s own header on what it decides to show — so
- * digesting more of the model would key the cache on facts nothing renders.
- *
- * **In group order**, because that is the order `projectInventory` walks to
- * build `groups`, and it is what makes two passes over one unchanged tree
- * agree: the same entries, walked the same way, land in the same groups in the
- * same order every time.
- */
-function snapshotIdOf(
-  groups: readonly FamilyGroup[],
-  complete: boolean,
-  artifactCount: number,
-  namesLeftOut: number,
-): SnapshotId {
-  const parts: string[] = [];
-  for (const group of groups) {
-    for (const row of group.rows) {
-      parts.push(row.path, row.identity.outcome, row.readability.state);
-    }
-  }
-  parts.push(String(complete), String(artifactCount), String(namesLeftOut));
-  return digestOf(parts);
 }
 
 /**
