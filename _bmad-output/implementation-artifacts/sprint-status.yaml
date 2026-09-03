@@ -29,7 +29,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 # - Retrospective appends its action items to action_items; the status view surfaces open ones
 generated: 08-28-2026 20:15
-last_updated: 09-03-2026 14:19
+last_updated: 09-03-2026 14:32
 project: bmad-dash
 project_key: NOKEY
 tracking_system: file-system
@@ -174,4 +174,43 @@ action_items:
       principal defect landed in a combination the matrix did not enumerate (P6)"
     owner: "Jamie"
     status: done
+    ref: "_bmad-output/implementation-artifacts/epic-1-retro-2026-09-03.md"
+  - id: "epic-1-retro-item-13-enforce-what-src-render-may-import-and-s"
+    epic: 1
+    action: "Enforce what src/render/ may import, and settle the node:path import
+      in chrome.ts:38 - either drop it or amend the layer row; the identical gap item
+      4 closed for src/adapters/http/ (A3, unrouted by the first pass)"
+    owner: "dev loop"
+    status: open
+    ref: "_bmad-output/implementation-artifacts/epic-1-retro-2026-09-03.md"
+  - id: "epic-1-retro-item-14-cover-the-accessibility-floor-a-keyboard"
+    epic: 1
+    action: "Cover the accessibility floor: a keyboard/ARIA test where none exists
+      anywhere in the project, and accessible names on the 14 tile section elements
+      (NFR-14 gap, corrected on the second pass)"
+    owner: "dev loop"
+    status: open
+    ref: "_bmad-output/implementation-artifacts/epic-1-retro-2026-09-03.md"
+  - id: "epic-1-retro-item-15-convert-the-six-unchecked-error-as-code"
+    epic: 1
+    action: "Convert the six unchecked (error as { code?: string }).code casts under
+      src/adapters/fs/ onto errorCode, checking per site whether a non-string code
+      is reachable first"
+    owner: "dev loop"
+    status: open
+    ref: "_bmad-output/implementation-artifacts/epic-1-retro-2026-09-03.md"
+  - id: "epic-1-retro-item-16-human-reconcile-the-retired-hexagonal-pa"
+    epic: 1
+    action: "HUMAN: reconcile the retired hexagonal paradigm claim in the four documents
+      outside the spine - epics.md:127, :251, :273, epic-1-context.md:7"
+    owner: "Jamie"
+    status: open
+    ref: "_bmad-output/implementation-artifacts/epic-1-retro-2026-09-03.md"
+  - id: "epic-1-retro-item-17-human-reword-fr-71-check-that-matters-to"
+    epic: 1
+    action: "HUMAN: reword FR-71 check that matters to something deliverable from
+      a folder contents, or record it as withdrawn - it is a declared criterion that
+      cannot be met as written"
+    owner: "Jamie"
+    status: open
     ref: "_bmad-output/implementation-artifacts/epic-1-retro-2026-09-03.md"
