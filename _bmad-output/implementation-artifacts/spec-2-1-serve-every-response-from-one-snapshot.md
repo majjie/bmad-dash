@@ -2,7 +2,8 @@
 title: 'Serve every response from one snapshot'
 type: 'feature'
 created: '2026-09-03'
-status: 'ready-for-dev'
+status: 'in-progress'
+baseline_commit: 'faa0e27749ad23b71049dcbc990ee4bcf87b20dd'
 review_loop_iteration: 0
 context: []
 ---
@@ -68,15 +69,15 @@ context: []
 ## Tasks & Acceptance
 
 **Execution:**
-- [ ] `src/domain/snapshot.ts` -- new pure module: branded `SnapshotId` and `digestOf(parts: readonly string[]): SnapshotId`, a deterministic 64-bit FNV-1a over a **length-delimited** join -- length-delimited because a bare join lets `['a','bc']` and `['ab','c']` collide.
-- [ ] `test/domain/snapshot.test.ts` -- new: determinism, order sensitivity, that delimiter case, and an id for empty input.
-- [ ] `src/cli/inventory.ts` -- deep-freeze the returned `Inventory` and every array it holds; record in the header that the arrays previously escaped live.
-- [ ] `src/cli/index.ts` -- compute the identity in `projectInventory` from the view it is building: each row's `path`, `identity.outcome` and `readability.state` in group order, plus `complete`, `artifactCount` and `namesLeftOut`. Digest of what is rendered, so identical views give identical ids.
-- [ ] `src/render/inventory.ts` -- add `readonly snapshotId: SnapshotId` to `InventoryView`, imported as a domain type.
-- [ ] `src/adapters/http/server.ts` -- record the identity as a response header on the 200 and `HEAD` paths only; leave `respondText` and the 405 path untouched.
-- [ ] `test/cli/inventory.test.ts` -- freezing is real: mutating each escaping array throws, and the pass over this repository still completes.
-- [ ] `test/render/inventory.test.ts` -- the identity crosses the projection: equal for two passes of an unchanged tree, different after a change, present on every view.
-- [ ] `test/server.test.ts` -- the header carries the supplier's id on 200 and HEAD, and is absent on 403, 404, 405 and 500.
+- [x] `src/domain/snapshot.ts` -- new pure module: branded `SnapshotId` and `digestOf(parts: readonly string[]): SnapshotId`, a deterministic 64-bit FNV-1a over a **length-delimited** join -- length-delimited because a bare join lets `['a','bc']` and `['ab','c']` collide.
+- [x] `test/domain/snapshot.test.ts` -- new: determinism, order sensitivity, that delimiter case, and an id for empty input.
+- [x] `src/cli/inventory.ts` -- deep-freeze the returned `Inventory` and every array it holds; record in the header that the arrays previously escaped live.
+- [x] `src/cli/index.ts` -- compute the identity in `projectInventory` from the view it is building: each row's `path`, `identity.outcome` and `readability.state` in group order, plus `complete`, `artifactCount` and `namesLeftOut`. Digest of what is rendered, so identical views give identical ids.
+- [x] `src/render/inventory.ts` -- add `readonly snapshotId: SnapshotId` to `InventoryView`, imported as a domain type.
+- [x] `src/adapters/http/server.ts` -- record the identity as a response header on the 200 and `HEAD` paths only; leave `respondText` and the 405 path untouched.
+- [x] `test/cli/inventory.test.ts` -- freezing is real: mutating each escaping array throws, and the pass over this repository still completes.
+- [x] `test/render/inventory.test.ts` -- the identity crosses the projection: equal for two passes of an unchanged tree, different after a change, present on every view. **Amended after the matrix audit:** the empty-project row was only covered by asserting the `EMPTY_INVENTORY` *fixture* carries a hex id, which shows the field exists rather than that the projection derives one — a markers-only project is where every digest input is empty or zero. A real two-pass test over such a tree was added, plus the negative half (an empty project's identity differs from a non-empty one's, so the empty case is not collapsing to a constant).
+- [x] `test/server.test.ts` -- the header carries the supplier's id on 200 and HEAD, and is absent on 403, 404, 405 and 500. **Amended after the matrix audit:** the first matrix row's second clause — bodies byte-identical — was covered only with a *constant* supplier (`page.test.ts:193`), while the identity half was covered only at the projection. Each end was asserted and the join was not, which is the across-seams gap this project's verification standard names. A test using the **real** supplier over a real project now asserts one identity and identical bodies across two loads, and both moving after a change.
 
 **Acceptance Criteria:**
 - Given an unchanged project, when two `GET /` requests are served, then both carry the same identity and identical bodies.

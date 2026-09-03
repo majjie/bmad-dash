@@ -35,10 +35,12 @@ import {
   OUTPUT_DIRECTORY,
   SKIPPED_NAMES,
   takeInventory,
+  type Alias,
   type Inventory,
   type InventoryEntry,
+  type Skip,
 } from '../../src/cli/inventory.ts';
-import { MAX_RECORDED_SUPPRESSIONS } from '../../src/adapters/fs/walk.ts';
+import { MAX_RECORDED_SUPPRESSIONS, type WalkTruncation } from '../../src/adapters/fs/walk.ts';
 import type { Verdict } from '../../src/domain/identity.ts';
 import { interpret } from '../../src/domain/interpretation.ts';
 import { UNREAD, type Readability } from '../../src/domain/signal.ts';
@@ -1802,4 +1804,90 @@ test('a directory says its listing was read, not that nothing was', async (t) =>
   assert.equal(unopened.state, 'unchecked');
   const reasonOf = (signal: Readability): string => (signal.state === 'present' ? '' : signal.reason);
   assert.equal(unopened.reason, reasonOf(UNREAD), 'the file signal is the shared unread one');
+});
+
+// ---------------------------------------------------------------------------
+// Freezing: AD-3's "immutable", made real
+// ---------------------------------------------------------------------------
+
+test('the returned inventory is frozen by construction, deeply', async (t) => {
+  // Measured before this story: `Object.isFrozen(inventory)` was `false`, and
+  // `skipped` was handed out as the very array `skipPolicy` pushed into — a
+  // caller holding a reference to either could mutate the snapshot every other
+  // reader of it was still relying on. This asserts the fix over a tree that
+  // produces a non-empty directory listing, so `children.names` — sorted in
+  // place today, per the code map's own note — is exercised too.
+  const root = await makeTree(t, [
+    { dir: '_bmad' },
+    { file: '_bmad-output/loose/one.md', text: '# One\n' },
+    { file: '_bmad-output/loose/two.md', text: '# Two\n' },
+  ]);
+  const inventory = takeInventory(new ConfinedReader(canonical(root)));
+
+  assert.ok(Object.isFrozen(inventory), 'the returned Inventory itself must be frozen');
+  assert.throws(() => {
+    (inventory as { root: unknown }).root = 'elsewhere';
+  });
+
+  assert.ok(Object.isFrozen(inventory.entries));
+  assert.throws(() => {
+    (inventory.entries as InventoryEntry[]).push(inventory.entries[0]!);
+  });
+  assert.throws(() => {
+    (inventory.entries as unknown as Record<number, unknown>)[0] = {};
+  });
+
+  assert.ok(Object.isFrozen(inventory.skipped));
+  assert.throws(() => {
+    (inventory.skipped as Skip[]).push({ relative: 'x', reason: 'y' });
+  });
+
+  assert.ok(Object.isFrozen(inventory.aliases));
+  assert.throws(() => {
+    (inventory.aliases as Alias[]).push({
+      relative: 'x',
+      reportedAt: 'y',
+      restored: false,
+      reason: 'z',
+    });
+  });
+
+  assert.ok(Object.isFrozen(inventory.truncations));
+  assert.throws(() => {
+    (inventory.truncations as WalkTruncation[]).push({
+      limit: 'entries',
+      at: '.',
+      reason: 'z',
+    });
+  });
+
+  // The array `skipPolicy` itself pushed into, escaping live before this
+  // story: pushing into it directly must throw exactly as `inventory.skipped`
+  // above does — proving the freeze reaches the *same* array rather than a
+  // copy `inventory.skipped` happens to also be frozen.
+  const directory = inventory.entries.find(
+    (entry) => entry.children.available && entry.children.names.length > 0,
+  );
+  assert.ok(directory !== undefined, 'the fixture must produce a non-empty directory listing');
+  const children = directory.children;
+  assert.ok(children.available);
+  if (children.available) {
+    assert.ok(Object.isFrozen(children.names));
+    assert.throws(() => {
+      (children.names as string[]).push('nope');
+    });
+  }
+
+  // And one nested field for good measure — an entry's own verdict, reached
+  // two levels down from the array `entries` holds.
+  assert.ok(Object.isFrozen(directory.identity));
+});
+
+test('freezing surfaces nothing: the pass over this repository still completes', () => {
+  // The code map's own prediction: nothing in `src/` mutates these arrays
+  // today, so freezing them should surface nothing. Run over the one tree the
+  // rest of this file already treats as representative.
+  const inventory = repoInventory();
+  assert.ok(Object.isFrozen(inventory));
+  assert.ok(inventory.entries.length > 0, 'the pass must still find this repository’s own artifacts');
 });
