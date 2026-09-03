@@ -1,0 +1,74 @@
+# Epic 2 Context: Read any artifact properly
+
+<!-- Compiled from planning artifacts. Edit freely. Regenerate with compile-epic-context if planning docs change. -->
+
+## Goal
+
+Epic 1 made every artifact findable and correctly identified; Epic 2 makes each one readable *in the tool*, so a practitioner verifying a finished stage never leaves for an editor just to look. Each artifact type gets a viewer built for its shape rather than a generic markdown dump, and a document too long to read as one page becomes linked pages with a contents rail and section permalinks that survive reload, re-scan and later sharding. It also establishes the artifact-view shell and the document URL grammar every later surface reuses.
+
+## Stories
+
+- Story 2.1: Open an artifact at its own URL
+- Story 2.2: Know when what you are reading has moved
+- Story 2.3: Get from the tool to your editor
+- Story 2.4: Read a memlog as a decision trail
+- Story 2.5: Read reviewer output as findings
+- Story 2.6: Read a reconciliation as gaps
+- Story 2.7: Read an addendum with its parent
+- Story 2.8: Read sprint tracking as state
+- Story 2.9: Turn a long document into pages
+- Story 2.10: Keep the document's shape in view
+- Story 2.11: Link to a section and have the link keep working
+
+## Requirements & Constraints
+
+**The shape is the requirement.** A generic markdown renderer satisfies nothing here. What must be legible without reading the prose body: a memlog's overrides and assumptions among its other entry types; a review's verdict and severity; a reconciliation's gaps between a named source input and the document derived from it; an addendum's parent; sprint tracking's epic and story state, retrospective status, and open action items with owners.
+
+**Memlog entries carry no per-entry timestamp.** They record sequence, not time — rendering them as timestamped, or interleaving them on a chronological timeline, is a defect. Overrides and assumptions must be distinguishable at a glance without relying on colour alone.
+
+**Sprint tracking rests on an unstable source.** Its timestamps arrive month-first and timezone-naive and are normalized on read, never shown raw. Its status vocabularies come from the target project's own template at runtime rather than a shipped copy, since the project may be on a different BMAD version; those definitions live in YAML comments no upstream test protects, so extraction must validate that it produced something and fail visibly rather than returning empty as success. A status value the tool cannot classify is legal: render it present-but-uninterpreted and flag it, never drop it.
+
+**Every viewer offers the same two read-only exits** — copy the path, open it where the user works. Neither writes to the project, and this epic adds no action that mutates BMAD state.
+
+**Changed-since-scan and vanished are two facts and get two strings.** Opening an artifact compares its on-disk state against the snapshot's record and surfaces a mismatch with a refresh offer, never silently correcting it.
+
+**Long documents.** A whole document is carved into pages by heading weight; one BMAD already sharded adopts its existing shard boundaries instead, because those are the authoring skill's own division and keep pages, files, permalinks and open-in-editor targets naming the same units. The reader looks identical either way. A ~24,000-word document must open and page without perceptible delay.
+
+**Honesty vocabulary carries over unchanged.** Four signal states, never collapsed into "none". A failing artifact or section renders in place stating what failed and at which stage — never omitted, never fatal to its neighbours. Empty is distinguished by cause, and copy never claims more than the data supports.
+
+**Accessibility floor:** full keyboard operation, focus never obscured, no meaning in colour alone, one `h1` per surface, honest state in accessible names, text resizing to 200%.
+
+**No telemetry or analytics, and nothing in the product's purpose needs an outbound request** — advisory, held by code discipline and review, not a gate. A bundled dependency is not an outbound request and no network-module gate is owed.
+
+## Technical Decisions
+
+**Layered — a pure domain with adapters at the edges.** The domain imports nothing outside itself; adapters depend on it, not the reverse. There is no `src/ports/` ring and none was ever built; documents still saying "hexagonal" or listing `ports/` are stale on that point. Sectioning, permalink identity and timestamp normalization belong in the domain, as functions over data.
+
+**The server renders documents; the client only enhances delivered markup.** Viewer bodies, sections and contents rails are HTML produced server-side from domain types. Content is never assembled client-side and no client router owns a document URL, so browser back and forward simply work.
+
+**One snapshot per refresh; index eager, content lazy.** The scan already extracted identity, timestamps and oversight signals; this epic adds the *rendering* parse — token stream, sectioning, table of contents — done on first open, cached for that snapshot's lifetime and discarded with it. Refresh latency is the binding performance requirement, so work proportional to document length belongs behind that lazy open, never in the scan. Every response records the snapshot identity that produced it and all its content comes from that one snapshot; a refresh mid-read does not mutate the live snapshot in place. The currency probe is the deliberate exception — read from the filesystem at the moment of open, never cached.
+
+**The document and section URL grammar is defined once and owned by the server.** Permalinks, in-document navigation, open-in-editor targets and shard-derived pages are four consumers of one contract. Section identity must derive from something the division does not change, so the same document whole and later sharded resolves a section to the same URL. A permalink whose section is gone opens the document at its top and says so; it never fails the whole document. Route shapes for other endpoints stay the code's choice — this grammar does not.
+
+Viewers consume the scan's recorded identification verdict and never re-derive it; expected failures stay typed results rather than exceptions; every new route inherits sanitization, confinement, the `Host` check and 405 on write-shaped methods. Heading-weight thresholds, per-viewer markup and the in-memory snapshot representation are deliberately the code's to choose, within the URL contract and typed degradation.
+
+## UX & Interaction Patterns
+
+**Two surfaces land here:** Artifact view and Document reader, each reachable by URL and surviving reload. Put the path-copy and open-in-editor affordances in the artifact-view shell so later viewers inherit them.
+
+**Reader layout** breaks the dashboard grid: one column at the reading measure — the only place the serif prose role is used — with the contents rail beside it. The rail is a navigation landmark, marks the current section, scrolls independently, is fully keyboard operable, and does not disclose whether pages were carved or sharded. At the 900px breakpoint it moves above the content.
+
+**Keyboard bindings are defined once and shared;** no surface implements its own. This epic's additions: number keys jump to the nth section of the open document, and Escape with no overlay open leaves the reading surface and returns you where you came from. Single-letter keys are inert while a text input has focus.
+
+**Surface states.** During refresh the artifact view holds its own snapshot and the reader preserves position. An artifact with no content reads as an empty file; a document with no headings is one unsectioned page; an unparseable section shows the failure for that section only, while a whole-artifact parse failure replaces the viewer, naming path and stage. Stale shows a mismatch banner with a refresh offer, and the reader also marks its rail stale.
+
+**Load-bearing strings are implemented verbatim** from the string index, with its period-and-capital conventions. Conditions this epic must cover: changed since the last scan, no longer on disk, section permalink target gone, empty file, run-folder-versus-sharded ambiguity, and folder that may hold more than one run.
+
+## Cross-Story Dependencies
+
+- **Story 2.1 founds the epic** — artifact URL, snapshot-scoped response, cached rendering parse. Stories 2.2 and 2.3 complete the shell that 2.4 to 2.8 inherit.
+- **Stories 2.4 to 2.8 are independent of each other** once the shell exists.
+- **Stories 2.9 to 2.11 are one chain, and the permalink is why.** Section identity must be settled while page division is written, not retrofitted: dividing a document is exactly what a permalink has to survive. The rail consumes the same section model.
+- **From Epic 1:** identification precedence and its recorded verdict, whole and sharded documents handled alike including the ambiguous case, sprint-tracking location with out-of-tree reporting, tokens, shared components, global chrome, confinement on every read.
+- **Epic 3 consumes what this epic parses** — overrides and assumptions surfaced project-wide, review findings aggregated across run folders, normalized timestamps — so extraction here should yield a shape the oversight pass can reuse rather than a viewer-private one. Epic 3's activity rows also link into these viewers.
+- **Artifact roots from project configuration are deferred indefinitely;** roots stay at their measured defaults.

@@ -414,15 +414,29 @@ So that I can see what is there before I go looking for anything specific.
 
 Open any artifact in a viewer suited to its shape, and navigate a document too long to read as one page. Same lean acceptance form as Epic 1.
 
-### Story 2.1: Open an artifact at its own URL
+### Story 2.1: Serve every response from one snapshot
+
+*Split from the original Story 2.1 on 2026-09-03 by user decision, at the build workflow's multi-goal checkpoint. The original bundled four architecture decisions — the snapshot lifecycle and the URL/render contract — as one story. They are separable, and the dependency runs one way: the rendering cache in 2.1a is keyed to the snapshot identity this story introduces, so building the URL story first would mean writing a cache keyed to nothing and rekeying it. Same reasoning as the 1.5 → 1.6a split in Epic 1. Numbering follows build order by user decision, so **FR-18 and the original title moved to Story 2.1a**.*
+
+As a practitioner reading one page while agents are writing to the project,
+I want everything on that page to come from a single moment,
+So that I am never shown two halves of two different states and cannot tell.
+
+**Satisfies:** AD-3 (the snapshot half), AD-17 · no new FRs — this story is architecture-driven, and its absence is what would make later stories quietly wrong rather than visibly incomplete
+
+**Done when:** a refresh builds one immutable snapshot carrying an identity; the snapshot pass does bounded work per artifact and builds no rendering representation; every response records the snapshot identity it was produced from, and all content in one response comes from that snapshot; a refresh does not mutate a snapshot in place, so the next request observes the new identity; and the currency probe is evaluated against the filesystem at the moment of open rather than cached. The check that matters: a refresh landing mid-read does not produce a page assembled from two snapshots.
+
+### Story 2.1a: Open an artifact at its own URL
+
+*The original Story 2.1, carrying its title, FR-18 and its URL and rendering decisions. Built after 2.1 because its rendering cache keys to that story's snapshot identity. Recorded here rather than tracked only in sprint status — the Epic 1 retrospective (item 7) found that 1.6a was built and tracked while never appearing in this file.*
 
 As a practitioner who found something in the inventory,
 I want to open it and read it in the tool,
 So that I do not have to leave for my editor just to look.
 
-**Satisfies:** FR-18 · AD-2, AD-3, AD-17, AD-18 · UX-DR15
+**Satisfies:** FR-18 · AD-2, AD-3 (the render-cache half), AD-18 · UX-DR15
 
-**Done when:** an artifact is reachable at a stable URL that survives reload; its content is HTML produced on the server, with the client only enhancing delivered markup; the rendering parse happens on first open and is cached for the life of the current snapshot; and every response records which snapshot produced it, so all content in one response comes from one scan. The check that matters: a refresh landing mid-read does not produce a page assembled from two snapshots.
+**Done when:** an artifact is reachable at a stable URL that survives reload; its content is HTML produced on the server, with the client only enhancing delivered markup; and the rendering parse happens on first open and is cached for the life of the snapshot Story 2.1 introduced. **AD-18's division-independence is not verifiable here** — a section URL that resolves identically whether a document arrived whole or sharded cannot be tested until sharding exists in Stories 2.9–2.11, so this story defines the grammar and 2.11 is where that half is asserted; a claim of AD-18 satisfied in full would be the unenforceable-mechanism defect the Epic 1 retrospective found seven times.
 
 ### Story 2.2: Know when what you are reading has moved
 
