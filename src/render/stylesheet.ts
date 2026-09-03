@@ -21,6 +21,11 @@
  * `prefers-reduced-motion` and instant focus from the outset is what stops a
  * later story retrofitting them.
  *
+ * Story 1.12 adds the inventory's own rules and UX-DR22's breakpoint block. It
+ * introduces the sheet's **one** dimension literal outside `:root` — the 900px
+ * media condition, which cannot be a custom property because `var()` is invalid
+ * in a media query. See `BREAKPOINT_PX`.
+ *
  * Tonal elevation only. There is no `box-shadow`, no gradient and no blur
  * anywhere in this file, and a test asserts that of the emitted string: a
  * tile's tone is its edge.
@@ -54,6 +59,25 @@ export const PROSE_TOKENS: readonly string[] = [
  * one with its reason rather than dropping it quietly.
  */
 export const EMITTED_COMPONENTS: readonly string[] = ['tile', 'tile-raised', 'focus-ring'];
+
+/**
+ * The one breakpoint, in pixels — DESIGN.md's own value.
+ *
+ * **Not a token, and it cannot be one.** `var()` is invalid in a media-query
+ * condition, so a custom property here would produce a query the browser drops
+ * in silence, which is the exact failure mode the role-reference guard in this
+ * file already exists to prevent. DESIGN.md says of the breakpoint that "this
+ * file owns only the breakpoint value" and states it in prose rather than in
+ * its frontmatter, so the value is held here and
+ * `test/render/stylesheet.test.ts` reads it back out of DESIGN.md — the same
+ * contract `SIGNAL_LABELS` and `SIGNAL_NOT_CHECKED` are held under, and the
+ * reason a literal that merely happens to match is not good enough.
+ *
+ * It is therefore the one dimension literal permitted outside `:root`, and the
+ * dimension-literal test names this line as its single exemption rather than
+ * loosening the rule.
+ */
+export const BREAKPOINT_PX = 900;
 
 /**
  * A component token whose value names a whole type role, e.g.
@@ -355,6 +379,14 @@ function componentRules(): readonly string[] {
     rule('.tile', [declaration('background', 'var(--tile-background)')]),
     rule('.tile-raised', [declaration('background', 'var(--tile-raised-background)')]),
 
+    // A tile that spans the whole grid row, at every width. For a tile whose
+    // content *qualifies* the tiles after it: the inventory's scan report is
+    // the case, and without this it sat beside the first family tile above the
+    // breakpoint, leaving half the surface it qualifies not below it. `1 / -1`
+    // is the whole row whatever the track count, so this needs no width value
+    // and holds at one column as well as two.
+    rule('.tile-span', [declaration('grid-column', '1 / -1')]),
+
     // The label is a real heading, so the page is traversable by structure.
     // Uppercasing is done in CSS rather than in the string, so the accessible
     // name a screen reader announces stays ordinary prose.
@@ -406,19 +438,110 @@ function componentRules(): readonly string[] {
     // reason is ordinary secondary text, not an absence.
     rule('.tile-empty', [declaration('color', 'var(--color-on-surface-variant)')]),
 
-    // One column, deliberately, and not yet the dashboard's layout. The grid's
-    // column behaviour and the 900px collapse are UX-DR22, owned by the story
-    // that has more than one tile to place; inventing a `minmax()` track here
-    // would need a width token the system does not define. What this rule is
-    // for now is the gap and the flow, so tiles are already spaced correctly
-    // when the columns arrive. Recorded in `deferred-work.md`.
+    // UX-DR22, and the story that owns it is the first one with more than one
+    // tile to place. One column below the breakpoint — "in reading order",
+    // which is what a single grid column in document order is — and two above
+    // it.
+    //
+    // **Two columns, and `minmax(0, 1fr)` rather than a width track.** The
+    // deferred entry against Story 1.3 said a `minmax()` track needs a tile-width
+    // token the system does not define, and that is still true: a `repeat(auto-fit,
+    // minmax(320px, 1fr))` would put a width literal in the sheet that DESIGN.md
+    // does not carry. Equal fractions need no such value. The `0` floor is the
+    // load-bearing half — a bare `1fr` is `minmax(auto, 1fr)`, and a column
+    // holding an unbreakable artifact path would refuse to shrink below it and
+    // push the page sideways, which is the WCAG 1.4.10 reflow failure
+    // `.project-path` already guards against one rule up.
+    //
+    // Two rather than three: at the breakpoint a third column is about 300px
+    // wide, and every row on this surface leads with a deep project-relative
+    // path. The count is an invention — no document specifies one — and is
+    // recorded in `deferred-work.md`.
     rule('.tile-grid', [
       declaration('display', 'grid'),
       declaration('grid-template-columns', '1fr'),
       declaration('gap', 'var(--space-tile-gap)'),
       declaration('margin', 'var(--space-4) 0 0'),
     ]),
+
+    // The inventory's own rules. No colour here encodes a state: the four
+    // signal colours are a closed set, they converge under protanopia
+    // (DESIGN.md:221), and the signal-pill component that would use them
+    // belongs to a later story. Every state on this surface is a word, so
+    // these rules carry type role and secondary colour and nothing else.
+    rule('.artifact-list', [
+      declaration('list-style', 'none'),
+      declaration('margin', '0'),
+      declaration('padding', '0'),
+    ]),
+    // Wrapping rather than a fixed grid: a row's cells are a path, a type and
+    // however many state words apply, and a track count would either clip the
+    // last of them or reserve space for states most rows do not carry.
+    rule('.artifact-row', [
+      declaration('display', 'flex'),
+      declaration('flex-wrap', 'wrap'),
+      declaration('align-items', 'baseline'),
+      declaration('gap', 'var(--space-2)'),
+      declaration('padding', 'var(--space-row-padding-y) 0'),
+    ]),
+    // A project-relative path is unbreakable text of unbounded length, shown in
+    // full because a shortened path is one the reader cannot check — the same
+    // pair of declarations, for the same reason, as `.project-path`.
+    rule('.artifact-path', [
+      declaration('color', 'var(--color-on-surface)'),
+      declaration('min-width', '0'),
+      declaration('overflow-wrap', 'anywhere'),
+    ]),
+    rule('.artifact-type', [
+      typeRole('body-dense'),
+      declaration('color', 'var(--color-on-surface-variant)'),
+    ]),
+    // `mono-badge` because a state word names a machine state, which is
+    // DESIGN.md's semantic rule for the mono family. Not uppercased: the same
+    // class carries `Not checked` and `Unreadable`, and shouting a state is
+    // what the pill component's own treatment is for.
+    rule('.artifact-state', [
+      typeRole('mono-badge'),
+      declaration('color', 'var(--color-on-surface)'),
+    ]),
+    rule('.artifact-stage', [
+      typeRole('mono-badge'),
+      declaration('color', 'var(--color-on-surface-variant)'),
+    ]),
+    // A sentence, so the body role rather than a badge role — and secondary,
+    // because it qualifies the row rather than naming it. Never
+    // `on-surface-faint`, which DESIGN.md reserves for an absent core artifact
+    // and which sits 0.04 above its contrast floor.
+    rule('.artifact-note', [
+      typeRole('body-dense'),
+      declaration('color', 'var(--color-on-surface-variant)'),
+      declaration('margin', '0'),
+    ]),
   ];
+}
+
+/**
+ * UX-DR22's single breakpoint: the tile grid gains its second column above it.
+ *
+ * Written as `min-width` rather than `max-width` so the single column is the
+ * base rule and the wider layout is the addition. That ordering is the reason
+ * the collapse needs no separate rule: below the breakpoint nothing applies and
+ * the grid is one column in document order, which is `EXPERIENCE.md:220`'s
+ * "one column in reading order". That paragraph's collapse *order* names
+ * recent activity, core artifacts and risk summary — three tiles that do not
+ * exist yet — so the order it specifies cannot be implemented here and is
+ * recorded in `deferred-work.md` rather than approximated.
+ *
+ * The one dimension literal outside `:root`; see `BREAKPOINT_PX`.
+ */
+function breakpointBlock(): string {
+  const body = rule('.tile-grid', [
+    declaration('grid-template-columns', 'repeat(2, minmax(0, 1fr))'),
+  ])
+    .split('\n')
+    .map((line) => `${INDENT}${line}`)
+    .join('\n');
+  return `@media (min-width: ${String(BREAKPOINT_PX)}px) {\n${body}\n}`;
 }
 
 /**
@@ -449,7 +572,13 @@ function reducedMotionBlock(): string {
 /** The stylesheet, built once. Pure, so building it once is safe. */
 function build(): string {
   return (
-    [rootBlock(), ...baseRules(), ...componentRules(), reducedMotionBlock()].join('\n\n') + '\n'
+    [
+      rootBlock(),
+      ...baseRules(),
+      ...componentRules(),
+      breakpointBlock(),
+      reducedMotionBlock(),
+    ].join('\n\n') + '\n'
   );
 }
 

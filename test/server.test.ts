@@ -28,6 +28,7 @@ import {
 import { parseInvocation, run } from '../src/cli/index.ts';
 import { makeProjectDir } from './support/project.ts';
 import { canonical, toPlatform } from '../src/adapters/fs/paths.ts';
+import { emptyInventory } from './support/cli.ts';
 
 /**
  * A synthetic absolute root. Fixed rather than `process.cwd()` so a test's
@@ -402,7 +403,7 @@ function deadline(ms: number, message: string): { promise: Promise<never>; cance
 }
 
 test('the server serves a page on the address it reports', async (t) => {
-  const server = await startServer({ projectRoot: PROJECT_ROOT });
+  const server = await startServer({ projectRoot: PROJECT_ROOT, inventory: emptyInventory });
   t.after(() => server.close());
 
   assert.match(server.url, URL_PATTERN);
@@ -413,7 +414,7 @@ test('the server serves a page on the address it reports', async (t) => {
 });
 
 test('the served page declares itself HTML and forbids caching', async (t) => {
-  const server = await startServer({ projectRoot: PROJECT_ROOT });
+  const server = await startServer({ projectRoot: PROJECT_ROOT, inventory: emptyInventory });
   t.after(() => server.close());
 
   // Serving this exact HTML as text/plain passed every earlier test.
@@ -424,7 +425,7 @@ test('the served page declares itself HTML and forbids caching', async (t) => {
 });
 
 test('error responses are plain text and uncached', async (t) => {
-  const server = await startServer({ projectRoot: PROJECT_ROOT });
+  const server = await startServer({ projectRoot: PROJECT_ROOT, inventory: emptyInventory });
   t.after(() => server.close());
 
   for (const response of [
@@ -438,7 +439,7 @@ test('error responses are plain text and uncached', async (t) => {
 });
 
 test('the listening socket itself reports the loopback literal on IPv4', async (t) => {
-  const server = await startServer({ projectRoot: PROJECT_ROOT });
+  const server = await startServer({ projectRoot: PROJECT_ROOT, inventory: emptyInventory });
   t.after(() => server.close());
 
   // `addressInfo` is the `net` layer's account of the bound socket, not a
@@ -457,7 +458,7 @@ test('the listening socket itself reports the loopback literal on IPv4', async (
 });
 
 test('the socket keeps an error listener after binding', async (t) => {
-  const server = await startServer({ projectRoot: PROJECT_ROOT });
+  const server = await startServer({ projectRoot: PROJECT_ROOT, inventory: emptyInventory });
   t.after(() => server.close());
 
   // `listen` removes its own one-shot listener on success. With none left, a
@@ -472,7 +473,8 @@ test('the socket keeps an error listener after binding', async (t) => {
 test('a socket error after binding is delivered to onError', async (t) => {
   const delivered: Error[] = [];
   const server = await startServer({
-      projectRoot: PROJECT_ROOT,
+    projectRoot: PROJECT_ROOT,
+    inventory: emptyInventory,
     onError: (error) => {
       delivered.push(error);
     },
@@ -492,7 +494,7 @@ test('a socket error after binding is delivered to onError', async (t) => {
 });
 
 test('the socket is unreachable on every non-loopback interface', async (t) => {
-  const server = await startServer({ projectRoot: PROJECT_ROOT });
+  const server = await startServer({ projectRoot: PROJECT_ROOT, inventory: emptyInventory });
   t.after(() => server.close());
 
   const expectedHost = `${server.address}:${server.port}`;
@@ -529,7 +531,11 @@ test('a preferred port already bound falls back to another free port', async (t)
   const squatter = await occupyPort();
   t.after(() => squatter.close());
 
-  const server = await startServer({ projectRoot: PROJECT_ROOT, port: squatter.port });
+  const server = await startServer({
+    projectRoot: PROJECT_ROOT,
+    port: squatter.port,
+    inventory: emptyInventory,
+  });
   t.after(() => server.close());
 
   assert.notEqual(server.port, squatter.port);
@@ -544,7 +550,7 @@ test('a port outside the valid range is rejected before binding', async () => {
   // only evidence the rejection happened here rather than inside `listen`.
   for (const port of [-1, 65536, 1.5, Number.NaN]) {
     await assert.rejects(
-      () => startServer({ projectRoot: PROJECT_ROOT, port }),
+      () => startServer({ projectRoot: PROJECT_ROOT, port, inventory: emptyInventory }),
       (error: unknown) => {
         assert.ok(error instanceof RangeError, `port ${String(port)}: expected a RangeError`);
         assert.match(error.message, /port must be an integer between 0 and 65535/);
@@ -557,7 +563,7 @@ test('a port outside the valid range is rejected before binding', async () => {
 });
 
 test('a foreign Host header is rejected with 403 and no content', async (t) => {
-  const server = await startServer({ projectRoot: PROJECT_ROOT });
+  const server = await startServer({ projectRoot: PROJECT_ROOT, inventory: emptyInventory });
   t.after(() => server.close());
 
   const foreign = [
@@ -578,7 +584,7 @@ test('a foreign Host header is rejected with 403 and no content', async (t) => {
 });
 
 test('a write-shaped method is refused, and HEAD carries no body', async (t) => {
-  const server = await startServer({ projectRoot: PROJECT_ROOT });
+  const server = await startServer({ projectRoot: PROJECT_ROOT, inventory: emptyInventory });
   t.after(() => server.close());
 
   for (const method of ['POST', 'PUT', 'PATCH', 'DELETE']) {
@@ -601,7 +607,7 @@ test('the Host check is on the literal bound address and port', () => {
 });
 
 test('a foreign Host is rejected before routing, on unknown paths too', async (t) => {
-  const server = await startServer({ projectRoot: PROJECT_ROOT });
+  const server = await startServer({ projectRoot: PROJECT_ROOT, inventory: emptyInventory });
   t.after(() => server.close());
 
   assert.equal((await get({ port: server.port, path: '/nope', host: 'evil.example' })).status, 403);
@@ -609,7 +615,7 @@ test('a foreign Host is rejected before routing, on unknown paths too', async (t
 });
 
 test('a query string does not change which page is served', async (t) => {
-  const server = await startServer({ projectRoot: PROJECT_ROOT });
+  const server = await startServer({ projectRoot: PROJECT_ROOT, inventory: emptyInventory });
   t.after(() => server.close());
 
   // Removing the query strip passed every earlier test, while `/?x=1` 404'd.
@@ -623,7 +629,7 @@ test('a query string does not change which page is served', async (t) => {
 });
 
 test('a client that aborts mid-exchange does not take the server down', async (t) => {
-  const server = await startServer({ projectRoot: PROJECT_ROOT });
+  const server = await startServer({ projectRoot: PROJECT_ROOT, inventory: emptyInventory });
   t.after(() => server.close());
 
   for (let i = 0; i < 3; i += 1) {
@@ -671,7 +677,7 @@ async function holdConnection(port: number, payload = ''): Promise<() => void> {
 }
 
 test('close resolves promptly while a client holds a bare open connection', async (t) => {
-  const server = await startServer({ projectRoot: PROJECT_ROOT });
+  const server = await startServer({ projectRoot: PROJECT_ROOT, inventory: emptyInventory });
   const release = await holdConnection(server.port);
   // Registered before the assertion: when `close()` does hang, the socket and
   // the listening handle must still be torn down or the whole run never exits
@@ -697,7 +703,7 @@ test('close resolves promptly while a client holds a bare open connection', asyn
 });
 
 test('close resolves promptly with a half-sent request in flight', async (t) => {
-  const server = await startServer({ projectRoot: PROJECT_ROOT });
+  const server = await startServer({ projectRoot: PROJECT_ROOT, inventory: emptyInventory });
   const release = await holdConnection(
     server.port,
     `GET / HTTP/1.1\r\nHost: 127.0.0.1:${server.port}\r\n`,
@@ -725,7 +731,7 @@ test('a completed keep-alive request does not by itself block close', async (t) 
   // Documents the boundary: since Node 19 `close()` closes *idle* connections,
   // so this scenario passes with or without `closeAllConnections()`. Kept so
   // nobody mistakes it for the guard — the two tests above are the guard.
-  const server = await startServer({ projectRoot: PROJECT_ROOT });
+  const server = await startServer({ projectRoot: PROJECT_ROOT, inventory: emptyInventory });
   const agent = new Agent({ keepAlive: true, maxSockets: 1 });
   t.after(() => {
     agent.destroy();
@@ -940,7 +946,7 @@ test('the durable error listener is attached before the first listen', async () 
 });
 
 test('close is idempotent: a second call resolves rather than rejecting', async () => {
-  const server = await startServer({ projectRoot: PROJECT_ROOT });
+  const server = await startServer({ projectRoot: PROJECT_ROOT, inventory: emptyInventory });
 
   await server.close();
   // `server.close()` rejects with ERR_SERVER_NOT_RUNNING the second time.
@@ -962,7 +968,7 @@ test('a bare Host is accepted only when the bound port is the scheme default', (
 });
 
 test('the error listener count is live, not a snapshot taken at bind time', async (t) => {
-  const server = await startServer({ projectRoot: PROJECT_ROOT });
+  const server = await startServer({ projectRoot: PROJECT_ROOT, inventory: emptyInventory });
   t.after(() => server.close());
 
   const before = server.socketErrorListeners;
@@ -1076,20 +1082,20 @@ test('a server given no usable project root refuses to bind at all', async () =>
   type Unchecked = Parameters<typeof startServer>[0]['projectRoot'];
   for (const bad of ['', '   ']) {
     await assert.rejects(
-      () => startServer({ projectRoot: bad as unknown as Unchecked }),
+      () => startServer({ projectRoot: bad as unknown as Unchecked, inventory: emptyInventory }),
       /needs the resolved project root/,
     );
   }
   for (const bad of ['.', 'relative/path', '../sibling']) {
     await assert.rejects(
-      () => startServer({ projectRoot: bad as unknown as Unchecked }),
+      () => startServer({ projectRoot: bad as unknown as Unchecked, inventory: emptyInventory }),
       /must be absolute/,
     );
   }
 });
 
 test('the handle reports the root it was given, so a caller can check it', async (t) => {
-  const handle = await startServer({ projectRoot: PROJECT_ROOT });
+  const handle = await startServer({ projectRoot: PROJECT_ROOT, inventory: emptyInventory });
   t.after(() => handle.close());
   assert.equal(handle.projectRoot, PROJECT_ROOT);
 });

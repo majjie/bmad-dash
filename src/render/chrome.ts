@@ -24,8 +24,12 @@
  * reason the four-state vocabulary exists.
  *
  * **The refresh control is a link, not a script.** A page load builds a new
- * snapshot, only `GET` and `HEAD` are served, and no client router may own a
- * URL — so refresh is navigation, and the page needs no JavaScript to offer it.
+ * snapshot — genuinely, from Story 1.12 on: the HTTP adapter holds a supplier
+ * and calls it per `GET /`, so following this link re-walks the project. (For
+ * one story it did not, and this comment said it did; the review of 1.12 found
+ * the three places making that claim over a snapshot frozen at bind time.) Only
+ * `GET` and `HEAD` are served, and no client router may own a URL — so refresh
+ * is navigation, and the page needs no JavaScript to offer it.
  * It is unstyled beyond the document's link rule: `button-primary` is the
  * component DESIGN.md assigns to a surface's single main action, and that
  * component belongs to a later story.
@@ -33,7 +37,7 @@
 
 import { basename, isAbsolute } from 'node:path';
 
-import { escapeHtml } from './html.ts';
+import { markup } from './html.ts';
 
 /**
 /**
@@ -112,12 +116,16 @@ export function projectHeader(projectRoot: string): string {
   // a nameless project.
   const name = basename(projectRoot) === '' ? projectRoot : basename(projectRoot);
 
-  return [
-    '<header class="project-header">',
-    `<p class="project-name">${escapeHtml(name)}</p>`,
-    `<code class="project-path">${escapeHtml(projectRoot)}</code>`,
-    `<p class="project-signal">${escapeHtml(`${GIT_SIGNAL_LABEL} ${SIGNAL_NOT_CHECKED}`)}</p>`,
-    `<a class="project-refresh" href="${escapeHtml(REFRESH_HREF)}">${escapeHtml(REFRESH_LABEL)}</a>`,
-    '</header>',
-  ].join('\n');
+  // Built through `markup` rather than by concatenation with a remembered
+  // `escapeHtml` at each of four interpolations. Story 1.12 introduced the
+  // tagged template so a tile's content could not be handed raw project text,
+  // and its review pointed out that the header — the *original* place project
+  // data becomes markup, and the reason `./html.ts` exists — was left outside
+  // it. Same output, and now the escaping is not a call site's responsibility.
+  return markup`<header class="project-header">
+<p class="project-name">${name}</p>
+<code class="project-path">${projectRoot}</code>
+<p class="project-signal">${`${GIT_SIGNAL_LABEL} ${SIGNAL_NOT_CHECKED}`}</p>
+<a class="project-refresh" href="${REFRESH_HREF}">${REFRESH_LABEL}</a>
+</header>`.html;
 }

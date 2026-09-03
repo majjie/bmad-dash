@@ -3,7 +3,7 @@ name: bmad-dash
 description: Information architecture, behavior, states, interactions, accessibility and journeys for bmad-dash v1. Visual identity lives in DESIGN.md.
 status: final
 created: 2026-08-28
-updated: 2026-08-28
+updated: 2026-09-03
 sources:
   - ../../../specs/spec-bmad-dash/SPEC.md
   - ../../../specs/spec-bmad-dash/bmad-source-shapes.md
@@ -108,6 +108,19 @@ Terse and technical, matching the fluent-practitioner default. This is load-bear
 | No BMAD project within the suggestion scan's bounds | `No directory holding <markers> is in the ancestors of <path>, or within <n> levels below it.` |
 | Suggestion scan stopped before it finished | `The scan did not finish, so a project may be missing: <reasons>.` |
 | More candidates found than the refusal prints | `<n> more not listed.` |
+| Artifact identified, shape not interpreted | `Present, but its shape was not interpreted.` |
+| Identification below certain | `<confidence>, not certain — resolved by <level>.` |
+| Run folder name reused deliberately | `Reusing this name is how BMAD resumes a run.` |
+| Run folder name repeats by accident | `A same-day rerun lands in this folder.` |
+| Run folder name carries no date | `No date in the folder name.` |
+| No artifacts of a family | `No artifacts of this family in this project.` |
+| Story location resolved inside the project | `Stories are at <path>.` |
+| No sprint tracking in the project | `No sprint tracking in this project.` |
+| Sprint-derived view unavailable | `Sprint view unavailable.` |
+| Artifact scan finished | `The scan finished. Artifacts examined: <n>.` |
+| Artifact scan stopped before it finished | `The scan did not finish, so an artifact may be missing.` |
+| Names the scan did not examine | `Names outside the artifact output tree, not examined: <n>.` |
+| Second spelling of an artifact | `<name> is a second spelling of <path>.` |
 
 ## Component patterns
 

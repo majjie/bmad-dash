@@ -225,7 +225,17 @@ export const OUT_OF_TREE_STRING = 'Story location points outside the project: <p
  * else. Rendering the surface around it is still the render layer's job.
  */
 export function outOfTreeReport(path: string): string {
-  return OUT_OF_TREE_STRING.replace('<path>', path);
+  // A **replacer function**, not a replacement string, and that is the fix for
+  // a real defect rather than a stylistic preference. `String.prototype.replace`
+  // interprets `$&`, `` $` ``, `$'`, `$1` and `$$` inside a replacement
+  // *string*, and this path comes out of a project file — so a declared
+  // location of `/etc/$&x` produced
+  // `Story location points outside the project: /etc/<path>x. Not read.`,
+  // shipping a literal `<path>` to a reader, which is the single failure the
+  // render layer's own substitution throws to prevent. `/etc/$'x` spliced
+  // `. Not read.` into the middle of the path. A function's return value is
+  // used verbatim, so no sequence in it means anything.
+  return OUT_OF_TREE_STRING.replace('<path>', () => path);
 }
 
 /**

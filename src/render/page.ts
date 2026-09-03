@@ -15,8 +15,13 @@
  *
  * The Dashboard's real tiles — recent activity, core artifacts, risk summary —
  * arrive with the stories that can populate them. What is here now is the
- * status line Stories 1.1 and 1.2 served as bare markup, moved into a tile, so
- * the container has a genuine consumer on the page rather than only in tests.
+ * **inventory**, which no document designed: `EXPERIENCE.md` and `DESIGN.md`
+ * never mention one and UX-DR15 fixes the surface list at five, so the
+ * inventory takes the placeholder tile's slot as an interim rather than as a
+ * sixth surface. That is recorded in `deferred-work.md` and in
+ * `./inventory.ts`'s header, not presented as the designed shape. The status
+ * line Stories 1.1 to 1.3 served in that slot is gone: `Serving. No surface
+ * built yet.` stopped being true here.
  *
  * **No font is fetched, and no script is served.** There is no `<link>`, no
  * `@import`, no `@font-face` and no `<script>` in what this module emits. Each
@@ -29,6 +34,7 @@
 import { STYLESHEET } from './stylesheet.ts';
 import { projectHeader } from './chrome.ts';
 import { tileGrid } from './components.ts';
+import { inventoryTiles, type InventoryView } from './inventory.ts';
 import { escapeHtml } from './html.ts';
 
 /** The `<title>`, and the marker a test can look for to know the page is ours. */
@@ -40,15 +46,6 @@ export const PAGE_TITLE = 'bmad-dash';
  * story on, whatever it is yet able to show.
  */
 export const SURFACE_TITLE = 'Dashboard';
-
-/** Label for the tile carrying the status line. Label-shaped: no period. */
-export const STATUS_TILE_LABEL = 'Status';
-
-/**
- * Terse and technical, per the voice rule: state the fact, do not apologise.
- * Sentence-shaped, so it takes a period.
- */
-export const PAGE_STATUS_LINE = 'Serving. No surface built yet.';
 
 /**
  * Refuse to inline a stylesheet that could end the `<style>` element early.
@@ -69,14 +66,20 @@ function inlinable(css: string): string {
   return css;
 }
 
-/** The Dashboard surface: its heading, and the tiles it can show yet. */
-function dashboard(): string {
+/**
+ * The Dashboard surface: its one `h1`, and the inventory's tiles.
+ *
+ * The heading levels are fixed here and nowhere else: one `h1` naming the
+ * surface, and every tile label an `h2` under it. The inventory's rows are list
+ * items rather than a third heading level, because DESIGN.md's "a tile that
+ * needs two headings is two tiles" makes the family label a tile's only
+ * heading.
+ */
+function dashboard(inventory: InventoryView): string {
   return [
     '<main>',
     `<h1>${escapeHtml(SURFACE_TITLE)}</h1>`,
-    tileGrid([
-      { label: STATUS_TILE_LABEL, content: { html: `<p>${escapeHtml(PAGE_STATUS_LINE)}</p>` } },
-    ]),
+    tileGrid(inventoryTiles(inventory)),
     '</main>',
   ].join('\n');
 }
@@ -84,8 +87,12 @@ function dashboard(): string {
 /**
  * The document to serve for `GET /`.
  *
- * A function of the resolved project root, which the composition root resolved
- * once and passes through the adapter unchanged.
+ * A function of the resolved project root and of the projected inventory, both
+ * of which the composition root produced once and passes through the adapter
+ * unchanged. The view is **required**, for the reason `projectRoot` is: from
+ * this story the Dashboard's content *is* the inventory, so a page rendered
+ * without one is not a page — and an argument its owner cannot function without
+ * should not be omittable. The adapter composes nothing (AD-2); it carries.
  *
  * It is checked in two places, deliberately, against one definition:
  * `assertProjectRoot` in `./chrome.ts` is called by the HTTP adapter before it
@@ -96,7 +103,7 @@ function dashboard(): string {
  * of this comment claimed a single check while three existed with two different
  * messages, which is why the definition is now shared rather than repeated.
  */
-export function renderPage(projectRoot: string): string {
+export function renderPage(projectRoot: string, inventory: InventoryView): string {
   return `<!doctype html>
 <html lang="en">
 <head>
@@ -108,7 +115,7 @@ ${inlinable(STYLESHEET)}</style>
 </head>
 <body>
 ${projectHeader(projectRoot)}
-${dashboard()}
+${dashboard(inventory)}
 </body>
 </html>
 `;

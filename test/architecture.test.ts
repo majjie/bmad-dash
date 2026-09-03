@@ -676,6 +676,111 @@ test('the listing adapter is scanned, and permitted only to read', async () => {
  * by design and does import both of these modules; the rule is about what
  * *ships*, not about what the suite is allowed to reach.
  */
+/**
+ * Every name one module imports from one specifier, across **all** its import
+ * statements, `type` markers stripped.
+ *
+ * The companion to `importersOf`, and it answers the question that one cannot:
+ * an exact importer *set* says which modules may reach a target, and says
+ * nothing about *what* they take from it. Story 1.12 needed the second half —
+ * the render layer is admitted into the identity authority's set on the basis
+ * that it reads label tables and no derivation, and a basis nothing checks is a
+ * promise.
+ *
+ * **It reads every statement, and the first version read one.** A single `exec`
+ * meant the basis held for one line: adding a second
+ * `import { identify } from '../domain/identity.ts';` to `src/render/inventory.ts`
+ * left the whole suite green — exactly the case the comment at that importer set
+ * says "fails here" — and the same for `locateStories` from `sprint.ts`.
+ * `test/architecture.test.ts` proves the fix with a negative case over a
+ * fixture, because a helper that silently sees less than it claims is the shape
+ * this repository has now been bitten by twice.
+ *
+ * Three forms are recognized, and anything else is refused rather than ignored:
+ *
+ *   - `import { a, b as c } from 'x'` — the named form. `b as c` records the
+ *     **imported** name, which is what an importer set is about; the local
+ *     alias is the importing module's business.
+ *   - `import d, { a } from 'x'` — a default beside names. The default is
+ *     recorded as `default`, so a module reaching for one is visible.
+ *   - `import * as n from 'x'` — a namespace, recorded as `*`. It takes
+ *     *everything*, so it can never satisfy an "and nothing else" assertion,
+ *     and reporting it as the empty set would have made the widest import look
+ *     like the narrowest.
+ *
+ * A bare `import 'x'` contributes nothing, which is correct: it binds no name.
+ */
+export function namedImports(source: string, specifier: string): readonly string[] {
+  const quoted = specifier.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const statement = new RegExp(`import\\s+([^;]*?)\\s*from\\s*'${quoted}';`, 'g');
+  const found: string[] = [];
+  for (const match of source.matchAll(statement)) {
+    const clause = (match[1] ?? '').replace(/^type\s+/, '').trim();
+    if (clause === '') continue;
+    const namespace = /^\*\s+as\s+/.exec(clause);
+    if (namespace !== null) {
+      found.push('*');
+      continue;
+    }
+    const braces = /\{([\s\S]*)\}/.exec(clause);
+    const before = braces === null ? clause : clause.slice(0, clause.indexOf('{'));
+    const bare = before.replace(/,\s*$/, '').trim();
+    if (bare !== '') found.push('default');
+    for (const entry of (braces?.[1] ?? '').split(',')) {
+      const name = entry
+        .replace(/^\s*type\s+/, '')
+        .replace(/\s+as\s+[\s\S]*$/, '')
+        .trim();
+      if (name !== '') found.push(name);
+    }
+  }
+  // Deduplicated and sorted, because two statements may name the same thing and
+  // the assertions this feeds are about the *set* a module may reach for.
+  return [...new Set(found)].sort();
+}
+
+/** `namedImports` over a file in the tree. */
+async function namedImportsIn(
+  root: string,
+  file: string,
+  specifier: string,
+): Promise<readonly string[]> {
+  const source = await readFile(join(root, file), 'utf8');
+  const names = namedImports(source, specifier);
+  assert.ok(names.length > 0, `${file} must import from ${specifier} by name`);
+  return names;
+}
+
+test('the import reader sees every statement, not only the first', () => {
+  // The negative case, over a fixture rather than over the tree, because the
+  // failure it proves is one the tree does not currently contain: a second
+  // import statement naming the same module. Without this the helper's promise
+  // is that it *looked*, not that it saw.
+  const two = [
+    "import { LEVEL_LABELS, type Level } from '../domain/identity.ts';",
+    "import { FAMILIES } from '../domain/identity.ts';",
+    "import { identify } from '../domain/identity.ts';",
+  ].join('\n');
+  assert.deepEqual(namedImports(two, '../domain/identity.ts'), [
+    'FAMILIES',
+    'LEVEL_LABELS',
+    'Level',
+    'identify',
+  ]);
+  // The three forms, and the one that can never satisfy "and nothing else".
+  assert.deepEqual(namedImports("import * as all from './x.ts';", './x.ts'), ['*']);
+  assert.deepEqual(namedImports("import fallback, { a } from './x.ts';", './x.ts'), [
+    'a',
+    'default',
+  ]);
+  // `b as c` records the imported name, not the local alias.
+  assert.deepEqual(namedImports("import { b as c } from './x.ts';", './x.ts'), ['b']);
+  // A side-effect import binds nothing, and another module's import of a
+  // similarly-named file is not this one's.
+  assert.deepEqual(namedImports("import './x.ts';", './x.ts'), []);
+  assert.deepEqual(namedImports("import { a } from './xx.ts';", './x.ts'), []);
+});
+
 async function importersOf(root: string, target: string): Promise<string[]> {
   const importers: string[] = [];
   for (const file of await collectSourceFiles(root)) {
@@ -806,6 +911,18 @@ test('identity is derived in one place, and that place is the pure layer', async
   // what the recorded reading already said. A module here that took a folder
   // *name* would be re-deriving identity, which is the failure the exact set
   // exists to catch.
+  //
+  // **Story 1.12's edit is a render module, which the paragraph above calls the
+  // failure this set exists to catch — so it is admitted on a narrow and
+  // checkable basis rather than on a promise.** `src/render/inventory.ts` reads
+  // the *vocabulary*: `FAMILIES` and the three label tables beside it, plus the
+  // level labels FR-69's sentence is assembled from. It asks no identity
+  // question, and cannot: the assertion below pins its import list to names
+  // that carry no derivation, so adding `identify` — or `Candidate`, which is
+  // the only way to call it — fails here. The alternative was a second copy of
+  // the family, shape, confidence and level labels in the render layer, which
+  // is the drift this project already corrects at four other sites and the
+  // thing an exact importer set is a poor trade against.
   assert.deepEqual(
     await importersOf(REPO_ROOT, 'src/domain/identity.ts'),
     [
@@ -813,8 +930,32 @@ test('identity is derived in one place, and that place is the pure layer', async
       'src/domain/document.ts',
       'src/domain/interpretation.ts',
       'src/domain/runs.ts',
+      'src/render/inventory.ts',
     ],
-    'only the snapshot pass, the document model, the interpretation rule and the run facts read the authority',
+    'the pass, the document model, the interpretation rule, the run facts and the inventory surface — which reads labels only',
+  );
+
+  // The narrow basis, made mechanical, and asserted as an **exact list** rather
+  // than as a denylist: every name the render layer takes from the authority is
+  // a label table, a vocabulary list or a type, none of which can derive an
+  // identity — and `identify` or `Candidate` appearing among them fails here
+  // without anyone having had to think of naming them, which a denylist could
+  // not promise for the next such name.
+  assert.deepEqual(
+    await namedImportsIn(REPO_ROOT, 'src/render/inventory.ts', '../domain/identity.ts'),
+    [
+      'CONFIDENCE_LABELS',
+      'Confidence',
+      'FAMILIES',
+      'FAMILY_LABELS',
+      'Family',
+      'LEVELS',
+      'LEVEL_LABELS',
+      'Level',
+      'SHAPE_LABELS',
+      'Shape',
+    ],
+    'the render layer may read the identity vocabulary and nothing that derives one',
   );
   // Story 1.11's deliberate edit, and the reason it is deliberate rather than a
   // quiet import: this set exists to stop the frontmatter reader becoming
@@ -881,15 +1022,53 @@ test('the signal vocabulary and the interpretation rule are pure, with exact imp
   // *point* of the exact set rather than a strain on it — a fifth copy of the
   // four states appearing somewhere is the failure, and a domain module reading
   // this vocabulary is the fix.
+  //
+  // **Story 1.12 is the fourth importer of the signal vocabulary, and it is the
+  // one the set was waiting for.** The comment above names the interesting
+  // failure as "a *fifth* copy of the four states appearing somewhere with
+  // nothing importing this module at all" — which is exactly what a surface
+  // spelling `Present` / `Not found` / `Unreadable` / `Not checked` in its own
+  // page copy would be. `src/render/inventory.ts` reads `SIGNAL_LABELS` and the
+  // `SignalState`/`ReadStage` types, so the four labels on the page are the
+  // four the index defines, and a reworded label fails
+  // `test/domain/signal.test.ts` rather than diverging silently. The decision
+  // this entry was told to record in advance (`deferred-work.md`, Story 1.9's
+  // unconsumed-exports finding) is answered: the labels are consumed, and the
+  // definitions are not, because a requirement's own sentence is not page copy.
   assert.deepEqual(
     await importersOf(REPO_ROOT, 'src/domain/signal.ts'),
-    ['src/adapters/fs/read.ts', 'src/cli/inventory.ts', 'src/domain/sprint.ts'],
-    'the signal vocabulary is shared by the reading adapter, the pass and the location rule; a fourth importer is a decision',
+    [
+      'src/adapters/fs/read.ts',
+      'src/cli/inventory.ts',
+      'src/domain/sprint.ts',
+      'src/render/inventory.ts',
+    ],
+    'the reading adapter, the pass, the location rule and the surface that shows the four states',
   );
+  // The interpretation rule's second importer, on the terms its own entry set:
+  // the surface renders FR-12's state from `InterpretationState` rather than
+  // from a boolean of its own, so the two states cannot collapse on the way to
+  // the page — which is the whole reason that module exists.
   assert.deepEqual(
     await importersOf(REPO_ROOT, 'src/domain/interpretation.ts'),
-    ['src/cli/inventory.ts'],
-    'FR-12 and FR-69 are decided once, in the pass; Story 1.12 consumes what it recorded',
+    ['src/cli/inventory.ts', 'src/render/inventory.ts'],
+    'FR-12 and FR-69 are decided once, in the pass; the surface renders what it recorded',
+  );
+
+  // The "and nothing else" half, pinned for both — the prose above makes the
+  // same promise for these two that it makes for the authority, and until this
+  // round only the authority's was checked. The surface may read the four
+  // labels and the state vocabularies; `interpret` is the derivation and is the
+  // name that must not appear.
+  assert.deepEqual(
+    await namedImportsIn(REPO_ROOT, 'src/render/inventory.ts', '../domain/signal.ts'),
+    ['ReadStage', 'SIGNAL_LABELS', 'SignalState'],
+    'the surface may read the four labels and the two vocabularies, and nothing else',
+  );
+  assert.deepEqual(
+    await namedImportsIn(REPO_ROOT, 'src/render/inventory.ts', '../domain/interpretation.ts'),
+    ['InterpretationState'],
+    'the surface branches on the recorded state and never re-derives it',
   );
 
   // And the purity rule actually reaches them: every rule in this file is of
@@ -913,10 +1092,23 @@ test('the run facts are pure, with an exact importer set of their own', async ()
   // are derived once, in the pass, from the recorded verdict — a second
   // importer reaching for them would more likely be a surface asking the
   // question again than one consuming the answer.
+  //
+  // Story 1.12's edit, and it is a *consumer* rather than a second derivation —
+  // the distinction the comment above draws. `src/render/inventory.ts` imports
+  // the `Reuse` and `DateSignal` types and nothing else: it branches on facts
+  // the pass recorded and takes no folder name, so it could not re-derive one.
   assert.deepEqual(
     await importersOf(REPO_ROOT, 'src/domain/runs.ts'),
-    ['src/cli/inventory.ts'],
-    'only the snapshot pass derives run facts; Story 1.12 and Epic 3 consume what it recorded',
+    ['src/cli/inventory.ts', 'src/render/inventory.ts'],
+    'the pass derives run facts and the surface renders them; a third importer is a decision',
+  );
+  // And the "nothing else" the comment above promises: two fact *types* and no
+  // `runFactsOf`, which is the derivation. Unpinned, the promise held for
+  // whichever import statement happened to come first.
+  assert.deepEqual(
+    await namedImportsIn(REPO_ROOT, 'src/render/inventory.ts', '../domain/runs.ts'),
+    ['DateSignal', 'Reuse'],
+    'the surface branches on the recorded facts and derives none',
   );
 
   // And the purity rule reaches it: every rule in this file is of the form "no
@@ -934,10 +1126,24 @@ test('the location vocabulary is pure, with an exact importer set of its own', a
   // second importer here would most likely be a surface resolving
   // `story_location` for itself, which is the second discovery path AD-9 exists
   // to forbid — and the one whose mistake reads a file outside the project.
+  //
+  // **Story 1.12's edit, and it is the case this set's warning distinguishes.**
+  // The comment above says a second importer "would most likely be a surface
+  // resolving `story_location` for itself" — the second discovery path AD-9
+  // forbids. `src/render/inventory.ts` resolves nothing: it takes the recorded
+  // `LocationState` off the projected view and reads `outOfTreeReport`, which is
+  // the string index's own sentence with its `<path>` substituted. Its import
+  // list is pinned below, so a `locateStories` here would fail rather than
+  // read.
   assert.deepEqual(
     await importersOf(REPO_ROOT, 'src/domain/sprint.ts'),
-    ['src/cli/inventory.ts'],
-    'only the snapshot pass resolves the story location; Story 1.12 consumes what it recorded',
+    ['src/cli/inventory.ts', 'src/render/inventory.ts'],
+    'the pass resolves the story location and the surface renders it; a third importer is a decision',
+  );
+  assert.deepEqual(
+    await namedImportsIn(REPO_ROOT, 'src/render/inventory.ts', '../domain/sprint.ts'),
+    ['LocationState', 'outOfTreeReport'],
+    'the surface may read the indexed sentence and the state vocabulary, and resolve nothing',
   );
 
   // And the purity rule reaches it: every rule in this file is of the form "no
@@ -996,15 +1202,61 @@ test('the path-segment sanitizer is scanned, and importable only by the reading 
 });
 
 test('the inventory pass has a stated importer set, so its first surface is a deliberate edit', async () => {
-  // Empty on purpose, and recorded as such in `deferred-work.md` rather than
-  // left for a reader to find an unreferenced module: Story 1.12 renders the
-  // inventory and is the first consumer. `esbuild` bundles from
-  // `src/cli/index.ts`, so nothing unreachable reaches `dist/`.
+  // **This is that edit.** The set was asserted empty with a message saying
+  // Story 1.12 would be the first consumer and that adding it would be an edit
+  // here, and the corresponding `deferred-work.md` entry said that if 1.12
+  // landed without importing the pass, that would be a finding about 1.12.
+  //
+  // The one importer is the composition root, and that is the whole of the
+  // rule: AD-3 takes one snapshot per refresh and AD-9 puts resolution in the
+  // composition root, so a second importer would be a second pass over the same
+  // tree — or, worse, a render module or an adapter taking one of its own, which
+  // is what the set is narrow enough to catch.
   assert.deepEqual(
     await importersOf(REPO_ROOT, 'src/cli/inventory.ts'),
-    [],
-    'nothing serves the inventory yet; Story 1.12 is the first, and adding it is an edit here',
+    ['src/cli/index.ts'],
+    'the composition root takes the one pass; a second importer is a second snapshot',
   );
+});
+
+test('the render layer imports nothing from the composition root', async () => {
+  // `ARCHITECTURE-SPINE.md:32` gives `src/render/` "domain types only" and its
+  // graph has `RENDER --> DOMAIN` and no render-to-cli edge — and **nothing
+  // enforced it**. Measured before this rule existed: adding
+  // `import { takeInventory } from '../cli/inventory.ts'` to
+  // `src/render/inventory.ts` left the whole suite green, so the render layer
+  // could have consumed the pass's own `Inventory` — `CanonicalPath`,
+  // `WalkEntry`, the confined reader's types and all — and inverted the
+  // dependency the spine fixes.
+  //
+  // That is the direction that matters here rather than the reverse: the
+  // composition root may import everything, so `src/cli/` reaching into
+  // `src/render/` is legal and is how the projected view gets built. What must
+  // not happen is the render layer reaching back.
+  const offending: string[] = [];
+  for (const file of await collectSourceFiles(REPO_ROOT)) {
+    if (!file.startsWith('src/render/')) continue;
+    const scanned = scanSource(await readFile(join(REPO_ROOT, file), 'utf8'));
+    for (const match of scanned.withLiterals.matchAll(SPECIFIER_PATTERN)) {
+      const specifier = match[2];
+      if (specifier === undefined || !specifier.startsWith('.')) continue;
+      const resolved = join(dirname(file), specifier).split(sep).join('/');
+      if (resolved.startsWith('src/cli/')) offending.push(`${file} -> ${resolved}`);
+    }
+  }
+  assert.deepEqual(
+    offending,
+    [],
+    'the render layer may depend on the domain, never on the composition root',
+  );
+
+  // And the scan reaches the render layer at all: every rule in this file is of
+  // the form "no scanned file does X", which passes vacuously over files the
+  // scan never opened.
+  const scanned = await collectSourceFiles(REPO_ROOT);
+  for (const module of ['src/render/inventory.ts', 'src/render/page.ts']) {
+    assert.ok(scanned.includes(module), `${module} is not scanned by the architecture gate`);
+  }
 });
 
 test('the suggestion scan is importable only by the composition root', async () => {

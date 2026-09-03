@@ -14,7 +14,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { escapeHtml } from '../../src/render/html.ts';
+import { escapeHtml, fillIndexString, isMarkup, markup } from '../../src/render/html.ts';
 
 /** The complete contract. Every character, and what it must become. */
 const MAPPINGS: readonly (readonly [string, string])[] = [
@@ -85,4 +85,76 @@ test('a project directory named like markup is displayed, not executed', () => {
   // projects the user did not necessarily write.
   assert.equal(escapeHtml('<script>'), '&lt;script&gt;');
   assert.ok(!escapeHtml('<img onerror=x>').includes('<'));
+});
+
+// ---------------------------------------------------------------------------
+// Escaping by construction
+// ---------------------------------------------------------------------------
+
+test('markup escapes every interpolated value, and the literal parts it does not', () => {
+  // The literal parts come from the source text of the call and are the
+  // author's own markup; only the values can carry project data.
+  const built = markup`<code>${'<script>x</script>'}</code>`;
+  assert.equal(built.html, '<code>&lt;script&gt;x&lt;/script&gt;</code>');
+  assert.ok(isMarkup(built));
+});
+
+test('markup passes nested markup through without escaping it twice', () => {
+  // Composition is the whole reason `Markup` is a type rather than a naming
+  // convention: escaping a rendered row again would render `&amp;lt;` at the
+  // reader, and a bare string cannot be told from one.
+  const row = markup`<li>${'a & b'}</li>`;
+  const list = markup`<ul>${row}</ul>`;
+  assert.equal(list.html, '<ul><li>a &amp; b</li></ul>');
+});
+
+test('a Markup cannot be manufactured outside the module that builds one', async () => {
+  // The safety claim three doc comments make. It was false in the first
+  // version: the class was exported with a public constructor, so
+  // `new Markup(untrusted)` was shorter than the `as` cast the runtime guard in
+  // `./components.ts` had been added to catch.
+  const exports = Object.keys(
+    (await import('../../src/render/html.ts')) as Record<string, unknown>,
+  );
+  assert.deepEqual(
+    exports.filter((name) => name === 'Markup'),
+    [],
+    'the class must not be exported; only the type and the builders are',
+  );
+  assert.deepEqual(exports.sort(), ['escapeHtml', 'fillIndexString', 'isMarkup', 'markup']);
+});
+
+test('markup takes a list, a number and an absent value without a call-site ternary', () => {
+  // A list of values is a **sequence of nodes**, joined with real whitespace
+  // rather than with nothing. Concatenated, a row's cells ran together for every
+  // reader not looking at the styled page — text extraction, copy-paste, and an
+  // unstyled render all got `prdsFamily directoryNot checked`, because the flex
+  // `gap` that separates them visually is not text.
+  const rows = [markup`<li>1</li>`, markup`<li>2</li>`];
+  assert.equal(markup`<ul>${rows}</ul>`.html, '<ul><li>1</li>\n<li>2</li></ul>');
+  assert.equal(markup`<p>${3}</p>`.html, '<p>3</p>');
+  assert.equal(markup`<p>${undefined}</p>`.html, '<p></p>');
+  // A number is escaped like anything else, so the rule has no exception to
+  // remember: `String(value)` at each call site is what this removes.
+  assert.equal(markup`<p>${0}</p>`.html, '<p>0</p>');
+});
+
+test('markup handles a template with no values and one with only values', () => {
+  assert.equal(markup`<hr>`.html, '<hr>');
+  assert.equal(markup`${'&'}${'<'}`.html, '&amp;&lt;');
+  assert.equal(markup`<p>${[]}</p>`.html, '<p></p>', 'an empty list adds no whitespace');
+});
+
+test('an index string is filled, and an unfilled placeholder throws', () => {
+  assert.equal(fillIndexString('No <family> artifacts.', { family: 'PRD' }), 'No PRD artifacts.');
+  // `<n>` reaching a reader is the visible half of having edited the index and
+  // not the call site, so it is refused rather than shipped.
+  assert.throws(() => fillIndexString('Examined <n>.', {}), /unfilled placeholder <n>/);
+  assert.throws(() => fillIndexString('<a> and <b>.', { a: 'x' }), /unfilled placeholder <b>/);
+  // Substitution happens before escaping, never after: a value carrying markup
+  // is escaped where it is interpolated, so the filled sentence is ordinary
+  // text at this point.
+  const filled = fillIndexString('At <path>.', { path: '<script>' });
+  assert.equal(filled, 'At <script>.');
+  assert.equal(markup`<p>${filled}</p>`.html, '<p>At &lt;script&gt;.</p>');
 });

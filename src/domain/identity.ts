@@ -188,6 +188,79 @@ export const LEVEL_LABELS: Readonly<Record<Level, string>> = {
 };
 
 /**
+ * How each family is named to a reader.
+ *
+ * **Invented here, because no normative document names them.** `grep -in` over
+ * `EXPERIENCE.md`, `DESIGN.md` and `SPEC.md` returns no family display label
+ * and no inventory surface at all, so Story 1.12 needed one and this is where
+ * the level labels above already live: a family is vocabulary, not page copy,
+ * and a surface holding its own copy would be the second belief this table
+ * exists to prevent. The invention is recorded in `deferred-work.md` rather
+ * than presented as something a document asked for.
+ *
+ * **Keyed rather than searched**, so the typechecker makes the table total over
+ * `Family`: a twelfth family fails to compile here instead of falling through a
+ * lookup to a guessed default. That is what "pinned against `FAMILIES` so none
+ * can be missing" buys, and it is the same rule
+ * `INTERPRETATION_DEFINITIONS` states at length.
+ *
+ * Label-shaped per the string index's convention — initial capital, no
+ * terminal period — because these name a thing rather than say something about
+ * it. `PRD` and `UX design` are spelled as the corpus spells them.
+ */
+export const FAMILY_LABELS: Readonly<Record<Family, string>> = {
+  brief: 'Brief',
+  prd: 'PRD',
+  architecture: 'Architecture',
+  'ux-design': 'UX design',
+  research: 'Research',
+  spec: 'Spec',
+  forge: 'Forge',
+  review: 'Review',
+  epics: 'Epics',
+  story: 'Story',
+  'sprint-tracking': 'Sprint tracking',
+  note: 'Note',
+};
+
+/**
+ * How each shape is named to a reader — the artifact's *type* on a surface.
+ *
+ * Invented on the same terms as `FAMILY_LABELS`, keyed for the same reason, and
+ * two of the five say something the shape name alone does not:
+ *
+ *   - `container` reads **Family directory**, because `…/prds` is the tool's own
+ *     layout rather than an artifact, and "Container" would name an
+ *     implementation term at a reader.
+ *   - `unknown` reads **Shape not recognized**, which is deliberately a
+ *     statement about the tool and not about the artifact: FR-12's own state is
+ *     what says the artifact is nevertheless present, and it is rendered beside
+ *     this rather than folded into it.
+ */
+export const SHAPE_LABELS: Readonly<Record<Shape, string>> = {
+  document: 'Document',
+  'sharded-document': 'Sharded document',
+  'run-folder': 'Run folder',
+  container: 'Family directory',
+  unknown: 'Shape not recognized',
+};
+
+/**
+ * How each confidence value is named to a reader.
+ *
+ * Two rows, because `Confidence` is a closed two — FR-69 asks one question, is
+ * this below `certain` — and a third value is on Story 1.12's Ask First list
+ * rather than something a label table may introduce. `certain` has a label at
+ * all so the vocabulary is complete and a surface that wanted to state it
+ * could; the inventory renders only the below-certain case, which is what
+ * FR-69 asks to be displayed.
+ */
+export const CONFIDENCE_LABELS: Readonly<Record<Confidence, string>> = {
+  certain: 'Certain',
+  likely: 'Likely',
+};
+
+/**
  * How sure the verdict is. Two values, because FR-69 asks one question:
  * is this below `certain`, and therefore something to display.
  */

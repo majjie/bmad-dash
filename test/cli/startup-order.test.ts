@@ -24,6 +24,7 @@ import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { run } from '../../src/cli/index.ts';
+import { takeInventory } from '../../src/cli/inventory.ts';
 import { makeProjectDir } from '../support/project.ts';
 import { exitCodeDeps, stubHandle, STUB_PROJECT_ROOT } from '../support/cli.ts';
 
@@ -55,6 +56,16 @@ test('the signal handler is registered before anything a consumer can observe', 
       order.push('bind');
       return Promise.resolve(stubHandle());
     },
+    // **The pass's position, which nothing pinned.** It is the longest
+    // filesystem operation in the run, so a Ctrl-C during it must find a
+    // handler — the window this file measured at 4 of 25 SIGTERM runs — and it
+    // must still happen before the bind, so a project the pass cannot walk
+    // stops the command instead of surfacing as a 500 on the first page load.
+    // Moved above the handler registration, both halves stayed green.
+    inventory: (reader) => {
+      order.push('take-inventory');
+      return takeInventory(reader);
+    },
     onSignal: () => order.push('register-signal-handler'),
     stdout: () => order.push('announce-url'),
     stderr: () => order.push('write-diagnostic'),
@@ -62,7 +73,45 @@ test('the signal handler is registered before anything a consumer can observe', 
   });
 
   assert.equal(code, 0);
-  assert.deepEqual(order, ['register-signal-handler', 'bind', 'write-diagnostic', 'announce-url']);
+  assert.deepEqual(order, [
+    'register-signal-handler',
+    'take-inventory',
+    'bind',
+    'write-diagnostic',
+    'announce-url',
+  ]);
+});
+
+test('a pass that throws stops the command before the socket, and exits 1', async () => {
+  // AD-7 makes every failure a typed value on the model, so this `catch` is for
+  // a defect rather than a project shape — and a guard nobody has ever seen run
+  // is not a guard. It was unreachable until the pass became an injected seam,
+  // which is the same reason `start` and `suggest` are ones.
+  const order: string[] = [];
+  let err = '';
+  const code = await run([], {
+    launch: () => Promise.resolve({ opened: true, command: 'stub' }),
+    start: () => {
+      order.push('bind');
+      return Promise.resolve(stubHandle());
+    },
+    inventory: () => {
+      throw new Error('the walk exploded');
+    },
+    onSignal: () => order.push('register-signal-handler'),
+    stdout: () => order.push('announce-url'),
+    stderr: (text) => {
+      err += text;
+    },
+    exit: () => order.push('exit'),
+  });
+
+  // 1, not 2: the invocation was fine and the environment was not, which is the
+  // distinction a wrapper script branching on the code needs.
+  assert.equal(code, 1);
+  assert.deepEqual(order, ['register-signal-handler'], 'nothing may bind, and no URL is announced');
+  assert.match(err, /Could not take the inventory of /);
+  assert.match(err, /the walk exploded/);
 });
 
 test('the URL is the last thing startup emits', async () => {

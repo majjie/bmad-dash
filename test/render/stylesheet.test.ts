@@ -22,6 +22,9 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
+import { join, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import {
   colors,
@@ -47,9 +50,22 @@ import {
   splitStylesheet,
   typeRole,
   unemittedTokens,
+  BREAKPOINT_PX,
 } from '../../src/render/stylesheet.ts';
 
 const { root: ROOT_BLOCK, rules: RULES } = splitStylesheet();
+
+/** DESIGN.md, which owns the breakpoint value. Read-only, never edited to match. */
+const DESIGN_PATH = join(
+  dirname(fileURLToPath(import.meta.url)),
+  '..',
+  '..',
+  '_bmad-output',
+  'planning-artifacts',
+  'ux-designs',
+  'ux-bmad-2026-08-28',
+  'DESIGN.md',
+);
 
 /** Colour written as a value rather than resolved through a token. */
 const COLOUR_LITERAL =
@@ -275,9 +291,56 @@ test('no rule outside :root carries a colour literal', () => {
   assert.deepEqual(offending, [], 'every colour must resolve through a token');
 });
 
+/**
+ * The one dimension literal permitted outside `:root`, and why.
+ *
+ * `var()` is invalid in a media-query condition, so the 900px breakpoint cannot
+ * resolve through a custom property — a `@media (min-width: var(--…))` is a
+ * query the browser drops in silence, which is the same class of failure the
+ * role-reference guard in `stylesheet.ts` exists to prevent. The value is
+ * pinned against DESIGN.md by its own test below, so this exemption is one
+ * line rather than a loosened rule.
+ */
+const BREAKPOINT_LINE = `@media (min-width: ${String(BREAKPOINT_PX)}px) {`;
+
 test('no rule outside :root carries a dimension literal', () => {
-  const offending = RULES.split('\n').filter((line) => DIMENSION_LITERAL.test(line));
+  const offending = RULES.split('\n').filter(
+    (line) => DIMENSION_LITERAL.test(line) && line !== BREAKPOINT_LINE,
+  );
   assert.deepEqual(offending, [], 'every size must resolve through a token');
+  // And the exemption may not outlive the line it exempts: a breakpoint block
+  // that was renamed or removed would leave this passing vacuously.
+  assert.ok(RULES.includes(BREAKPOINT_LINE), 'the breakpoint block must be in the sheet');
+});
+
+test('the breakpoint is DESIGN.md own value, read out of the document', async () => {
+  // DESIGN.md says of it that "this file owns only the breakpoint value", and
+  // states it in prose rather than in the frontmatter the fidelity test
+  // compares — so it is read from the prose here. A literal in this file that
+  // merely happened to match would be a second copy of one belief, which is the
+  // drift this project already corrects at three other sites.
+  const design = await readFile(DESIGN_PATH, 'utf8');
+  const stated = /one breakpoint at (\d+)px/.exec(design);
+  assert.ok(stated !== null, 'DESIGN.md must state the breakpoint value');
+  assert.equal(BREAKPOINT_PX, Number(stated?.[1]));
+});
+
+test('the tile grid is one column below the breakpoint and two above it', () => {
+  // UX-DR22. Written as `min-width`, so the single column is the base rule and
+  // the collapse needs no rule of its own: below the breakpoint nothing applies
+  // and the grid is one column in document order.
+  const grid = /^\.tile-grid \{\n([\s\S]*?)\n\}/m.exec(RULES);
+  assert.ok(grid !== null, 'the sheet must carry a .tile-grid rule');
+  assert.match(grid?.[1] ?? '', /grid-template-columns: 1fr;/);
+  const block = new RegExp(
+    `@media \\(min-width: ${String(BREAKPOINT_PX)}px\\) \\{\n([\\s\\S]*?)\n\\}`,
+  ).exec(RULES);
+  assert.ok(block !== null, 'the sheet must carry the breakpoint block');
+  assert.match(block?.[1] ?? '', /\.tile-grid \{/);
+  // `minmax(0, 1fr)` and not a bare `1fr`: a bare fraction is `minmax(auto,
+  // 1fr)`, and a column holding an unbreakable artifact path would refuse to
+  // shrink below its content and push the page sideways — WCAG 1.4.10.
+  assert.match(block?.[1] ?? '', /grid-template-columns: repeat\(2, minmax\(0, 1fr\)\);/);
 });
 
 test('the page ground and text colour resolve through tokens, not literals', () => {
@@ -628,10 +691,16 @@ test('every class rule is exercised by some render path, and vice versa', async 
   // each component closes the loop without pretending the page uses everything.
   const { renderPage } = await import('../../src/render/page.ts');
   const { tile, tileGrid } = await import('../../src/render/components.ts');
+  const { markup } = await import('../../src/render/html.ts');
+  const { FULL_INVENTORY_VIEW } = await import('../support/inventory.ts');
   const rendered = [
-    renderPage('/tmp/bmad-dash-test-project'),
+    // The full view rather than an empty one: from Story 1.12 the inventory's
+    // own classes are only emitted when there is something to list, and a
+    // surface rendered empty would let a rule for an unrendered class pass this
+    // check in the direction it was written to catch.
+    renderPage('/tmp/bmad-dash-test-project', FULL_INVENTORY_VIEW),
     tileGrid([
-      { label: 'A', content: { html: '<p>x</p>' }, raised: true },
+      { label: 'A', content: { html: markup`<p>x</p>` }, raised: true },
       { label: 'B', content: { empty: 'Nothing yet.' } },
     ]),
     tile({ label: 'C', content: { empty: 'Nothing yet.' } }),

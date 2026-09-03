@@ -306,6 +306,31 @@ test('an in-tree and an out-of-tree resolution both report their path', () => {
   assert.equal(outside.reason, 'Story location points outside the project: /etc. Not read.');
 });
 
+test('a declared path carrying replacement syntax is substituted verbatim', () => {
+  // `String.prototype.replace` interprets `$&`, `` $` ``, `$'`, `$1` and `$$`
+  // inside a replacement *string*, and this path comes out of a project file, so
+  // a project chooses the replacement text. Measured before the fix:
+  // `outOfTreeReport('/etc/$&x')` produced
+  // `Story location points outside the project: /etc/<path>x. Not read.` —
+  // shipping a literal `<path>` to a reader, which is the one failure a
+  // substitution exists to prevent — and `/etc/$\'x` spliced `. Not read.` into
+  // the middle of the path. A replacer *function*'s return value is used
+  // verbatim, so no sequence in it means anything.
+  for (const declared of ['/etc/$&x', "/etc/$'x", '/etc/$`x', '/etc/$1x', '/etc/$$x', '/etc/$<n>x']) {
+    assert.equal(
+      outOfTreeReport(declared),
+      `Story location points outside the project: ${declared}. Not read.`,
+      `replacement syntax survived: ${declared}`,
+    );
+  }
+  // The placeholder itself is still substituted exactly once, and a path that
+  // happens to contain the placeholder text is not re-read as one.
+  assert.equal(
+    outOfTreeReport('<path>'),
+    'Story location points outside the project: <path>. Not read.',
+  );
+});
+
 test("the out-of-tree copy is EXPERIENCE.md's own sentence, read out of the document", async () => {
   // The string index is normative and every entry in it is used verbatim, so
   // this is compared against the document rather than restated from memory —

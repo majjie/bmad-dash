@@ -11,6 +11,23 @@
  * the status and the headers. The page was a constant here through Story 1.1;
  * Story 1.2 moved it rather than styling it in place, because a page that gains
  * a stylesheet in the transport layer gains components there next.
+ *
+ * **From Story 1.12 it carries a second value through, and composes it no more
+ * than it composes the first.** The Dashboard's content is the projected
+ * inventory. This adapter holds the *supplier* the composition root gave it,
+ * calls it once per `GET /`, and hands the result to `renderPage` unchanged. It
+ * does not take an inventory, project one, or substitute a blank one for a
+ * caller that omitted it — the option is required for exactly that reason.
+ *
+ * **A supplier and not a value, because a page load builds a new snapshot.**
+ * The first version of this closed over one view for the socket's life, so
+ * every request re-rendered a frozen snapshot while the header's refresh
+ * control, this module's own comment and a test all said otherwise — AD-3's
+ * "one immutable snapshot per refresh" implemented as one per process. Calling
+ * the supplier per request is what makes the refresh link mean what three
+ * places already claimed it meant. The snapshot is still immutable and still
+ * built in one place: this adapter neither mutates one nor knows how one is
+ * made.
  */
 
 import {
@@ -23,6 +40,7 @@ import type { AddressInfo } from 'node:net';
 
 import { renderPage } from '../../render/page.ts';
 import { assertProjectRoot } from '../../render/chrome.ts';
+import type { InventoryView } from '../../render/inventory.ts';
 import { toPlatform, type CanonicalPath } from '../fs/paths.ts';
 
 /**
@@ -81,6 +99,27 @@ export interface StartServerOptions {
    * rejects an empty or relative root.
    */
   readonly projectRoot: CanonicalPath;
+  /**
+   * The Dashboard's content, built by the composition root on demand.
+   *
+   * **Required**, on `projectRoot`'s own reasoning one field up: from Story
+   * 1.12 the surface *is* the inventory, so a server without one cannot render
+   * a page, and an option its owner cannot function without should not be
+   * omittable. Making it optional would mean this adapter deciding what an
+   * absent inventory looks like, which is composing — the one thing AD-2 says
+   * it must not do.
+   *
+   * **A function, called once per `GET /`.** A page load builds a new snapshot
+   * (AD-3), which a value captured at bind time cannot do; see this module's
+   * header. It may throw — the pass is built not to, but a filesystem can fail
+   * between two requests — and a throw here is handled exactly as a render
+   * throw is, because to a reader they are the same failure.
+   *
+   * It yields a render-layer view rather than the pass's `Inventory`: the spine
+   * gives `src/render/` domain types only, and `Inventory` references
+   * `CanonicalPath` and `WalkEntry`. The projection is the composition root's.
+   */
+  readonly inventory: () => InventoryView;
   /**
    * Preferred port. `0` — the default — asks the OS for a free one. A preferred
    * port that cannot be bound falls back to `0`, so the port reported is always
@@ -165,6 +204,10 @@ export function isExpectedHost(
  */
 export async function startServer(options: StartServerOptions): Promise<ServerHandle> {
   const projectRoot = options.projectRoot;
+  // Held and called, never inspected: this adapter does not look inside a view
+  // and does not know how one is built. AD-3 puts one immutable snapshot behind
+  // each page load, so this is invoked per request rather than captured here.
+  const inventory = options.inventory;
 
   // Before the bind, not at request time. A root that cannot be rendered must
   // stop the command, not throw inside a request handler where the rejection
@@ -209,7 +252,7 @@ export async function startServer(options: StartServerOptions): Promise<ServerHa
     // A client that disappears mid-exchange must not take the process with it.
     request.on('error', () => {});
     response.on('error', () => {});
-    handleRequest(request, response, bound, projectRoot, onError);
+    handleRequest(request, response, bound, projectRoot, inventory, onError);
   });
 
   const adopt = (info: BoundAddress): void => {
@@ -332,6 +375,7 @@ function handleRequest(
   response: ServerResponse,
   bound: BoundAddress | null,
   projectRoot: CanonicalPath,
+  inventory: () => InventoryView,
   onError: ((error: Error) => void) | undefined,
 ): void {
   if (bound === null) {
@@ -359,14 +403,19 @@ function handleRequest(
 
   const path = request.url?.split('?')[0] ?? '/';
   if (path === '/') {
-    // Rendering is pure and its input was validated before the bind, so a
-    // throw here means a defect rather than bad input. Caught all the same: an
-    // exception escaping a request listener is an uncaught exception, which
+    // Building the snapshot and rendering it, inside one `try`, and that is
+    // deliberate: to a reader they are one failure — the page did not come —
+    // and neither may escape a request listener, because an exception that does
     // ends the process while the reader watches a tab hang. A 500 they can
     // report beats a server that vanishes.
+    //
+    // Rendering is pure over a validated root, so a throw from it is a defect;
+    // the pass is built not to throw at all (AD-7), but it reads a filesystem
+    // that can change between two requests, which is the one honest reason a
+    // second request can fail where the first succeeded.
     let document: string;
     try {
-      document = renderPage(toPlatform(projectRoot));
+      document = renderPage(toPlatform(projectRoot), inventory());
     } catch (error: unknown) {
       onError?.(error instanceof Error ? error : new Error(String(error)));
       respondText(response, 500, 'The page could not be rendered.\n');

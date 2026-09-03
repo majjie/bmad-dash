@@ -8,15 +8,33 @@
  */
 
 import { parseArgs } from 'node:util';
-import { resolve, isAbsolute } from 'node:path';
+import { resolve, isAbsolute, relative as relativePath, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { startServer, type ServerHandle } from '../adapters/http/server.ts';
 import { resolveRealPath } from '../adapters/fs/realpath.ts';
+import { ConfinedReader } from '../adapters/fs/read.ts';
 import { openBrowser, type LaunchResult } from '../adapters/browser/open.ts';
 import { resolveLocation } from './location.ts';
 import { suggestInvocations } from './suggest.ts';
-import { toPlatform } from '../adapters/fs/paths.ts';
+import {
+  OUTPUT_DIRECTORY,
+  takeInventory,
+  type Inventory,
+  type InventoryEntry,
+} from './inventory.ts';
+import type {
+  AliasReport,
+  ArtifactRow,
+  FamilyGroup,
+  GroupNote,
+  InventoryView,
+  RowIdentity,
+  RowReadability,
+  RowRunFacts,
+  StoryLocationReport,
+} from '../render/inventory.ts';
+import { toPlatform, type CanonicalPath } from '../adapters/fs/paths.ts';
 
 const USAGE = 'Usage: bmad-dash [path] [options]';
 const ACCEPTED =
@@ -307,6 +325,276 @@ export function parseInvocation(argv: readonly string[], cwd: string): Invocatio
   return { ok: true, projectRoot, open: values['no-open'] !== true, port };
 }
 
+// ---------------------------------------------------------------------------
+// Projecting the pass onto the surface
+// ---------------------------------------------------------------------------
+
+/**
+ * Which tile a row goes on, in the view's own vocabulary.
+ *
+ * Taken off `FamilyGroup` rather than imported from `src/domain/identity.ts`,
+ * and that is not a stylistic dodge: the architecture gate reads specifiers
+ * with no `import type` awareness, so a type-only import of `Family` would put
+ * the composition root in the authority's exact importer set — a set that
+ * exists to make every consumer of the identity authority a deliberate edit.
+ * This projection consumes a recorded verdict and needs no family *vocabulary*
+ * of its own, so it borrows the one the view already declares.
+ */
+type GroupFamily = FamilyGroup['family'];
+
+/**
+ * The family the story location is reported at (`EXPERIENCE.md:168`).
+ *
+ * A literal, checked against `GroupFamily` by the annotation, so a renamed
+ * family fails the typecheck here rather than silently detaching the note.
+ */
+const STORY_FAMILY: GroupFamily = 'story';
+
+/**
+ * The `Inventory` as the render layer's own view.
+ *
+ * **Why the projection is here.** `ARCHITECTURE-SPINE.md` gives `src/render/`
+ * "domain types only", and `Inventory` is not one — it references
+ * `CanonicalPath` and `WalkEntry`, which the purity gate forbids the domain
+ * importing, so it cannot move to `src/domain/` either. The composition root is
+ * the layer permitted to see both sides, so this is where the two meet.
+ * `test/architecture.test.ts` asserts the other half of that: `src/render/`
+ * imports nothing from `src/cli/`.
+ *
+ * **What it decides, and what it refuses to.** It decides *what appears* —
+ * which entries become rows, which family each row is placed under, and which
+ * project-level facts reach the surface at all. It decides neither order: rows
+ * keep the pass's own walk order untouched, and the order families appear in is
+ * the render layer's `FAMILIES` walk. (An earlier version of this paragraph
+ * claimed "the order of both", which was wrong on the day it was written and is
+ * the kind of claim a reader would have taken on trust.) It decides no wording
+ * either: every state word and every sentence is looked up in the render layer
+ * from the vocabulary table that owns it, so a display string cannot be
+ * invented on this side of the seam.
+ *
+ * **What it deliberately drops.** Every hand-written `reason` on the model —
+ * `StoryLocation.reason`, `Readability.reason`, `WalkEntry.reason`,
+ * `Attempt.reason`, `Skip.reason`, `Alias.reason`, `Listing.reason`,
+ * `UnmeasuredRunFacts.reason`, `Parts.reason` — is left where it was recorded.
+ * No normative document backs any of them, so none may be rendered; what
+ * crosses instead is the typed state and stage beside each one, which is the
+ * whole of "naming what failed and at which stage".
+ */
+export function projectInventory(inventory: Inventory): InventoryView {
+  const byFamily = new Map<GroupFamily, ArtifactRow[]>();
+  const place = (family: GroupFamily, row: ArtifactRow): void => {
+    const held = byFamily.get(family);
+    if (held === undefined) byFamily.set(family, [row]);
+    else held.push(row);
+  };
+
+  for (const entry of inventory.entries) {
+    // **The output folder itself is not an artifact.** It is what was walked,
+    // not something found in it — the same reasoning `Inventory.startEntry`
+    // records for the project root one level up — and no artifact root
+    // contains it, so the authority reports it `unidentified`. Listed, it puts
+    // a permanent "Not identified" row on every project for the tool's own
+    // layout, which is the noise `Shape: 'container'` was introduced to stop
+    // for the seven family directories and which nothing had stopped for their
+    // parent. It also made a marker-only project report one artifact, so the
+    // index's `A BMAD project, with no artifacts yet.` was unreachable.
+    //
+    // Compared case-insensitively, because that is how the pass recognizes the
+    // directory in the first place: on a case-insensitive volume the folder
+    // BMAD created as `_bmad-output` can come back spelled otherwise. **Both**
+    // sides are lowered: the constant is spelled lowercase today, so lowering
+    // one side happened to work and would stop working the moment it was not.
+    if (entry.entry.relative.toLowerCase() === OUTPUT_DIRECTORY.toLowerCase()) continue;
+    place(familyOf(entry), {
+      path: entry.entry.relative,
+      identity: rowIdentity(entry),
+      readability: rowReadability(entry),
+      interpretation: entry.interpretation,
+      runFacts: entry.runFacts.map(rowRunFacts),
+    });
+  }
+
+  // A group per family that holds something, plus the story family whether or
+  // not it does — it carries the location note. Which families exist, in what
+  // order, and what a family with no artifacts says are display decisions, and
+  // they belong to the layer that has the labels: `inventoryTiles` walks
+  // `FAMILIES` and fills in every family this projection did not emit. That is
+  // also what keeps the composition root from importing the identity authority
+  // for a list of names.
+  const keys = new Set<GroupFamily>([...byFamily.keys(), STORY_FAMILY]);
+  const groups: FamilyGroup[] = [];
+  for (const family of keys) {
+    groups.push({ family, rows: byFamily.get(family) ?? [], notes: notesFor(family, inventory) });
+  }
+
+  return {
+    // **Narrower than `Inventory.complete`, deliberately.** The walk's own
+    // `complete` also goes false for a single entry it could not read and for
+    // any name it suppressed — facts that are already on the affected entry's
+    // own row. Reporting them again as "the scan did not finish" would be
+    // false: the scan did finish. What this claims is only the thing the row
+    // cannot say, which is that something is missing from the list *entirely*
+    // — a bound was reached, or a name was left out past a record cap and
+    // nobody can name it.
+    complete:
+      inventory.truncations.length === 0 &&
+      inventory.skippedNotRecorded === 0 &&
+      inventory.suppressedNotRecorded === 0,
+    // The rows actually placed, not `entries.length`: the output folder is
+    // excluded above, and a count that included it would contradict the list
+    // the reader can see.
+    artifactCount: groups.reduce((total, group) => total + group.rows.length, 0),
+    // The skip policy's whole tally, recorded names and the overflow count
+    // together, because the reader's question is how many names were not
+    // examined and neither half answers it alone.
+    namesLeftOut: inventory.skipped.length + inventory.skippedNotRecorded,
+    aliases: inventory.aliases.map(aliasReport),
+    groups,
+  };
+}
+
+/**
+ * One suppressed spelling, as the surface reports it.
+ *
+ * `restored` and `reason` do not cross. The reason is hand-written and is on
+ * this story's Never list; `restored` is about whether the name was put back
+ * into its parent's *listing* for identification's benefit, which is a fact
+ * about how the verdict was reached rather than about what the project holds.
+ * What the reader needs is that the project holds this name and that the
+ * artifact behind it is reported elsewhere — which is true either way.
+ */
+function aliasReport(alias: Inventory['aliases'][number]): AliasReport {
+  return { name: alias.relative, reportedAt: alias.reportedAt };
+}
+
+/**
+ * Which family's tile an entry belongs on.
+ *
+ * `undefined` for the two cases no single family claims, and they are different
+ * facts the row itself states: an `unidentified` verdict resolved no family at
+ * all, and an `ambiguous` verdict whose readings name two *families* is one the
+ * tool declines to rank — so placing it under either would be the silent
+ * resolution AD-4 and FR-73 forbid. An ambiguity over *shapes* of one family is
+ * placed under that family, because every reading agrees on it.
+ */
+function familyOf(entry: InventoryEntry): GroupFamily {
+  const verdict = entry.identity;
+  if (verdict.outcome === 'identified') return verdict.family;
+  if (verdict.outcome === 'unidentified') return undefined;
+  const families = new Set(verdict.readings.map((reading) => reading.family));
+  return families.size === 1 ? verdict.readings[0]?.family : undefined;
+}
+
+/** The recorded verdict, narrowed to what a row shows. */
+function rowIdentity(entry: InventoryEntry): RowIdentity {
+  const verdict = entry.identity;
+  if (verdict.outcome === 'identified') {
+    return {
+      outcome: 'identified',
+      shape: verdict.shape,
+      confidence: verdict.confidence,
+      resolvedAt: verdict.resolvedAt,
+    };
+  }
+  if (verdict.outcome === 'ambiguous') {
+    return {
+      outcome: 'ambiguous',
+      readings: verdict.readings.map((reading) => ({
+        family: reading.family,
+        shape: reading.shape,
+      })),
+      confidence: verdict.confidence,
+      resolvedAt: verdict.resolvedAt,
+    };
+  }
+  // FR-69's "naming which levels were attempted", in FR-8's order, which is the
+  // order the authority records them in. The result and the `reason` beside each
+  // one stay on the verdict: the index's sentence names levels.
+  return { outcome: 'unidentified', attempted: verdict.attempted.map((at) => at.level) };
+}
+
+/**
+ * The one signal a row shows, in AD-8's four states.
+ *
+ * `present` carries no stage — there is none in a read that finished — and the
+ * type says so, which is why this is a branch rather than a spread.
+ */
+function rowReadability(entry: InventoryEntry): RowReadability {
+  const readability = entry.readability;
+  if (readability.state === 'present') return { state: 'present', stage: undefined };
+  return { state: readability.state, stage: readability.stage };
+}
+
+/** One run-folder reading's facts, or the fact that none were measured. */
+function rowRunFacts(facts: InventoryEntry['runFacts'][number]): RowRunFacts {
+  if (facts.outcome !== 'measured') return { measured: false };
+  return { measured: true, reuse: facts.reuse, dateSignal: facts.dateSignal };
+}
+
+/**
+ * The project-level facts that belong on a family's tile.
+ *
+ * One so far, and `EXPERIENCE.md:168` decides both halves: the story location
+ * is "reported at the artifact-family level, not as a signal state", and the
+ * family it is reported at is `story`, because that is the family the value
+ * locates. It is one record per pass rather than per entry, so it is attached
+ * here rather than folded into a row.
+ */
+function notesFor(family: GroupFamily, inventory: Inventory): readonly GroupNote[] {
+  if (family !== STORY_FAMILY) return [];
+  return [{ kind: 'story-location', report: storyLocationReport(inventory) }];
+}
+
+/**
+ * The recorded location, as one of the four things there is to say about it.
+ *
+ * **This is where `{ state: 'in-tree', path: undefined }` is resolved**, and it
+ * has to be resolved somewhere: `StoryLocation` types the path as
+ * `string | undefined` independently of the state, so the combination is
+ * representable even though `src/domain/sprint.ts` fills a path for exactly
+ * three states. Rendered, it fell through the surface's branches and reached a
+ * reader as `Sprint view unavailable. in-tree`, which looks like a ninth
+ * location state. Answered here it is `unavailable` carrying the state, which
+ * is honest for an inconsistency nobody can interpret, and the render layer's
+ * union no longer admits the pair at all.
+ *
+ * **The in-tree path is made project-relative.** Every other path on the
+ * surface is, and `sprint.ts` records that printing the absolute project root
+ * beside this value was a defect it already corrected once — so a
+ * `Stories are at /home/someone/work/proj/docs/stories.` beside fifty rows of
+ * `_bmad-output/…` was the same defect returning at the display layer. The
+ * `out-of-tree` path is deliberately left **absolute**: FR-74's whole point is
+ * saying where the value actually pointed, and a value outside the root has no
+ * meaningful spelling relative to it.
+ */
+function storyLocationReport(inventory: Inventory): StoryLocationReport {
+  const location = inventory.storyLocation;
+  const path = location.path;
+  if (location.state === 'in-tree' && path !== undefined) {
+    return { kind: 'at', path: withinProject(inventory.root, path) };
+  }
+  if (location.state === 'out-of-tree' && path !== undefined) {
+    return { kind: 'outside', path };
+  }
+  if (location.state === 'absent') return { kind: 'none' };
+  return { kind: 'unavailable', state: location.state };
+}
+
+/**
+ * A path inside the project, spelled the way every other path here is spelled.
+ *
+ * `/`-separated whatever the platform, project-root-relative, and `.` for the
+ * root itself — the same three properties `WalkEntry.relative` has, so the two
+ * spellings on one page cannot look like two different conventions. A pure
+ * string projection: it resolves nothing and touches no filesystem, so the
+ * rule that resolution happens once still holds.
+ */
+function withinProject(root: CanonicalPath, path: string): string {
+  const within = relativePath(toPlatform(root), path);
+  if (within === '') return '.';
+  return within.split(sep).join('/');
+}
+
 /**
  * What `run` needs from the outside world.
  *
@@ -353,6 +641,21 @@ export interface RunDependencies {
    * command keeps them instead of silently asking the reader to retype.
    */
   readonly suggest?: (target: string, flags: readonly string[]) => readonly string[];
+  /**
+   * The snapshot pass, injected so its failure path is reachable.
+   *
+   * A seam for the reason `start` is one: the pass is built never to throw
+   * (AD-7 makes every failure a typed value on the model), so the `catch` that
+   * turns a thrown pass into `EXIT_FAILURE` had no test that could reach it —
+   * a guard nobody had ever seen run. It also lets a test observe *when* the
+   * pass happens relative to the signal handler and the bind, which is an
+   * ordering this file argues at length and could not otherwise assert.
+   *
+   * Defaults to the real pass. It receives the confined reader for the
+   * recognized root, so a substitute is handed the same single root AD-9
+   * permits and cannot widen it.
+   */
+  readonly inventory?: (reader: ConfinedReader) => Inventory;
 }
 
 /** Returns the process exit code. `0` means the server is up. */
@@ -374,6 +677,7 @@ export async function run(
     });
 
   const launch = dependencies.launch;
+  const pass = dependencies.inventory ?? takeInventory;
 
   const invocation = parseInvocation(argv, process.cwd());
   if (!invocation.ok) {
@@ -454,9 +758,50 @@ export async function run(
     }),
   );
 
+  /**
+   * How a snapshot is taken (AD-3, AD-9) — and one taken now, to fail fast.
+   *
+   * **The supplier is what the server gets, and it is called per request.** AD-3
+   * puts one immutable snapshot behind each page load, and the refresh control
+   * is a link precisely because following it should build one. For one story
+   * this closed over a single view for the socket's life, so the control was
+   * inert while three comments and a test said otherwise; that is fixed in the
+   * adapter, and this is the other half of the fix.
+   *
+   * **The eager call is the fail-fast check, and its position is load-bearing.**
+   * After the shutdown handler, because the walk is the longest filesystem
+   * operation in the run and a Ctrl-C during it must exit 0 rather than take
+   * the default signal disposition — the window this file's ordering comment
+   * measured at 4 of 25 runs. Before the bind, because a project the pass
+   * cannot walk must stop the command while stopping is still cheap: nothing is
+   * bound, nothing is announced, and the reader gets an exit code instead of a
+   * 500 on their first page load. `test/cli/startup-order.test.ts` asserts both
+   * halves of that position.
+   *
+   * The reader is built **once** and closed over, so every snapshot this run
+   * produces is confined to the root the command recognized — the single root
+   * AD-9 permits — and every read is resolved and confinement-checked at the
+   * moment it happens.
+   *
+   * Caught, though the pass is built not to throw: AD-7 makes every failure a
+   * typed value on the model, so an exception here is a defect rather than a
+   * project shape. It still must not reach the user as a stack trace, and it is
+   * a failure to start rather than a usage error — the invocation was fine.
+   */
+  const reader = new ConfinedReader(location.root);
+  const snapshot = (): InventoryView => projectInventory(pass(reader));
+  try {
+    snapshot();
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : String(error);
+    stderr(`Could not take the inventory of ${toPlatform(location.root)}: ${message}\n`);
+    return EXIT_FAILURE;
+  }
+
   try {
     handle = await start({
       projectRoot: location.root,
+      inventory: snapshot,
       port: invocation.port,
       onError: (error) => {
         stderr(`Socket error after bind: ${error.message}\n`);

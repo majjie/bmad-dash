@@ -17,6 +17,7 @@ import { run } from '../../src/cli/index.ts';
 import { suggestInvocations } from '../../src/cli/suggest.ts';
 import { canonical } from '../../src/adapters/fs/paths.ts';
 import type { ServerHandle } from '../../src/adapters/http/server.ts';
+import type { InventoryView } from '../../src/render/inventory.ts';
 
 /**
  * A synthetic absolute root. Fixed rather than `process.cwd()` so a test's
@@ -25,6 +26,31 @@ import type { ServerHandle } from '../../src/adapters/http/server.ts';
  * into an assertion is visible.
  */
 export const STUB_PROJECT_ROOT = '/tmp/bmad-dash-test-project';
+
+/**
+ * The view for a project the pass found nothing in.
+ *
+ * Shared because `StartServerOptions.inventory` is required, and the twenty-odd
+ * tests that bind a socket to ask about `Host` handling, methods and shutdown
+ * have nothing to say about content. Held here rather than spelled inline in
+ * each of them for this file's own reason: a field added to `InventoryView`
+ * should be a compile error in one place, not stubbed faithfully in twenty and
+ * forgotten in the twenty-first.
+ *
+ * It is a *real* state and not a placeholder — `artifactCount: 0` renders the
+ * index's `A BMAD project, with no artifacts yet.` — so a test using it still
+ * serves a page that says something true.
+ */
+export const EMPTY_INVENTORY: InventoryView = {
+  complete: true,
+  artifactCount: 0,
+  namesLeftOut: 0,
+  aliases: [],
+  groups: [],
+};
+
+/** The supplier form `StartServerOptions.inventory` takes. */
+export const emptyInventory = (): InventoryView => EMPTY_INVENTORY;
 
 /** A handle that binds nothing, so ordering can be observed without a socket. */
 export function stubHandle(projectRoot: string = STUB_PROJECT_ROOT): ServerHandle {
@@ -72,6 +98,27 @@ export interface RunObservation {
   readonly scanFlags: readonly (readonly string[])[];
   /** The root each `start` call was given. Empty means no socket was ever asked for. */
   readonly served: readonly string[];
+  /**
+   * The view each `start` call's supplier produced, in order.
+   *
+   * **Recorded because nothing recorded it, and that was the most serious hole
+   * in Story 1.12.** Every in-process test stubs `start`, and this observer
+   * captured only `projectRoot` — so replacing the projected view with
+   * `{ complete: true, artifactCount: 0, groups: [] }` in the composition root,
+   * while still walking the tree, left the whole suite green. The tool would
+   * have served `A BMAD project, with no artifacts yet.` for every real
+   * project, the story's entire payload absent, with nothing red.
+   *
+   * It is the identical shape `test/server.test.ts` already records for the
+   * root — "handing the server a different root left it saying the right thing
+   * while serving the wrong project, with the whole suite green" — and the
+   * assertion added to close that one had no equivalent for this option.
+   *
+   * The supplier is **called** here rather than stored, because from Story 1.12
+   * `inventory` is a function invoked per request: storing it would record that
+   * *something* was passed and not what a page would show.
+   */
+  readonly inventories: readonly InventoryView[];
   readonly launched: number;
   readonly signals: number;
 }
@@ -105,6 +152,7 @@ export async function observeRun(
   const scans: string[] = [];
   const scanFlags: (readonly string[])[] = [];
   const served: string[] = [];
+  const inventories: InventoryView[] = [];
   const counts = { launched: 0, signals: 0 };
   let out = '';
   let err = '';
@@ -119,8 +167,13 @@ export async function observeRun(
   };
 
   const code = await run(argv, {
-    start: (startOptions: { readonly projectRoot?: unknown }) => {
+    start: (startOptions: {
+      readonly projectRoot?: unknown;
+      readonly inventory?: () => InventoryView;
+    }) => {
       served.push(String(startOptions.projectRoot));
+      const supplier = startOptions.inventory;
+      if (supplier !== undefined) inventories.push(supplier());
       return Promise.resolve(stubHandle());
     },
     launch: () => {
@@ -146,6 +199,7 @@ export async function observeRun(
     scans,
     scanFlags,
     served,
+    inventories,
     launched: counts.launched,
     signals: counts.signals,
   };
