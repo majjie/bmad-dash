@@ -57,6 +57,9 @@ import {
   findMutatingOperations,
   findUnanalysable,
 } from './support/gate.ts';
+import { MAX_PORT } from '../src/adapters/http/server.ts';
+import { MARKERS } from '../src/cli/location.ts';
+import { OUTPUT_DIRECTORY } from '../src/cli/inventory.ts';
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -741,6 +744,32 @@ test('the scan reaches every module in the filesystem adapter', async () => {
   }
 });
 
+test('the scan reaches every module in the pure layer', async () => {
+  // The same positive assertion as the row above, for the layer whose rule is
+  // the frozen one. `findDomainViolations` is of the form "no scanned file
+  // under src/domain/ imports anything", which a scan returning nothing
+  // satisfies perfectly -- and that rule was written *before* the directory
+  // existed, on the explicit grounds that a prefix rule over an empty directory
+  // passes vacuously. It holds seven modules now, so this is what stops the
+  // strongest rule in the repository from going quiet if the scan ever stops
+  // reaching them.
+  const { readdir } = await import('node:fs/promises');
+  const { join } = await import('node:path');
+
+  const domainDir = join(REPO_ROOT, PURE_LAYER.replace(/\/$/, '').split('/').join('/'));
+  const onDisk = (await readdir(domainDir)).filter((name) => name.endsWith('.ts')).sort();
+  assert.ok(onDisk.length >= 7, `expected the domain's modules, found ${onDisk.join(', ')}`);
+
+  const scanned = await collectSourceFiles(REPO_ROOT);
+  for (const name of onDisk) {
+    const relative = `${PURE_LAYER}${name}`;
+    assert.ok(
+      scanned.includes(relative),
+      `${relative} exists but the gate never scanned it. scanned: ${scanned.join(', ')}`,
+    );
+  }
+});
+
 test('the scan reaches the composition root and the render layer too', async () => {
   const scanned = await collectSourceFiles(REPO_ROOT);
   for (const required of [
@@ -967,6 +996,66 @@ test('the HTTP adapter reaches only the layers its row grants', async () => {
     ['CanonicalPath', 'toPlatform'],
     'the brand and the unbrand, and nothing that reads or resolves',
   );
+});
+
+test('the shared narrowing has a stated importer set', async () => {
+  // B1's resolution, pinned. `errorCode` is in the pure layer because that is
+  // the one layer the HTTP adapter, the filesystem adapter and the composition
+  // root can all reach -- not because narrowing a thrown value is a domain
+  // concept. The set is stated so that reason stays visible: a fourth importer
+  // is fine and is where the six remaining `(error as { code?: string })` casts
+  // under `src/adapters/fs/` should end up, but it is a deliberate edit here
+  // rather than a quiet spread of a utility through the model layer.
+  assert.deepEqual(
+    await importersOf(REPO_ROOT, 'src/domain/thrown.ts'),
+    ['src/adapters/http/server.ts', 'src/cli/index.ts'],
+    'the two modules that had a private copy of it, and no others yet',
+  );
+
+  // And no copy survives. The two were byte-identical, so a returning copy
+  // would be invisible to every other row in this file.
+  const spellings: string[] = [];
+  for (const file of await collectSourceFiles(REPO_ROOT)) {
+    if (file === 'src/domain/thrown.ts') continue;
+    const raw = await readFile(join(REPO_ROOT, file), 'utf8');
+    if (/function errorCode\s*\(/.test(scanSource(raw).code)) spellings.push(file);
+  }
+  assert.deepEqual(spellings, [], 'errorCode is declared once, in the pure layer');
+});
+
+test('the constants two modules both depend on are stated once, and cross-checked', async () => {
+  // B8/B9, from the epic 1 retrospective. Before this, `MAX_PORT` was defined
+  // privately in both the server and the composition root, with two different
+  // literal spellings -- `65535` and `65_535` -- and the digits restated in
+  // four test expectations. One definition now, exported from the module that
+  // does the binding, which is why this row asserts there is only one.
+  //
+  // `'_bmad-output'` is the other shape: two independent spellings of one
+  // string that are *supposed* to agree, as a `MARKERS` element and as
+  // `OUTPUT_DIRECTORY`, with nothing checking that they do. They are not
+  // consolidated -- a project marker and the name of the walked output folder
+  // are different concerns that happen to share a value -- so the agreement is
+  // asserted instead. That is the whole difference between this and `MAX_PORT`:
+  // one value with one meaning gets one definition; one value with two meanings
+  // gets a cross-check.
+  //
+  // The repository had exactly one test of this kind before today
+  // (`package.json` against `src/version.json`), and it was never generalized.
+  assert.ok(MARKERS.includes(OUTPUT_DIRECTORY), 'the output folder must be a project marker');
+
+  const defining: string[] = [];
+  for (const file of await collectSourceFiles(REPO_ROOT)) {
+    const raw = await readFile(join(REPO_ROOT, file), 'utf8');
+    if (/(?:^|\n)\s*(?:export\s+)?const MAX_PORT\s*=/.test(scanSource(raw).code)) {
+      defining.push(file);
+    }
+  }
+  assert.deepEqual(
+    defining,
+    ['src/adapters/http/server.ts'],
+    'MAX_PORT is the binding adapter\'s to state, and only its',
+  );
+  assert.equal(MAX_PORT, 65535, 'and the value itself, so the single definition is still right');
 });
 
 test('the two most-coupled adapter modules have stated importer sets', async () => {

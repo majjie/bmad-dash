@@ -27,6 +27,7 @@ import { run } from '../../src/cli/index.ts';
 import { takeInventory } from '../../src/cli/inventory.ts';
 import { makeProjectDir } from '../support/project.ts';
 import { exitCodeDeps, stubHandle, STUB_PROJECT_ROOT } from '../support/cli.ts';
+import { deniableDirectories, whileDenied } from '../support/tree.ts';
 
 /**
  * The synthetic absolute root, and the handle that binds nothing, both moved
@@ -448,7 +449,7 @@ test('an unreachable target exits 1, not 2', async (t) => {
   // invocation was fine and the environment was not. A wrapper script branching
   // on the code needs those apart, and collapsing them back to 2 passed the
   // whole suite.
-  const { mkdtemp, mkdir, chmod, rm } = await import('node:fs/promises');
+  const { mkdtemp, mkdir, rm } = await import('node:fs/promises');
   const { tmpdir } = await import('node:os');
   const { join } = await import('node:path');
 
@@ -461,7 +462,7 @@ test('an unreachable target exits 1, not 2', async (t) => {
   // where a permissions failure has to come back as 1 rather than 2. A root
   // container cannot reach it, so a run that could not make it has to say so
   // rather than report a full green suite.
-  if (process.platform === 'win32' || process.getuid?.() === 0) {
+  if (!deniableDirectories()) {
     t.skip('needs POSIX permissions and a non-root user');
     return;
   }
@@ -475,10 +476,7 @@ test('an unreachable target exits 1, not 2', async (t) => {
   for (const marker of ['_bmad', '_bmad-output']) {
     await mkdir(join(project, marker), { recursive: true });
   }
-  await chmod(base, 0o000);
-  try {
+  await whileDenied(base, async () => {
     assert.equal(await run([project], deps), 1, 'an unreachable target is a startup failure');
-  } finally {
-    await chmod(base, 0o755);
-  }
+  });
 });

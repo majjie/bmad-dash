@@ -74,7 +74,12 @@ import { projectInventory } from '../../src/cli/index.ts';
 import { ConfinedReader } from '../../src/adapters/fs/read.ts';
 import { canonical, toPlatform } from '../../src/adapters/fs/paths.ts';
 import { EMPTY_INVENTORY, observeRun } from '../support/cli.ts';
-import { deniableDirectories, makeTree, symlinksAvailable } from '../support/tree.ts';
+import {
+  deniableDirectories,
+  makeTree,
+  symlinksAvailable,
+  whileDenied,
+} from '../support/tree.ts';
 import {
   AMBIGUOUS_BOTH_ROW,
   CERTAIN_ROW,
@@ -720,9 +725,7 @@ test('a project root the pass could not read is not reported as a finished scan'
   // gets here. Restored in a `finally` rather than an `after` hook, because
   // `makeTree` registered its recursive delete first and that delete cannot
   // enter a directory it may not read.
-  const { chmod } = await import('node:fs/promises');
-  await chmod(root, 0o111);
-  try {
+  await whileDenied(root, async () => {
     const inventory = takeInventory(new ConfinedReader(canonical(root)));
     assert.notEqual(
       inventory.startEntry.state,
@@ -740,9 +743,7 @@ test('a project root the pass could not read is not reported as a finished scan'
       !html.includes(PROJECT_EMPTY),
       'and does not also claim the project is empty, which it cannot know',
     );
-  } finally {
-    await chmod(root, 0o755);
-  }
+  }, 0o111);
 });
 
 test('an incomplete scan does not claim the project is empty', () => {

@@ -11,9 +11,10 @@ import { parseArgs } from 'node:util';
 import { resolve, isAbsolute, relative as relativePath, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { startServer, type ServerHandle } from '../adapters/http/server.ts';
+import { MAX_PORT, startServer, type ServerHandle } from '../adapters/http/server.ts';
 import { resolveRealPath } from '../adapters/fs/realpath.ts';
 import { ConfinedReader } from '../adapters/fs/read.ts';
+import { errorCode } from '../domain/thrown.ts';
 import { openBrowser, type LaunchResult } from '../adapters/browser/open.ts';
 import { resolveLocation } from './location.ts';
 import { suggestInvocations } from './suggest.ts';
@@ -42,11 +43,12 @@ const ACCEPTED =
   '-h/--help, --version.';
 
 /**
- * The lowest and highest port a socket can be asked for. `0` is meaningful — it
- * asks the OS for a free one — so the range starts there rather than at 1.
+ * The lowest port a socket can be asked for. `0` is meaningful — it asks the OS
+ * for a free one — so the range starts there rather than at 1. The top of the
+ * range is `MAX_PORT`, imported from the adapter that does the binding rather
+ * than spelled a second time here.
  */
 const MIN_PORT = 0;
-const MAX_PORT = 65_535;
 
 /**
  * The published version.
@@ -910,14 +912,6 @@ export function createShutdownHandler(dependencies: {
       () => finish(EXIT_FAILURE),
     );
   };
-}
-
-function errorCode(error: unknown): string | undefined {
-  if (typeof error === 'object' && error !== null && 'code' in error) {
-    const code = (error as { code?: unknown }).code;
-    if (typeof code === 'string') return code;
-  }
-  return undefined;
 }
 
 /**

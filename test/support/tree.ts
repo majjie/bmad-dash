@@ -179,6 +179,14 @@ export async function makeTree(
  * right question to ask first — it is about the platform and the user, not
  * about the kind of thing being denied.
  *
+ * `mode` is `0o000` unless a caller needs a *partial* denial: Story 1.12's
+ * unreadable-root case uses `0o111`, where a directory can be entered but not
+ * listed, so recognition's marker `stat`s succeed and only the walk's `readdir`
+ * fails. That distinction cannot be reached with a blanket `0o000`, and the
+ * seven sites that hand-rolled this pair could each pick their own mode while
+ * restoring a guessed `0o755` — which is the divergence the parameter removes
+ * rather than the one it adds.
+ *
  * Restored in a `finally` rather than an `after` hook for the reason
  * `read.test.ts` records at its own copy of this: the scratch directory
  * registered its cleanup first, so a hook here would run *after* the recursive
@@ -186,8 +194,12 @@ export async function makeTree(
  * check `deniableDirectories()` first — this does not, because a caller that
  * skipped the check wants an assertion failure rather than a silent pass.
  */
-export async function whileDenied<T>(path: string, body: () => Promise<T> | T): Promise<T> {
-  // Refused rather than attempted where a `0o000` mode is not enforced. Left
+export async function whileDenied<T>(
+  path: string,
+  body: () => Promise<T> | T,
+  mode = 0o000,
+): Promise<T> {
+  // Refused rather than attempted where a restrictive mode is not enforced. Left
   // unguarded, `chmod` on Windows and `chmod` as root both *succeed* and deny
   // nothing, so the assertion downstream fails for a reason that has nothing
   // to do with what it was testing. Throwing here names the missing guard.
@@ -203,7 +215,7 @@ export async function whileDenied<T>(path: string, body: () => Promise<T> | T): 
   // trees here, and exactly the kind of "the helper edited my setup" surprise
   // that makes a shared helper untrustworthy.
   const original = (await stat(path)).mode & 0o777;
-  await chmod(path, 0o000);
+  await chmod(path, mode);
   try {
     return await body();
   } finally {

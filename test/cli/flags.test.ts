@@ -19,6 +19,7 @@ import {
   VERSION,
   DECLARED_OPTIONS,
 } from '../../src/cli/index.ts';
+import { MAX_PORT } from '../../src/adapters/http/server.ts';
 
 const CWD = '/tmp/somewhere';
 
@@ -114,7 +115,7 @@ test('a refused port exits 2 naming both the value and the range', () => {
   const invocation = parseInvocation(['--port', 'abc'], CWD);
   assert.ok(!invocation.ok);
   assert.match(invocation.message, /Invalid --port value: "abc"/);
-  assert.match(invocation.message, /from 0 to 65535/);
+  assert.match(invocation.message, new RegExp(`from 0 to ${String(MAX_PORT)}`));
   assert.match(invocation.message, /Usage: bmad-dash/);
 });
 

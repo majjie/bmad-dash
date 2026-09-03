@@ -23,11 +23,12 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdir, symlink, writeFile, chmod } from 'node:fs/promises';
+import { mkdir, symlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import { listChildDirectories } from '../../src/adapters/fs/list.ts';
 import { makeScratchDir } from '../support/project.ts';
+import { deniableDirectories, whileDenied } from '../support/tree.ts';
 
 async function scratch(t: { after: (fn: () => unknown) => void }): Promise<string> {
   return makeScratchDir(t, 'bmad-dash-list-');
@@ -122,19 +123,16 @@ test('a directory that cannot be listed is reported, not thrown', async (t) => {
   const base = await scratch(t);
   const denied = join(base, 'denied');
   await mkdir(denied);
-  if (process.platform === 'win32' || process.getuid?.() === 0) {
+  if (!deniableDirectories()) {
     t.skip('needs POSIX permissions and a non-root user');
     return;
   }
 
-  await chmod(denied, 0o000);
-  try {
+  await whileDenied(denied, async () => {
     const result = listChildDirectories(denied, 128);
     assert.ok(!result.ok, 'a denied directory must not list as empty');
     assert.match(result.reason, /EACCES|permission denied/i);
-  } finally {
-    await chmod(denied, 0o755);
-  }
+  });
 });
 
 test('the cap truncates deterministically and says so', async (t) => {

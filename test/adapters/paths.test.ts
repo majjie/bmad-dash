@@ -15,7 +15,7 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, rm, symlink, writeFile, stat, chmod } from 'node:fs/promises';
+import { mkdtemp, mkdir, rm, symlink, writeFile, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, sep } from 'node:path';
 
@@ -27,6 +27,7 @@ import {
   toPlatform,
 } from '../../src/adapters/fs/paths.ts';
 import { ConfinedReader } from '../../src/adapters/fs/read.ts';
+import { deniableDirectories, whileDenied } from '../support/tree.ts';
 
 async function scratch(t: { after: (fn: () => unknown) => void }): Promise<string> {
   const dir = await mkdtemp(join(tmpdir(), 'bmad-dash-paths-'));
@@ -239,7 +240,7 @@ test('an unresolvable path that DOES exist takes the same fallback', async (t) =
   // Skipped by name rather than returned silently: root ignores the mode bits,
   // so on a root container this branch is unreachable and the run must say so.
   // `scripts/run-tests.ts` fails a run that skips, which is what makes it say.
-  if (process.platform === 'win32' || process.getuid?.() === 0) {
+  if (!deniableDirectories()) {
     t.skip('needs POSIX permissions and a non-root user');
     return;
   }
@@ -254,8 +255,7 @@ test('an unresolvable path that DOES exist takes the same fallback', async (t) =
   // resolution rather than against a path that never resolved at all.
   assert.equal(toPlatform(canonical(inner)), inner, 'readable and resolvable');
 
-  await chmod(blocked, 0o000);
-  try {
+  await whileDenied(blocked, async () => {
     // It exists. It just cannot be resolved, and the fallback fires identically
     // to the missing-path case.
     const denied = canonical(join(inner, 'present.txt'));
@@ -268,9 +268,7 @@ test('an unresolvable path that DOES exist takes the same fallback', async (t) =
       contains(canonical(root), denied),
       'and containment answers about the spelling, for the same reason',
     );
-  } finally {
-    await chmod(blocked, 0o755);
-  }
+  });
 });
 
 test('an absolute path is normalized even when it does not exist', async (t) => {

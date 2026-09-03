@@ -13,7 +13,7 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, rm, writeFile, symlink, chmod } from 'node:fs/promises';
+import { mkdtemp, mkdir, rm, writeFile, symlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { join, dirname } from 'node:path';
@@ -21,6 +21,7 @@ import { join, dirname } from 'node:path';
 import { resolveLocation, MARKERS } from '../../src/cli/location.ts';
 import { canonical, toPlatform } from '../../src/adapters/fs/paths.ts';
 import { makeProjectDir } from '../support/project.ts';
+import { deniableDirectories, whileDenied } from '../support/tree.ts';
 
 async function bare(t: { after: (fn: () => unknown) => void }): Promise<string> {
   const dir = await mkdtemp(join(tmpdir(), 'bmad-dash-loc-'));
@@ -171,20 +172,17 @@ test('a marker that is a symlink to a directory does count', async (t) => {
 
 test('a directory whose children cannot be read reports the marker it could not stat', async (t) => {
   const dir = await bare(t);
-  if (process.platform === 'win32' || process.getuid?.() === 0) {
+  if (!deniableDirectories()) {
     t.skip('needs POSIX permissions and a non-root user');
     return;
   }
 
-  await chmod(dir, 0o000);
-  try {
+  await whileDenied(dir, async () => {
     const result = resolveLocation(dir);
     assert.ok(!result.ok);
     assert.equal(!result.ok && result.reason, 'unreadable');
     assert.match(result.ok ? '' : result.message, /^Could not read /);
-  } finally {
-    await chmod(dir, 0o755);
-  }
+  });
 });
 
 test('a target the tool cannot even stat is unreadable, not "not a directory"', async (t) => {
@@ -193,7 +191,7 @@ test('a target the tool cannot even stat is unreadable, not "not a directory"', 
   // per-marker branch, and the target branch was never executed at all:
   // deleting it left the suite green. Denying traversal to the *parent* is what
   // makes the target itself unstattable.
-  if (process.platform === 'win32' || process.getuid?.() === 0) {
+  if (!deniableDirectories()) {
     t.skip('needs POSIX permissions and a non-root user');
     return;
   }
@@ -203,8 +201,7 @@ test('a target the tool cannot even stat is unreadable, not "not a directory"', 
   await mkdir(project);
   for (const marker of MARKERS) await mkdir(join(project, marker), { recursive: true });
 
-  await chmod(outer, 0o000);
-  try {
+  await whileDenied(outer, async () => {
     const result = resolveLocation(project);
     assert.ok(!result.ok, 'an unreachable target must not resolve');
     assert.equal(!result.ok && result.reason, 'unreadable');
@@ -212,9 +209,7 @@ test('a target the tool cannot even stat is unreadable, not "not a directory"', 
     assert.match(message, /^Could not read /);
     assert.doesNotMatch(message, /^Not a directory/, 'a denied path is not a wrong-type path');
     assert.doesNotMatch(message, /_bmad/, 'the report must name the target, not a marker inside it');
-  } finally {
-    await chmod(outer, 0o755);
-  }
+  });
 });
 
 test('every refusal message is distinct, which is the point of having several', async (t) => {

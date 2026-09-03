@@ -24,6 +24,7 @@ import {
   startServer,
   isExpectedHost,
   LOOPBACK_ADDRESS,
+  MAX_PORT,
 } from '../src/adapters/http/server.ts';
 import { parseInvocation, run } from '../src/cli/index.ts';
 import { makeProjectDir } from './support/project.ts';
@@ -553,7 +554,10 @@ test('a port outside the valid range is rejected before binding', async () => {
       () => startServer({ projectRoot: PROJECT_ROOT, port, inventory: emptyInventory }),
       (error: unknown) => {
         assert.ok(error instanceof RangeError, `port ${String(port)}: expected a RangeError`);
-        assert.match(error.message, /port must be an integer between 0 and 65535/);
+        assert.match(
+          error.message,
+          new RegExp(`port must be an integer between 0 and ${String(MAX_PORT)}`),
+        );
         assert.doesNotMatch(error.message, /options\.port/);
         return true;
       },

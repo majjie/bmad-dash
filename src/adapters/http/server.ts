@@ -41,6 +41,7 @@ import type { AddressInfo } from 'node:net';
 import { renderPage } from '../../render/page.ts';
 import { assertProjectRoot } from '../../render/chrome.ts';
 import type { InventoryView } from '../../render/inventory.ts';
+import { errorCode } from '../../domain/thrown.ts';
 import { toPlatform, type CanonicalPath } from '../fs/paths.ts';
 
 /**
@@ -52,7 +53,16 @@ import { toPlatform, type CanonicalPath } from '../fs/paths.ts';
  */
 export const LOOPBACK_ADDRESS = '127.0.0.1';
 
-const MAX_PORT = 65535;
+/**
+ * The highest port a TCP socket can carry.
+ *
+ * Exported because the composition root validates `--port` against the same
+ * bound and had its own `65_535` beside this `65535` -- one value, two private
+ * definitions, two literal spellings, and four test expectations restating the
+ * digits. The bound belongs to the thing that binds, so it is stated here and
+ * read there.
+ */
+export const MAX_PORT = 65535;
 
 /**
  * The default port for the scheme this adapter serves. A client omits the port
@@ -445,11 +455,3 @@ function isRetryableBindError(error: unknown): boolean {
   return code !== undefined && RETRYABLE_BIND_CODES.has(code);
 }
 
-/** Narrow an unknown thrown value to its `code`, if it has a string one. */
-function errorCode(error: unknown): string | undefined {
-  if (typeof error === 'object' && error !== null && 'code' in error) {
-    const code = (error as { code?: unknown }).code;
-    if (typeof code === 'string') return code;
-  }
-  return undefined;
-}

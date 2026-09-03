@@ -24,7 +24,7 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdir, writeFile, symlink, chmod, readFile } from 'node:fs/promises';
+import { mkdir, writeFile, symlink, readFile } from 'node:fs/promises';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -46,6 +46,7 @@ import {
 } from '../../src/cli/suggest.ts';
 import { makeProjectAt, makeScratchDir } from '../support/project.ts';
 import { observeRun } from '../support/cli.ts';
+import { deniableDirectories, whileDenied } from '../support/tree.ts';
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const EXPERIENCE_PATH = join(
@@ -473,13 +474,12 @@ test('an unlistable directory is skipped, the rest reported, and the skip named'
   const good = await makeProjectAt(join(base, 'good'));
   const denied = join(base, 'denied');
   await makeProjectAt(join(denied, 'hidden-project'));
-  if (process.platform === 'win32' || process.getuid?.() === 0) {
+  if (!deniableDirectories()) {
     t.skip('needs POSIX permissions and a non-root user');
     return;
   }
 
-  await chmod(denied, 0o000);
-  try {
+  await whileDenied(denied, async () => {
     const text = suggestions(base);
     assert.deepEqual(offered(text), [invocation(good)], 'the readable candidate was lost');
     assert.ok(!text.includes('hidden-project'), `a denied tree was read anyway:\n${text}`);
@@ -489,9 +489,7 @@ test('an unlistable directory is skipped, the rest reported, and the skip named'
     assert.match(text, /The scan did not finish/);
     assert.ok(text.includes(denied), `the skipped directory is not named:\n${text}`);
     assert.match(text, /1 could not be read/);
-  } finally {
-    await chmod(denied, 0o755);
-  }
+  });
 });
 
 test('a realistic folder of checkouts is scanned completely', async (t) => {
@@ -699,7 +697,7 @@ test('the scan does not run for an unreadable target, which still exits 1', asyn
   // typed it wrong — from 1 — it could not start — and the scan must not move
   // either. Denying traversal to the parent is what makes the target itself
   // unstattable.
-  if (process.platform === 'win32' || process.getuid?.() === 0) {
+  if (!deniableDirectories()) {
     t.skip('needs POSIX permissions and a non-root user');
     return;
   }
@@ -707,15 +705,12 @@ test('the scan does not run for an unreadable target, which still exits 1', asyn
   const outer = join(base, 'outer');
   const project = await makeProjectAt(join(outer, 'project'));
 
-  await chmod(outer, 0o000);
-  try {
+  await whileDenied(outer, async () => {
     const observed = await observeRun([project]);
     assert.equal(observed.code, 1, 'a permissions failure is not a usage error');
     assert.deepEqual(observed.scans, [], 'a denied directory is not answered by a suggestion');
     assert.match(observed.err, /^Could not read /);
-  } finally {
-    await chmod(outer, 0o755);
-  }
+  });
 });
 
 test('a scan that finds nothing appends its report and still exits 2', async (t) => {
