@@ -27,7 +27,7 @@ Chosen for enforceability rather than tidiness: NFR-1 requires read-only to be *
 | --- | --- | --- |
 | Domain — model, identification, normalization, ordering, sectioning | `src/domain/` | nothing outside `src/domain/` |
 | Outbound adapters — filesystem, git, browser | `src/adapters/fs/`, `src/adapters/git/`, `src/adapters/browser/` | domain types, Node built-ins |
-| Inbound adapter — HTTP | `src/adapters/http/` | domain, render |
+| Inbound adapter — HTTP | `src/adapters/http/` | domain, render, and the path vocabulary (`CanonicalPath`, `toPlatform`) from `src/adapters/fs/paths.ts` |
 | Render — server-side HTML from the domain model | `src/render/` | domain types only |
 | Composition root — CLI entry, wiring | `src/cli/` | everything |
 | Client interaction — built, shipped prebuilt | `web/` → `public/` | nothing from `src/` |
@@ -49,12 +49,15 @@ graph TD
   CLI --> GIT
   HTTP --> RENDER
   HTTP --> DOMAIN
+  HTTP --> FS
   RENDER --> DOMAIN
   FS --> DOMAIN
   HTTP -. serves .-> WEB
 ```
 
 Arrows are the permitted direction of dependency. `src/domain/` has no outgoing arrow and must acquire none.
+
+`HTTP --> FS` is the narrowest edge here and the only one qualified in the table: the HTTP adapter takes the `CanonicalPath` brand and `toPlatform` (which is `return path`, an unbrand) so its `projectRoot` cannot be an arbitrary string. It reaches nothing that reads or resolves, and `test/architecture.test.ts` asserts that exact pair rather than permitting the directory.
 
 ### AD-1 — Read-only through a single filesystem adapter [ADOPTED]
 
@@ -291,5 +294,6 @@ auditable from this file alone.
 | 2026-09-02 | **Stack:** third-party runtime code is bundled, not installed. Takes effect when the first such library lands — which the deferred FR-10 config story owns, so it governs nothing today. | Dated in Stack |
 | 2026-09-03 | **Paradigm and layer table corrected to what was built:** the `src/ports/` ring was declared here and in the dependency diagram and was never created in any commit of Epic 1, so it is removed along with its three edges, and the paradigm line no longer claims ports and adapters. The pure-domain invariant it was meant to protect is unaffected and is mechanically enforced. | This log |
 | 2026-09-03 | **AD-9 rule 1 corrected:** it asserted that artifact roots are read from the project's own configuration, two rules above rule 3's note that FR-10 is deferred indefinitely — the AD contradicted itself. | This log |
+| 2026-09-03 | **`HTTP --> FS` granted, narrowly.** `src/adapters/http/server.ts` has imported `src/adapters/fs/paths.ts` since Story 1.5 while the table granted the HTTP adapter only "domain, render" and the diagram had no such edge — the epic's one unambiguous layering violation, and nothing constrained what this adapter imports. Granted rather than removed, because what crosses is a branded type and an unbrand with no I/O, and the alternative splits the path vocabulary from `canonical`, its only real operation. Now enforced as an exact pair. | This log |
 | 2026-09-03 | **Design Paradigm prose brought in line with the frontmatter:** the amendment earlier this day corrected the `paradigm:` field and the layer table but left this section declaring "Hexagonal (ports and adapters)" and "ports the domain defines" — so the document contradicted itself two ways in twenty lines, which is the defect that amendment existed to remove. The enforceability argument is kept and now names the two rules a test actually enforces. | This log |
 | 2026-09-03 | **Family axis corrected** in Consistency Conventions: it named eight families while the code had twelve. FR-11's seven constrain *run folders*; the artifact vocabulary is wider. | This log |

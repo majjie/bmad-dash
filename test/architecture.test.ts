@@ -44,6 +44,7 @@ import {
   PURE_LAYER,
   SCANNED_ROOTS,
   SPECIFIER_PATTERN,
+  codeMatches,
   collectSourceFiles,
   gateKey,
   scanSource,
@@ -506,23 +507,28 @@ test('a stray .js file cannot hide a gated import from the scan', async (t) => {
   );
 });
 
-test('a planted child_process import outside the git and browser adapters is reported', async (t) => {
+test('a planted child_process import outside the browser adapter is reported', async (t) => {
   const root = await scratch(t);
   await write(
     root,
     'src/adapters/http/server.ts',
     "const { spawn } = require('child_process');\nexport default spawn;\n",
   );
-  for (const permitted of ['git', 'browser']) {
+  // Both planted, and the expectation below is what separates them. `git/` was
+  // granted `child_process` from the first story until 2026-09-03, over a
+  // directory that never existed; the grant is gone, and a fixture that expects
+  // a violation there is how its removal is asserted rather than assumed.
+  // `browser/` is the live grant and must still be silent.
+  for (const adapter of ['git', 'browser']) {
     await write(
       root,
-      `src/adapters/${permitted}/run.ts`,
+      `src/adapters/${adapter}/run.ts`,
       "import { execFile } from 'node:child_process';\nexport { execFile };\n",
     );
   }
   assert.deepEqual(
-    (await findImportViolations(root)).map((v) => v.file),
-    ['src/adapters/http/server.ts'],
+    (await findImportViolations(root)).map((v) => v.file).sort(),
+    ['src/adapters/git/run.ts', 'src/adapters/http/server.ts'],
   );
 });
 
@@ -652,9 +658,56 @@ test('the gated modules and their permitted prefixes are the ones claimed', () =
   assert.deepEqual([...GATED_MODULES.keys()].sort(), ['child_process', 'fs']);
   assert.deepEqual(
     [...(GATED_MODULES.get('child_process') ?? [])],
-    ['src/adapters/git/', 'src/adapters/browser/', 'scripts/'],
+    ['src/adapters/browser/', 'scripts/'],
   );
   assert.deepEqual([...(GATED_MODULES.get('fs') ?? [])], ['src/adapters/fs/']);
+});
+
+test('every gate permission is load-bearing, so none can be granted over nothing', async () => {
+  // The row above pins the grants; this one pins that each grant *does*
+  // something. `src/adapters/git/` sat in the `child_process` list from the
+  // first story to 2026-09-03 over a directory that never existed, and the
+  // `deepEqual` above asserted it as though it were load-bearing -- an
+  // assertion that cannot fail, which is this epic's dominant defect class
+  // applied to the gate itself. A permission whose prefix holds no file that
+  // imports the module is either premature or left over, and both are worth a
+  // failing test rather than a comment.
+  const files = await collectSourceFiles(REPO_ROOT);
+  for (const [module, prefixes] of GATED_MODULES) {
+    for (const prefix of prefixes) {
+      const under = files.filter((file) => file.startsWith(prefix));
+      assert.ok(under.length > 0, `${prefix} is granted ${module} and holds no scanned source`);
+
+      const users: string[] = [];
+      for (const file of under) {
+        const scanned = scanSource(await readFile(join(REPO_ROOT, file), 'utf8'));
+        const imports = codeMatches(scanned, SPECIFIER_PATTERN).some(
+          (match) => match[2] !== undefined && gateKey(match[2]) === module,
+        );
+        if (imports) users.push(file);
+      }
+      assert.ok(
+        users.length > 0,
+        `${prefix} is granted ${module} and nothing under it imports it; ` +
+          `drop the grant, or add it back with the story that needs it`,
+      );
+    }
+  }
+});
+
+test('a scanned root with no source in it is stated, so its first file is a deliberate edit', async () => {
+  // `web/` is in `SCANNED_ROOTS` because that is the right remit -- client code
+  // ships from there -- and it is empty, so every rule scoped to it passes on
+  // an empty walk. Removing it from the roots would leave the first web file
+  // ungated, which is worse. So the emptiness is stated instead, the same way
+  // this suite states an asserted-empty importer set: when `web/` gains its
+  // first source file this row fails, and whoever adds it confirms the gate now
+  // covers it rather than discovering later that it never did.
+  const files = await collectSourceFiles(REPO_ROOT);
+  const empty = SCANNED_ROOTS.filter(
+    (root) => !files.some((file) => file.startsWith(`${root}/`)),
+  );
+  assert.deepEqual([...empty], ['web'], 'a scanned root changed from empty to covered, or back');
 });
 
 // ---------------------------------------------------------------------------
@@ -854,7 +907,7 @@ async function importersOf(root: string, target: string): Promise<string[]> {
   for (const file of await collectSourceFiles(root)) {
     if (file === target) continue;
     const scanned = scanSource(await readFile(join(root, file), 'utf8'));
-    for (const match of scanned.withLiterals.matchAll(SPECIFIER_PATTERN)) {
+    for (const match of codeMatches(scanned, SPECIFIER_PATTERN)) {
       const specifier = match[2];
       if (specifier === undefined) continue;
       // Resolved against the importing file, because that is the only way a
@@ -871,6 +924,88 @@ async function importersOf(root: string, target: string): Promise<string[]> {
   }
   return importers.sort();
 }
+
+test('the HTTP adapter reaches only the layers its row grants', async () => {
+  // Added 2026-09-03, from the epic 1 retrospective: this was the one
+  // unambiguous layering violation in the epic and nothing constrained it.
+  // `src/adapters/http/server.ts` imports `src/adapters/fs/paths.ts`, the layer
+  // table granted the HTTP adapter "domain, render", and the dependency diagram
+  // had no HTTP-to-FS edge. No test looked at what the HTTP adapter imports at
+  // all, so the violation was silent rather than caught.
+  //
+  // Resolved by granting the edge rather than removing it, and the spine says
+  // so with a dated Amendment log row. What crosses is a branded *type* and
+  // `toPlatform`, which is `return path` -- an unbrand, no I/O, no filesystem
+  // behaviour. The alternative, moving the path vocabulary somewhere both
+  // layers may import, is recorded in `deferred-work.md`: it would split the
+  // vocabulary from `canonical`, its only real operation, which needs
+  // `node:path` and `realpath` and so cannot follow it into `src/domain/`.
+  //
+  // The exception is asserted as an exact list, not permitted as a prefix, so
+  // reaching for `canonical` or `ConfinedReader` from here fails.
+  const granted = ['src/adapters/http/', 'src/domain/', 'src/render/'];
+  const reached: string[] = [];
+  for (const file of await collectSourceFiles(REPO_ROOT)) {
+    if (!file.startsWith('src/adapters/http/')) continue;
+    const scanned = scanSource(await readFile(join(REPO_ROOT, file), 'utf8'));
+    for (const match of codeMatches(scanned, SPECIFIER_PATTERN)) {
+      const specifier = match[2];
+      if (specifier === undefined || !specifier.startsWith('.')) continue;
+      const resolved = join(dirname(file), specifier).split(sep).join('/');
+      if (granted.some((prefix) => resolved.startsWith(prefix))) continue;
+      reached.push(`${file} -> ${resolved}`);
+    }
+  }
+  assert.deepEqual(
+    reached.sort(),
+    ['src/adapters/http/server.ts -> src/adapters/fs/paths.ts'],
+    'the HTTP adapter may leave its granted layers for the path vocabulary only',
+  );
+
+  assert.deepEqual(
+    await namedImportsIn(REPO_ROOT, 'src/adapters/http/server.ts', '../fs/paths.ts'),
+    ['CanonicalPath', 'toPlatform'],
+    'the brand and the unbrand, and nothing that reads or resolves',
+  );
+});
+
+test('the two most-coupled adapter modules have stated importer sets', async () => {
+  // Added 2026-09-03, from the epic 1 retrospective: enforcement coverage was
+  // inverse to actual coupling. `list.ts`, `walk.ts` and `segments.ts` each had
+  // an asserted importer set and each had exactly one importer, while
+  // `paths.ts` -- the most cross-cutting module in the tree -- and `read.ts`
+  // had none. Importer sets were added one per story, so they covered what a
+  // story happened to touch rather than what most needed constraining.
+  //
+  // These two are not carve-outs like `list.ts`, so the sets are not narrow.
+  // What they buy is different: `paths.ts` owns the `CanonicalPath` brand and
+  // `read.ts` owns the only confined reader, so a new importer of either is a
+  // new module taking a position on identity or on reading, and this is where
+  // that becomes visible instead of arriving as a diff nobody reviewed.
+  assert.deepEqual(
+    await importersOf(REPO_ROOT, 'src/adapters/fs/paths.ts'),
+    [
+      'src/adapters/fs/read.ts',
+      'src/adapters/fs/walk.ts',
+      'src/adapters/http/server.ts',
+      'src/cli/index.ts',
+      'src/cli/inventory.ts',
+      'src/cli/location.ts',
+      'src/cli/suggest.ts',
+    ],
+    'a new importer of the path vocabulary is a deliberate edit here',
+  );
+  assert.deepEqual(
+    await importersOf(REPO_ROOT, 'src/adapters/fs/read.ts'),
+    [
+      'src/adapters/fs/walk.ts',
+      'src/cli/index.ts',
+      'src/cli/inventory.ts',
+      'src/cli/location.ts',
+    ],
+    'a new importer of the confined reader is a deliberate edit here',
+  );
+});
 
 test('the unconfined listing capability is importable only by the suggestion scan', async () => {
   // Demonstrated as a hole: `import { listChildDirectories } from
@@ -910,7 +1045,7 @@ test('the tree walk is scanned, reads through the confined reader, and never lis
   const scannedSource = scanSource(
     await readFile(join(REPO_ROOT, 'src', 'adapters', 'fs', 'walk.ts'), 'utf8'),
   );
-  const specifiers = [...scannedSource.withLiterals.matchAll(SPECIFIER_PATTERN)].flatMap((match) =>
+  const specifiers = codeMatches(scannedSource, SPECIFIER_PATTERN).flatMap((match) =>
     match[2] === undefined ? [] : [match[2]],
   );
   assert.ok(specifiers.length > 0, 'no import specifiers found — the tokenizer saw nothing');
@@ -1263,8 +1398,8 @@ test('the path-segment sanitizer is scanned, and importable only by the reading 
   // value meaning two things on two hosts is refused rather than resolved two
   // ways. Removing the platform question removed the import with it.
   const source = await readFile(join(REPO_ROOT, 'src', 'adapters', 'fs', 'segments.ts'), 'utf8');
-  const specifiers = [...scanSource(source).withLiterals.matchAll(SPECIFIER_PATTERN)].flatMap(
-    (match) => (match[2] === undefined ? [] : [match[2]]),
+  const specifiers = codeMatches(scanSource(source), SPECIFIER_PATTERN).flatMap((match) =>
+    match[2] === undefined ? [] : [match[2]],
   );
   assert.deepEqual(specifiers, [], 'the sanitizer decides over a string and imports nothing at all');
 });
@@ -1305,7 +1440,7 @@ test('the render layer imports nothing from the composition root', async () => {
   for (const file of await collectSourceFiles(REPO_ROOT)) {
     if (!file.startsWith('src/render/')) continue;
     const scanned = scanSource(await readFile(join(REPO_ROOT, file), 'utf8'));
-    for (const match of scanned.withLiterals.matchAll(SPECIFIER_PATTERN)) {
+    for (const match of codeMatches(scanned, SPECIFIER_PATTERN)) {
       const specifier = match[2];
       if (specifier === undefined || !specifier.startsWith('.')) continue;
       const resolved = join(dirname(file), specifier).split(sep).join('/');

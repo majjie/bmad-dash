@@ -25,7 +25,13 @@ export const SCANNED_ROOTS = ['src', 'web', 'scripts'] as const;
 /** Gated built-in -> the only directory prefixes allowed to import it. */
 export const GATED_MODULES = new Map<string, readonly string[]>([
   ['fs', ['src/adapters/fs/']],
-  ['child_process', ['src/adapters/git/', 'src/adapters/browser/', 'scripts/']],
+  // `src/adapters/git/` was granted `child_process` here from the first story
+  // and removed 2026-09-03: the directory has never existed, so the grant was
+  // a permission over nothing, pinned by a `deepEqual` that could not fail.
+  // The git adapter is still deferred work; when it lands it re-adds its own
+  // prefix, which `every gate permission is load-bearing` makes a deliberate
+  // edit rather than a quiet grant.
+  ['child_process', ['src/adapters/browser/', 'scripts/']],
 ]);
 
 /** The layer that must have no outgoing dependency, ever (frozen constraint). */
@@ -69,6 +75,36 @@ export const SOURCE_EXTENSIONS = new Set([
  */
 export const SPECIFIER_PATTERN =
   /(?:\bfrom\s*|\bimport\s*(?:\(\s*)?|\brequire\s*\(\s*)(['"])([^'"]+)\1/g;
+
+/**
+ * Matches of `pattern` whose keyword is genuinely in code position.
+ *
+ * The specifier patterns have to run over `withLiterals`, because the thing
+ * they capture *is* a string literal. That view keeps the prose inside every
+ * other literal too, so a sentence ending in the word "from" followed by its
+ * own closing quote reads as an import: `src/adapters/fs/walk.ts` carries
+ * `'a second spelling of the directory the walk started from'`, which yielded a
+ * phantom specifier running to the next quote in the file. Inert there, because
+ * the garbage keys to no gated module -- but the same sentence inside
+ * `src/domain/` would be reported as a **purity violation**, since that rule
+ * treats every specifier it does not recognize as outgoing.
+ *
+ * `code` and `withLiterals` are the same length by construction: blanking
+ * replaces each non-newline character with a space. So a match's own index
+ * addresses both views, and the keyword that starts the match survives in
+ * `code` exactly when it was code. `test/support/scanner.test.ts` pins the
+ * length equality this depends on, and the phantom itself, in both directions.
+ */
+export function codeMatches(scanned: ScannedSource, pattern: RegExp): RegExpMatchArray[] {
+  return [...scanned.withLiterals.matchAll(pattern)].filter((match) => {
+    const at = match.index;
+    if (at === undefined) return false;
+    // Every alternative in both patterns begins with the keyword, so the first
+    // character of a real match is a letter in `code` and a blank where the
+    // "keyword" was prose inside a literal.
+    return /[A-Za-z]/.test(scanned.code[at] ?? '');
+  });
+}
 
 /** Named bindings pulled out of an import, with the specifier they came from. */
 export const NAMED_IMPORT_PATTERN =
@@ -435,7 +471,7 @@ async function readScanned(
 export async function findImportViolations(root: string): Promise<Violation[]> {
   const violations: Violation[] = [];
   for (const { file, scanned } of await readScanned(root)) {
-    for (const match of scanned.withLiterals.matchAll(SPECIFIER_PATTERN)) {
+    for (const match of codeMatches(scanned, SPECIFIER_PATTERN)) {
       const specifier = match[2];
       if (specifier === undefined) continue;
       const allowed = GATED_MODULES.get(gateKey(specifier));
@@ -454,14 +490,16 @@ export async function findImportViolations(root: string): Promise<Violation[]> {
  * about a layer having no outgoing dependency at all. Relative imports that
  * stay inside `src/domain/` are internal, not outgoing; a bare specifier, a
  * `node:` builtin, or a relative path that escapes the layer is a violation.
- * `src/domain/` does not exist yet, which is exactly why the rule is written
- * now — a prefix rule that only ever sees an empty directory passes vacuously.
+ * Written before `src/domain/` existed, on the grounds that a prefix rule which
+ * only ever sees an empty directory passes vacuously. It holds seven modules
+ * now, and `the scan reaches every module in the pure layer` is what keeps the
+ * rule from going quiet if that ever stops being true.
  */
 export async function findDomainViolations(root: string): Promise<DomainViolation[]> {
   const violations: DomainViolation[] = [];
   for (const { file, scanned } of await readScanned(root)) {
     if (!file.startsWith(PURE_LAYER)) continue;
-    for (const match of scanned.withLiterals.matchAll(SPECIFIER_PATTERN)) {
+    for (const match of codeMatches(scanned, SPECIFIER_PATTERN)) {
       const specifier = match[2];
       if (specifier === undefined) continue;
       if (!specifier.startsWith('.')) {
@@ -481,7 +519,7 @@ export async function findMutatingOperations(root: string): Promise<OperationVio
   const denied = new Set(MUTATING_FS_OPERATIONS);
 
   for (const { file, scanned } of await readScanned(root)) {
-    for (const match of scanned.withLiterals.matchAll(NAMED_IMPORT_PATTERN)) {
+    for (const match of codeMatches(scanned, NAMED_IMPORT_PATTERN)) {
       const [, bindings, , specifier] = match;
       if (bindings === undefined || specifier === undefined) continue;
       if (gateKey(specifier) !== 'fs') continue;
@@ -540,7 +578,7 @@ export async function findUnanalysable(root: string): Promise<Unanalysable[]> {
     // Scoped to files that import an `fs` module: `arr[i](…)` is ordinary code
     // elsewhere, and only this directory may touch `fs` at all, so the check is
     // precise where it matters and silent where it would be noise.
-    const importsFs = [...scanned.withLiterals.matchAll(SPECIFIER_PATTERN)].some(
+    const importsFs = codeMatches(scanned, SPECIFIER_PATTERN).some(
       (match) => match[2] !== undefined && gateKey(match[2]) === 'fs',
     );
     if (importsFs && COMPUTED_CALL.test(scanned.code)) {
