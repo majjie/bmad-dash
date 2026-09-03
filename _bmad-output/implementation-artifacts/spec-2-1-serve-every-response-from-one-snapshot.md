@@ -2,7 +2,7 @@
 title: 'Serve every response from one snapshot'
 type: 'feature'
 created: '2026-09-03'
-status: 'in-review'
+status: 'done'
 review_loop_iteration: 1
 baseline_commit: 'faa0e27749ad23b71049dcbc990ee4bcf87b20dd'
 context: []
@@ -138,3 +138,75 @@ The name drops the `X-` prefix, which RFC 6648 deprecates for new headers, and n
 
 **Manual checks:**
 - Build and serve this repository; confirm two successive requests carry the same identity header, then touch a tracked artifact and confirm the next differs.
+
+## Suggested Review Order
+
+**The identity itself — start here**
+
+- The whole design in two lines: digest the root *and* the view, never mint.
+  [`index.ts:523`](../../src/cli/index.ts#L523)
+
+- Why derived and not minted, and why FNV-1a over `node:crypto`.
+  [`snapshot.ts:344`](../../src/domain/snapshot.ts#L344)
+
+- `Omit` rather than a second interface, so a new view field is covered with no audit to forget.
+  [`index.ts:485`](../../src/cli/index.ts#L485)
+
+- Branded, with the digest as its only constructor — `CanonicalPath`'s reasoning.
+  [`snapshot.ts:333`](../../src/domain/snapshot.ts#L333)
+
+**Refusing what has no canonical form — the round-2 fixes**
+
+- Arrays now require `Array.prototype` exactly; a subclass is refused, not silently flattened.
+  [`snapshot.ts:163`](../../src/domain/snapshot.ts#L163)
+
+- Own keys must be precisely the indices: closes the extra-property and sparse-hole collisions.
+  [`snapshot.ts:231`](../../src/domain/snapshot.ts#L231)
+
+- Reads only the prototype's own data descriptor, so the refusal path invokes no accessor.
+  [`snapshot.ts:186`](../../src/domain/snapshot.ts#L186)
+
+**The wire contract**
+
+- The name, and the argued case against `ETag` — a scan is not a representation.
+  [`server.ts:90`](../../src/adapters/http/server.ts#L90)
+
+- Inside the `try` now, so a malformed identity cannot throw past the handler.
+  [`server.ts:468`](../../src/adapters/http/server.ts#L468)
+
+- The field the surface carries but may never derive.
+  [`inventory.ts:418`](../../src/render/inventory.ts#L418)
+
+**AD-3's "immutable", made real**
+
+- Descriptor-based walk: accessors skipped rather than invoked, `Map` and `Set` refused.
+  [`inventory.ts:708`](../../src/cli/inventory.ts#L708)
+
+- One return site, applied to a graph nothing touches again.
+  [`inventory.ts:812`](../../src/cli/inventory.ts#L812)
+
+**The tests that would have caught the two loopback defects**
+
+- The matrix: pairs equal under iteration 1's inputs that render differently — "or it proves nothing".
+  [`inventory.test.ts:828`](../../test/render/inventory.test.ts#L828)
+
+- One identity and byte-identical bodies over the real supplier — the join neither end covered.
+  [`server.test.ts:506`](../../test/server.test.ts#L506)
+
+- Presence and absence across 200, HEAD and all four refusals, with statuses asserted.
+  [`server.test.ts:562`](../../test/server.test.ts#L562)
+
+**Supporting tests**
+
+- The refusal set, including the branches a comment had promised and nothing reached.
+  [`snapshot.test.ts:185`](../../test/domain/snapshot.test.ts#L185)
+
+- Pinned vectors, so a rewrite of the mixing cannot silently re-key every snapshot.
+  [`snapshot.test.ts:249`](../../test/domain/snapshot.test.ts#L249)
+
+- The freeze reaches the same array the skip policy pushed into, not a copy.
+  [`inventory.test.ts:1816`](../../test/cli/inventory.test.ts#L1816)
+
+- Added in review, not by the task list: the pure layer's importer set stays exhaustive.
+  [`architecture.test.ts:1061`](../../test/architecture.test.ts#L1061)
+
