@@ -32,6 +32,7 @@
  */
 
 import { FAMILY_LABELS, type Family } from '../domain/identity.ts';
+import { artifactUrl } from '../domain/url.ts';
 import { markup } from './html.ts';
 import { tileGrid } from './components.ts';
 import { documentShell } from './page.ts';
@@ -113,6 +114,19 @@ export function findArtifact(view: InventoryView, path: string): FoundArtifact |
  */
 export function renderArtifact(projectRoot: string, found: FoundArtifact): string {
   const label = found.family === undefined ? UNPLACED_TILE_LABEL : FAMILY_LABELS[found.family];
+  // **Refresh re-requests this artifact, not the Dashboard.** `EXPERIENCE.md:161`
+  // says the current surface "is never replaced under the user" and `:153` gives
+  // the Artifact view "stays on its snapshot", so a header pointing at `/` would
+  // navigate the reader off what they were reading. This is the second surface,
+  // which is the story `deferred-work.md` named as the one to fix it.
+  //
+  // **Unguarded, and that is the difference from `./inventory.ts`.** `artifactUrl`
+  // throws for a path no walk entry carries, and the inventory catches that so
+  // one malformed row costs one link rather than the whole Dashboard. Here the
+  // surface *is* the one row, so there are no neighbours to protect — and a page
+  // whose own refresh control cannot be addressed is better refused as a 500 the
+  // reader can report than served with a control that lies about where it goes.
+  const refreshHref = artifactUrl(found.row.path);
   const main = [
     '<main>',
     markup`<h1>${ARTIFACT_SURFACE_TITLE}</h1>`.html,
@@ -129,5 +143,5 @@ export function renderArtifact(projectRoot: string, found: FoundArtifact): strin
     ]),
     '</main>',
   ].join('\n');
-  return documentShell(projectRoot, main);
+  return documentShell(projectRoot, refreshHref, main);
 }

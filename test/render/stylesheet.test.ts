@@ -564,6 +564,20 @@ const REQUIRED_RULES: readonly (readonly [string, readonly string[]])[] = [
   ['.project-signal', ['text-transform: uppercase']],
   ['.project-refresh', ['margin-inline-start: auto']],
   ['.tile-grid', ['display: grid', 'gap: var(--space-tile-gap)']],
+  // Story 2.1a's link. Both rules are required, and the *pair* is what carries
+  // the affordance — see the dedicated test below for why either alone is a
+  // WCAG 1.4.1 failure.
+  ['.artifact-row', ['padding: var(--space-row-padding-y) 0']],
+  [
+    '.artifact-link',
+    [
+      'display: flex',
+      'text-decoration-line: none',
+      'margin-block: calc(var(--space-row-padding-y) * -1)',
+      'padding-block: var(--space-row-padding-y)',
+    ],
+  ],
+  ['.artifact-link .artifact-path', ['text-decoration-line: underline']],
   // The one that a reviewer deleted whole while the suite stayed green.
   [
     ':focus-visible',
@@ -600,6 +614,50 @@ test('a link is distinguished by more than its colour', () => {
   // `primary` on `on-surface` is 1.46:1. WCAG 1.4.1 asks for a non-colour
   // channel, and DESIGN.md's own Do list says the same.
   assert.match(body, /text-decoration-line:\s*underline;/, 'colour alone cannot carry the affordance');
+});
+
+test('the row link cancels the underline and re-supplies it, and the pair moves together', () => {
+  // **Finding from Story 2.1a's review round, measured: deleting the
+  // re-supplied underline left the suite at 936/936.** The row above reads only
+  // `ruleBody('a')`, so it cannot see that `.artifact-link` sets
+  // `text-decoration-line: none` — cancelling the base rule for every link this
+  // tool actually serves — nor that `.artifact-link .artifact-path` puts it
+  // back on the one cell the reader scans by. With the second rule gone, an
+  // openable row would be distinguished from a row that is *not* a link by
+  // nothing at all, on the only interactive elements on the page.
+  //
+  // Asserted as a pair, in both directions, so removing either fails: the
+  // cancellation without the restoration is a 1.4.1 failure, and the
+  // restoration without the cancellation is nine underlined cells, which is
+  // the thing the cancellation exists to prevent.
+  assert.match(
+    ruleBody('.artifact-link'),
+    /text-decoration-line:\s*none;/,
+    'the row link must not underline all nine of its cells',
+  );
+  assert.match(
+    ruleBody('.artifact-link .artifact-path'),
+    /text-decoration-line:\s*underline;/,
+    'and the path must carry the affordance the base `a` rule would have given it',
+  );
+  // Colour is supplementary rather than load-bearing, which is the whole point
+  // of the underline — but it is still declared, so the affordance is not
+  // carried by a hairline alone.
+  assert.match(ruleBody('.artifact-link .artifact-path'), /color:\s*var\(--color-primary\);/);
+});
+
+test('the pointer target on a linked row covers the row, not the row minus its padding', () => {
+  // The accessible name is the whole row (the anchor wraps every cell) and the
+  // clickable area has to match it. `.artifact-row` keeps the block padding
+  // that is the list's rhythm — an unlinked row needs it too — so the anchor
+  // negates it as margin and restores it as its own padding. Asserted as the
+  // pair, because either half alone is wrong: the margin alone collapses the
+  // row's spacing, and the padding alone doubles it.
+  const row = ruleBody('.artifact-row');
+  const link = ruleBody('.artifact-link');
+  assert.match(row, /padding:\s*var\(--space-row-padding-y\) 0;/);
+  assert.match(link, /margin-block:\s*calc\(var\(--space-row-padding-y\) \* -1\);/);
+  assert.match(link, /padding-block:\s*var\(--space-row-padding-y\);/);
 });
 
 test('no emitted value is prose, so a sentence cannot corrupt :root', () => {

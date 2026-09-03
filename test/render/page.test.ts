@@ -17,7 +17,7 @@ import { renderPage, PAGE_TITLE, SURFACE_TITLE } from '../../src/render/page.ts'
 import { STYLESHEET } from '../../src/render/stylesheet.ts';
 import { startServer } from '../../src/adapters/http/server.ts';
 import { canonical } from '../../src/adapters/fs/paths.ts';
-import { REFRESH_HREF } from '../../src/render/chrome.ts';
+import { DASHBOARD_HREF } from '../../src/render/chrome.ts';
 import {
   ARTIFACTS_TILE_LABEL,
   SCAN_TILE_LABEL,
@@ -222,7 +222,7 @@ test('following the refresh link re-requests the surface and carries nothing acr
   assert.equal(first.status, 200);
   assert.equal(second.status, 200);
   assert.equal(second.body, first.body, 'nothing may carry across a refresh');
-  assert.ok(first.body.includes(`href="${REFRESH_HREF}"`), 'the refresh control is in the page');
+  assert.ok(first.body.includes(`href="${DASHBOARD_HREF}"`), 'the refresh control is in the page');
 });
 
 test('the adapter serves exactly what render produces, headers unchanged', async (t) => {

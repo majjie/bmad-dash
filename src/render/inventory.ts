@@ -609,7 +609,8 @@ function artifactRow(row: ArtifactRow): Markup {
     markup`<code class="artifact-path">${row.path}</code>`,
     ...artifactFacts(row),
   ];
-  if (!isOpenable(row)) return markup`<li class="artifact-row">${cells}</li>`;
+  const href = linkFor(row);
+  if (href === undefined) return markup`<li class="artifact-row">${cells}</li>`;
   // **The whole row is the link, not just the path**, and that is what makes
   // the accessible name honest without an `aria-label` restating it. An
   // anchor's accessible name is its own text content, so wrapping the cells
@@ -628,7 +629,41 @@ function artifactRow(row: ArtifactRow): Markup {
   // escaping on top of that is what keeps a `&` or a quote from ending the
   // attribute. There is no scheme to inject: the value always begins
   // `/artifact/`.
-  return markup`<li class="artifact-row"><a class="artifact-link" href="${artifactUrl(row.path)}">${cells}</a></li>`;
+  return markup`<li class="artifact-row"><a class="artifact-link" href="${href}">${cells}</a></li>`;
+}
+
+/**
+ * Where a row links, or `undefined` because it does not link at all.
+ *
+ * Two reasons a row has no link, and they are deliberately one answer here
+ * because the *row* is identical either way — it renders unlinked, states
+ * everything it states, and disappears from nothing:
+ *
+ *   - `isOpenable` says no. That is `EXPERIENCE.md:183`'s policy about
+ *     unidentified artifacts, and it is the ordinary case.
+ *   - `artifactUrl` throws, because the path is a shape no walk entry carries:
+ *     empty, absolute, or holding an empty or dot segment. That is a defect
+ *     upstream, and the throw is right — see `src/domain/url.ts` — but
+ *     **catching it here is what keeps the blast radius one link.** Unguarded,
+ *     one malformed `WalkEntry.relative` anywhere in the project turned the
+ *     whole Dashboard into a 500: the throw escapes `inventoryTiles`, reaches
+ *     the adapter's `catch`, and every other row goes with it. A reader loses
+ *     one artifact's link instead of the entire surface, which is AD-7's
+ *     "never fatal to its neighbours" applied to a link.
+ *
+ * The artifact **view** deliberately does not do this and lets the throw
+ * become a 500; see `./artifact.ts`. The difference is blast radius, not
+ * policy: that surface renders one row, so there are no neighbours to protect,
+ * and a page whose own refresh control could not be addressed is better
+ * refused than served.
+ */
+function linkFor(row: ArtifactRow): string | undefined {
+  if (!isOpenable(row)) return undefined;
+  try {
+    return artifactUrl(row.path);
+  } catch {
+    return undefined;
+  }
 }
 
 /**

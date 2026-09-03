@@ -32,7 +32,7 @@
  */
 
 import { STYLESHEET } from './stylesheet.ts';
-import { projectHeader } from './chrome.ts';
+import { DASHBOARD_HREF, projectHeader } from './chrome.ts';
 import { tileGrid } from './components.ts';
 import { inventoryTiles, type InventoryView } from './inventory.ts';
 import { escapeHtml } from './html.ts';
@@ -104,7 +104,7 @@ function dashboard(inventory: InventoryView): string {
  * messages, which is why the definition is now shared rather than repeated.
  */
 export function renderPage(projectRoot: string, inventory: InventoryView): string {
-  return documentShell(projectRoot, dashboard(inventory));
+  return documentShell(projectRoot, DASHBOARD_HREF, dashboard(inventory));
 }
 
 /**
@@ -120,13 +120,19 @@ export function renderPage(projectRoot: string, inventory: InventoryView): strin
  * page is. One shell, so the chrome cannot be *forgotten* on a later surface
  * rather than deliberately omitted.
  *
+ * `refreshHref` is the path of the surface being rendered, passed straight to
+ * the header: refresh re-requests *this* surface (`EXPERIENCE.md:161`), so the
+ * shell cannot hold a constant for it. Required rather than defaulted to `/`,
+ * so a new surface that forgets it is a compile error rather than a control
+ * that quietly navigates the reader to the Dashboard.
+ *
  * `main` is markup the caller already composed. It is emitted verbatim, which
  * is the one thing this function trusts: every caller is inside `src/render/`,
  * and each builds its surface through `markup` or through `./components.ts`,
  * both of which escape project-derived text. Nothing outside this layer can
  * reach it — the HTTP adapter takes a rendered document and never supplies one.
  */
-export function documentShell(projectRoot: string, main: string): string {
+export function documentShell(projectRoot: string, refreshHref: string, main: string): string {
   return `<!doctype html>
 <html lang="en">
 <head>
@@ -137,7 +143,7 @@ export function documentShell(projectRoot: string, main: string): string {
 ${inlinable(STYLESHEET)}</style>
 </head>
 <body>
-${projectHeader(projectRoot)}
+${projectHeader(projectRoot, refreshHref)}
 ${main}
 </body>
 </html>

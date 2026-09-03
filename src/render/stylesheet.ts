@@ -505,6 +505,15 @@ function componentRules(): readonly string[] {
       declaration('min-width', '0'),
       declaration('color', 'inherit'),
       declaration('text-decoration-line', 'none'),
+      // **The pointer target covers the whole row, not the row minus its
+      // padding.** The row keeps its own block padding — it is the rhythm of
+      // the list, and an unlinked row needs it too — so the anchor pulls its
+      // box back out over that padding and puts it back as its own. Without
+      // this the accessible name was the whole row while the clickable area was
+      // a band inside it, which is a pointer target smaller than the thing it
+      // looks like.
+      declaration('margin-block', 'calc(var(--space-row-padding-y) * -1)'),
+      declaration('padding-block', 'var(--space-row-padding-y)'),
     ]),
     rule('.artifact-link .artifact-path', [
       declaration('color', 'var(--color-primary)'),

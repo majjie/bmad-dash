@@ -154,18 +154,14 @@ export function sectionUrl(path: string, section: string): string {
  * names no row. Escaping is impossible because nothing is resolved, not
  * because this function refuses.
  *
- * **An empty segment is dropped as well, which RFC 3986 keeps.** The RFC is
- * normalizing a URI path, where `//` is meaningful; this is producing a key to
- * compare against `WalkEntry.relative`, which never holds an empty segment. So
- * `//` and a leading `/` — the latter reachable through `%2f` — would otherwise
- * produce keys shaped like nothing the walk can report, including one that
- * *looks* absolute. Dropping them loses nothing: no row is reachable only
- * through an empty segment, so no two rows are collapsed onto one key.
+ * It handles `.` and `..` only. An empty segment, and a segment that decoded to
+ * contain a `/`, are refused upstream in `decodeSegments` rather than
+ * normalized away — see there for why refusing is right where dropping was not.
  */
 function normalizeSegments(segments: readonly string[]): readonly string[] {
   const out: string[] = [];
   for (const segment of segments) {
-    if (segment === '' || segment === '.') continue;
+    if (segment === '.') continue;
     if (segment === '..') {
       out.pop();
       continue;
@@ -199,17 +195,66 @@ function decodeOrUndefined(text: string): string | undefined {
 }
 
 /**
+ * Every segment decoded, or `undefined` because one of them cannot be a segment.
+ *
+ * **Per segment, and the first version decoded the joined string — which made
+ * the parse many-to-one.** Decoding `a%2fb` as part of one string yields `a/b`,
+ * which then *splits* into two segments, so `/artifact/a%2fb`, `/artifact/a/b`
+ * and `/artifact/a//b` all keyed one row through three URLs. That never let two
+ * artifacts share one permalink — no filename can contain `/`, so no two rows
+ * could collide — but it did mean one artifact had many addresses, and it meant
+ * a percent escape could manufacture grammar *after* the grammar had been
+ * parsed. Decoding each segment separately closes both.
+ *
+ * **Two decoded shapes are then refused outright, and refusing is not the
+ * repair this module's header rules out.** A segment that is empty, and a
+ * segment containing a `/`, are shapes no `WalkEntry.relative` can have — the
+ * walk's paths are non-empty segments joined by the one character a filename
+ * cannot contain. So refusing costs nothing: `artifactUrl` never emits either,
+ * and a URL carrying one names no artifact in any snapshot. What it buys is a
+ * key space that is *structurally* a project-relative path — every segment
+ * non-empty, separator-free, and never `.` or `..` after normalization — so a
+ * key cannot be talked into climbing even by a future consumer that mistakes it
+ * for a path. Sanitizing would have been mapping two names onto one; this maps
+ * a name onto nothing, loudly.
+ *
+ * The traversal collapse is unaffected: `%2e%2e` decodes to `..` as a whole
+ * segment and normalizes away, and `%2e%2e%2f` — a traversal squeezed into one
+ * segment — is now refused rather than reaching the lookup as a literal name.
+ */
+function decodeSegments(segments: readonly string[]): readonly string[] | undefined {
+  const out: string[] = [];
+  for (const segment of segments) {
+    const decoded = decodeOrUndefined(segment);
+    if (decoded === undefined || decoded === '' || decoded.includes('/')) return undefined;
+    out.push(decoded);
+  }
+  return out;
+}
+
+/**
  * Parse a request path into the artifact — and section — it names, or
  * `undefined` when it names neither.
  *
  * **Decode first, then normalize, and the order is stated rather than
  * inferred.** RFC 3986 treats `%2e%2e` as an ordinary segment and only a
- * literal `..` as a dot segment, which would leave `%2e%2e%2f` un-normalized
- * and reaching the lookup as itself. Here it is decoded first, so every
- * spelling of a traversal collapses to the same key before anything looks at
- * it. That costs nothing in fidelity: no filename can contain `/`, and none can
- * be `.` or `..`, so no real artifact path is changed by the normalization —
- * and `artifactUrl` refuses to build a URL for a path that would be.
+ * literal `..` as a dot segment, which would leave `%2e%2e` reaching the lookup
+ * as itself. Here each segment is decoded first, so `%2e%2e` becomes `..` and
+ * collapses like any other spelling of a traversal. That costs nothing in
+ * fidelity: no filename can be `.` or `..`, so no real artifact path is changed
+ * by the normalization — and `artifactUrl` refuses to build a URL for a path
+ * that would be.
+ *
+ * **What comes back is a key, and it is shaped like a project-relative path by
+ * construction.** Split it on `/` and every segment is non-empty and is neither
+ * `.` nor `..`: dot segments normalized away, and the two shapes that could
+ * have survived as literals — an empty segment and a segment containing a `/` —
+ * were refused in `decodeSegments`. The key is still only ever compared for
+ * equality against `WalkEntry.relative`, and a key that names no row is a 404;
+ * the structural guarantee is what makes that safe rather than merely true
+ * today. A backslash, a colon or a drive letter *is* allowed through, because
+ * each is a legal character in a POSIX filename — `C:\Windows` is one segment
+ * naming one file that this project does not contain, not a path.
  *
  * The section marker is found in the **raw** segments, before decoding, which
  * is the other half of `encodeSegment`'s escape: a path segment spelling
@@ -235,9 +280,9 @@ export function parseArtifactUrl(requestPath: string): ArtifactTarget | undefine
   const rawPath = marker === -1 ? raw : raw.slice(0, marker);
   const rawSection = marker === -1 ? undefined : raw[marker + 1];
 
-  const decoded = decodeOrUndefined(rawPath.join('/'));
+  const decoded = decodeSegments(rawPath);
   if (decoded === undefined) return undefined;
-  const path = normalizeSegments(decoded.split('/')).join('/');
+  const path = normalizeSegments(decoded).join('/');
   if (path === '') return undefined;
 
   if (rawSection === undefined) return { path, section: undefined };

@@ -44,6 +44,7 @@ import {
   DELIBERATE_RUN_ROW,
   FULL_INVENTORY_VIEW,
   HOSTILE_PATH,
+  SECTION_NAMED_ROW,
   UNIDENTIFIED_ROW,
 } from './support/inventory.ts';
 
@@ -76,6 +77,11 @@ const CLI_TIMEOUT_MS = 15_000;
  * still exits — about five seconds late. That is the hang being caught.
  */
 const PROMPT_SHUTDOWN_MS = 2_500;
+/**
+ * A raw socket that has not been answered by now is hung, not slow — the same
+ * judgement `CLI_TIMEOUT_MS` makes about a spawned process.
+ */
+const RAW_REQUEST_TIMEOUT_MS = 5_000;
 /** Distinctive to this server: no foreign listener produces either string. */
 const OUR_PAGE_MARKER = 'bmad-dash';
 const OUR_FORBIDDEN_MARKER = 'Forbidden: unexpected Host header.';
@@ -664,21 +670,41 @@ test('a view whose identity cannot be a header value is a 500, not a hung reques
   // projection can produce that looks like this — the digest is sixteen hex
   // characters — which is exactly why it has to be asserted here rather than
   // left to the type.
-  const reported: Error[] = [];
-  const server = await startServer({
-    projectRoot: PROJECT_ROOT,
-    inventory: () => ({
-      ...EMPTY_INVENTORY,
-      snapshotId: 'not\na header value' as InventoryView['snapshotId'],
-    }),
-    onError: (error) => reported.push(error),
-  });
-  t.after(() => server.close());
+  //
+  // **Parameterized over both routes from Story 2.1a, and the review round is
+  // why.** This test defaulted its path to `/` and served `EMPTY_INVENTORY`,
+  // which holds no rows — so pointing it at an artifact URL would have 404'd
+  // before `writeHead` was ever reached. Moving `writeHead` out of the artifact
+  // branch's `try` therefore reintroduced this exact hung request on the second
+  // route with nothing red. The view below carries the row, so both routes get
+  // as far as writing headers.
+  const view: InventoryView = {
+    ...FULL_INVENTORY_VIEW,
+    snapshotId: 'not\na header value' as InventoryView['snapshotId'],
+  };
+  for (const path of ['/', artifactUrl(CERTAIN_ROW.path), sectionUrl(CERTAIN_ROW.path, 'goals')]) {
+    const reported: Error[] = [];
+    const server = await startServer({
+      projectRoot: PROJECT_ROOT,
+      inventory: () => view,
+      onError: (error) => reported.push(error),
+    });
+    t.after(() => server.close());
 
-  const response = await get({ port: server.port });
-  assert.equal(response.status, 500, 'the request must be answered rather than abandoned');
-  assert.equal(response.headers[SNAPSHOT_ID_HEADER], undefined);
-  assert.equal(reported.length, 1, 'and reported to onError exactly once');
+    const response = await get({ port: server.port, path });
+    assert.equal(response.status, 500, `${path} must be answered rather than abandoned`);
+    assert.equal(response.headers[SNAPSHOT_ID_HEADER], undefined, path);
+    assert.equal(reported.length, 1, `${path} reported to onError exactly once`);
+  }
+
+  // And the identity is the only thing wrong with that view, so the same routes
+  // over a well-formed one are 200s — otherwise the loop above would pass for a
+  // view that could not render at all.
+  const healthy = await startServer({ projectRoot: PROJECT_ROOT, inventory: () => FULL_INVENTORY_VIEW });
+  t.after(() => healthy.close());
+  for (const path of ['/', artifactUrl(CERTAIN_ROW.path)]) {
+    assert.equal((await get({ port: healthy.port, path })).status, 200, path);
+  }
 });
 
 test('the listening socket itself reports the loopback literal on IPv4', async (t) => {
@@ -1391,7 +1417,19 @@ function getRawTarget(port: number, target: string): Promise<Response> {
     socket.on('data', (chunk: string) => {
       raw += chunk;
     });
-    socket.on('error', reject);
+    // **A timeout that destroys, added in review.** This resolved only on
+    // `close`, so a server that accepted the connection and answered nothing —
+    // which is the hung-request defect two tests in this file exist to catch —
+    // would have hung the whole suite until the runner's own timeout rather
+    // than failing with a diagnostic. Destroying is what makes `close` fire, so
+    // the rejection below is reached rather than raced.
+    socket.setTimeout(RAW_REQUEST_TIMEOUT_MS, () => {
+      socket.destroy(new Error(`no response to \`GET ${target}\` within ${String(RAW_REQUEST_TIMEOUT_MS)}ms`));
+    });
+    socket.on('error', (error: Error) => {
+      socket.destroy();
+      reject(error);
+    });
     socket.on('close', () => {
       const [head = '', ...rest] = raw.split('\r\n\r\n');
       const [statusLine = '', ...headerLines] = head.split('\r\n');
@@ -1485,16 +1523,99 @@ test('a path needing encoding is served at the URL the page links', async (t) =>
   assert.equal(response.status, 200, artifactUrl(HOSTILE_PATH));
   assert.ok(response.body.includes('&lt;img src=x onerror=alert(1)&gt;.md'), 'and it is the right row');
   assert.ok(!response.body.includes('<img'), 'no element is created by the filename');
-  // **The unencoded spelling is not a request at all**, which is the concrete
-  // reason the link has to be encoded rather than merely escaped as HTML. Node's
-  // own HTTP client refuses to send it (`ERR_UNESCAPED_CHARACTERS`), so it goes
-  // out on a raw socket — and the space inside the filename ends the request
-  // target, leaving a malformed request line that never reaches routing.
+  // **The unencoded spelling does not reach this artifact**, which is the
+  // concrete reason the link has to be encoded rather than merely escaped as
+  // HTML. Node's own HTTP client refuses to send it
+  // (`ERR_UNESCAPED_CHARACTERS`), so it goes out on a raw socket.
+  //
+  // What this pins is only that the row is not served that way. The *status* is
+  // deliberately not asserted: the space inside the filename ends the request
+  // target, so what comes back is llhttp's opinion of a malformed request line
+  // rather than a decision this server took, and pinning `400` would have been
+  // a test of the parser's leniency. The assertion below is the property that
+  // belongs to this code.
   const unencoded = await getRawTarget(port, `/artifact/${HOSTILE_PATH}`);
-  assert.equal(unencoded.status, 400, 'a raw filename in a target is a broken request line');
-  // The encoded target goes over the identical raw socket and is served, so the
-  // difference above is the encoding and not the transport.
+  assert.notEqual(unencoded.status, 200, 'a target the encoder never emits is not this artifact');
+  assert.ok(!unencoded.body.includes('&lt;img'), 'and no part of the row is served for it');
+  // The encoded target goes over the identical raw socket and *is* served, so
+  // the difference above is the encoding and not the transport.
   assert.equal((await getRawTarget(port, artifactUrl(HOSTILE_PATH))).status, 200);
+});
+
+test('a row whose path spells the section marker is served at its escaped URL', async (t) => {
+  // The grammar's most delicate rule, end to end. Added in review round 1,
+  // where it was exercised only by `test/domain/url.test.ts`: no request had
+  // ever carried a segment spelling `section`, so the escape and the
+  // locate-the-marker-before-decoding order never ran through the adapter.
+  const { port } = await servingFixture(t);
+  const escaped = artifactUrl(SECTION_NAMED_ROW.path);
+  assert.ok(escaped.includes('/%73ection/'), escaped);
+
+  const response = await get({ port, path: escaped });
+  assert.equal(response.status, 200);
+  assert.ok(response.body.includes(SECTION_NAMED_ROW.path), 'and it is this row');
+
+  // The bare spelling is a *section* URL for a different artifact, which is
+  // exactly the collision the escape exists to prevent — and that artifact
+  // (`…/prds`) is not a row here, so it 404s rather than serving this one.
+  const bare = `/artifact/${SECTION_NAMED_ROW.path}`;
+  assert.equal((await get({ port, path: bare })).status, 404, bare);
+
+  // And a section *of* this row still parses, with the marker read once.
+  const section = await get({ port, path: sectionUrl(SECTION_NAMED_ROW.path, 'goals') });
+  assert.equal(section.status, 200);
+  assert.equal(section.body, response.body);
+});
+
+test('a row path the grammar cannot address is a 500 on its own page, and costs the Dashboard nothing', async (t) => {
+  // The two halves of review round 1's finding about `artifactUrl` throwing,
+  // asserted as the different answers they deliberately are.
+  //
+  // On the Dashboard one malformed path costs one link: the row renders
+  // unlinked and every other row still links, because the whole surface must
+  // not go down for one bad neighbour (AD-7).
+  //
+  // On the artifact view it is a 500, because that surface *is* the one row —
+  // there are no neighbours to protect, and its own refresh control cannot be
+  // addressed, so a page that renders would carry a control that lies. Asserted
+  // rather than left implicit: it is a decision, and an unasserted 500 is
+  // indistinguishable from an oversight.
+  const bad = 'docs//prd.md';
+  const errors: Error[] = [];
+  const server = await startServer({
+    projectRoot: PROJECT_ROOT,
+    inventory: () => ({
+      ...FULL_INVENTORY_VIEW,
+      groups: [{ family: 'prd', rows: [{ ...CERTAIN_ROW, path: bad }, CERTAIN_ROW], notes: [] }],
+    }),
+    onError: (error) => errors.push(error),
+  });
+  t.after(() => server.close());
+
+  const dashboard = await get({ port: server.port, path: '/' });
+  assert.equal(dashboard.status, 200, 'one bad path must not take the surface down');
+  assert.ok(dashboard.body.includes(bad), 'the row is still listed');
+  assert.ok(dashboard.body.includes(`href="${artifactUrl(CERTAIN_ROW.path)}"`), 'and its neighbour still links');
+  assert.equal((dashboard.body.match(/class="artifact-link"/g) ?? []).length, 1, 'exactly one link');
+
+  // The malformed path is not addressable by the grammar, so no URL reaches it
+  // — an empty segment is refused outright.
+  assert.equal((await get({ port: server.port, path: `/artifact/${bad}` })).status, 404);
+  assert.equal(errors.length, 0, 'and nothing has failed yet');
+
+  // A path that *is* reachable and still unaddressable: a row whose path the
+  // grammar refuses to build a URL for, keyed by a URL that does parse.
+  const dotted = await startServer({
+    projectRoot: PROJECT_ROOT,
+    inventory: () => ({
+      ...FULL_INVENTORY_VIEW,
+      groups: [{ family: 'prd', rows: [{ ...CERTAIN_ROW, path: '/absolute/prd.md' }], notes: [] }],
+    }),
+    onError: (error) => errors.push(error),
+  });
+  t.after(() => dotted.close());
+  assert.equal((await get({ port: dotted.port, path: '/' })).status, 200, 'still a page');
+  assert.equal((await get({ port: dotted.port, path: '/artifact/absolute/prd.md' })).status, 404);
 });
 
 test('dot segments and their encodings normalize before the lookup, and escape nothing', async (t) => {
@@ -1506,8 +1627,12 @@ test('dot segments and their encodings normalize before the lookup, and escape n
   assert.equal((await get({ port, path: target.replace('/prds/', '/prds/./') })).status, 200);
   assert.equal((await get({ port, path: target.replace('/prds/', '/prds/x/../') })).status, 200);
 
-  // A URL that climbs *out* names nothing, in every encoding. Each of these is
-  // a real file on the machine running this suite, and none of them is a row.
+  // A URL that climbs *out* names nothing, in every encoding. Each of these
+  // names a real file on the machine running this suite, and none of them is a
+  // row. Two different mechanisms produce the same 404, and both are wanted: a
+  // traversal written as whole segments normalizes to a key that is not a row,
+  // and one squeezed into a single percent-encoded segment is refused by the
+  // grammar before a key exists at all.
   for (const path of [
     '/artifact/../../etc/passwd',
     '/artifact/%2e%2e/%2e%2e/etc/passwd',

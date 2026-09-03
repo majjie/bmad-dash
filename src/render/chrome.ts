@@ -23,7 +23,9 @@
  * a signal that does not exist, and telling those two apart is the entire
  * reason the four-state vocabulary exists.
  *
- * **The refresh control is a link, not a script.** A page load builds a new
+ * **The refresh control is a link to the surface it is on**, which from Story
+ * 2.1a is a required argument rather than the constant `/` — see
+ * `DASHBOARD_HREF`. A page load builds a new
  * snapshot — genuinely, from Story 1.12 on: the HTTP adapter holds a supplier
  * and calls it per `GET /`, so following this link re-walks the project. (For
  * one story it did not, and this comment said it did; the review of 1.12 found
@@ -69,8 +71,23 @@ export const GIT_SIGNAL_LABEL = 'Git:';
 /** The refresh control's label. Label-shaped. */
 export const REFRESH_LABEL = 'Refresh';
 
-/** Where the refresh control points: this surface, requested again. */
-export const REFRESH_HREF = '/';
+/**
+ * The Dashboard's own path — what the refresh control points at *on the
+ * Dashboard*, and nowhere else.
+ *
+ * **It was `REFRESH_HREF`, and the name was the defect.** Refresh means "this
+ * surface, requested again" (`EXPERIENCE.md:161`: the current surface "is never
+ * replaced under the user"; `:153`: the Artifact view "stays on its snapshot"),
+ * so a single constant could only be right while there was one surface. Story
+ * 2.1a is the second, and a `/` in its header would have navigated the reader
+ * off the artifact they were reading. `deferred-work.md` recorded the fix
+ * against Story 1.3 and named the story that creates the second surface as the
+ * one to make it, "since that story can actually test it" — this is that story.
+ *
+ * The target is now a **required argument** to `projectHeader` rather than a
+ * default, so a third surface cannot inherit the Dashboard's path by omission.
+ */
+export const DASHBOARD_HREF = '/';
 
 /**
  * The project header.
@@ -108,8 +125,15 @@ export function assertProjectRoot(projectRoot: unknown): string {
   return projectRoot;
 }
 
-export function projectHeader(projectRoot: string): string {
+export function projectHeader(projectRoot: string, refreshHref: string): string {
   assertProjectRoot(projectRoot);
+  // A blank target would render `href=""`, which resolves to the current URL in
+  // a browser and so happens to work — and would hide a caller that forgot to
+  // say which surface it is. Refused for the reason the root is: a control that
+  // works by accident is one nothing can hold to a contract.
+  if (refreshHref.trim() === '') {
+    throw new Error('the project header needs the path of the surface it is on; it was empty');
+  }
 
   // `basename('/')` is the empty string, and a filesystem root is a legitimate
   // if unusual target. Falling back to the path keeps the header from rendering
@@ -126,6 +150,6 @@ export function projectHeader(projectRoot: string): string {
 <p class="project-name">${name}</p>
 <code class="project-path">${projectRoot}</code>
 <p class="project-signal">${`${GIT_SIGNAL_LABEL} ${SIGNAL_NOT_CHECKED}`}</p>
-<a class="project-refresh" href="${REFRESH_HREF}">${REFRESH_LABEL}</a>
+<a class="project-refresh" href="${refreshHref}">${REFRESH_LABEL}</a>
 </header>`.html;
 }

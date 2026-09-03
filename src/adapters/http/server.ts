@@ -119,6 +119,31 @@ const SCHEME_DEFAULT_PORT = 80;
  */
 const NOT_FOUND_BODY = 'Not found.\n';
 
+/**
+ * The headers on any response carrying a rendered page from one snapshot.
+ *
+ * Stated once, on `NOT_FOUND_BODY`'s own reasoning one constant up: from Story
+ * 2.1a two routes serve a page, they must agree on the content type, on
+ * `no-store` and on recording the scan (AD-17), and a third surface copying a
+ * block for the second time is how one of them ends up without the identity
+ * header.
+ *
+ * It takes the **view**, not a bare id, so the identity on a response can only
+ * come from the snapshot the body was rendered from — there is no parameter to
+ * hand it something else through.
+ *
+ * Building this object validates nothing; `writeHead` validates every header
+ * name and value it is handed, which is why every caller keeps that call inside
+ * its own `try`. See the `/` branch's comment.
+ */
+function pageHeaders(view: InventoryView): Readonly<Record<string, string>> {
+  return {
+    'content-type': 'text/html; charset=utf-8',
+    'cache-control': 'no-store',
+    [SNAPSHOT_ID_HEADER]: view.snapshotId,
+  };
+}
+
 /** Bind failures worth retrying on an OS-assigned port instead of giving up. */
 const RETRYABLE_BIND_CODES = new Set(['EADDRINUSE', 'EACCES', 'EADDRNOTAVAIL']);
 
@@ -492,11 +517,7 @@ function handleRequest(
     try {
       const view = inventory();
       document = renderPage(toPlatform(projectRoot), view);
-      response.writeHead(200, {
-        'content-type': 'text/html; charset=utf-8',
-        'cache-control': 'no-store',
-        [SNAPSHOT_ID_HEADER]: view.snapshotId,
-      });
+      response.writeHead(200, pageHeaders(view));
     } catch (error: unknown) {
       // **A 500 carries no identity, and its reason is not the other four's.**
       // The 403, 404 and 405 responses are refused before the supplier is
@@ -551,11 +572,7 @@ function handleRequest(
         return;
       }
       document = renderArtifact(toPlatform(projectRoot), found);
-      response.writeHead(200, {
-        'content-type': 'text/html; charset=utf-8',
-        'cache-control': 'no-store',
-        [SNAPSHOT_ID_HEADER]: view.snapshotId,
-      });
+      response.writeHead(200, pageHeaders(view));
     } catch (error: unknown) {
       onError?.(error instanceof Error ? error : new Error(String(error)));
       respondText(response, 500, 'The page could not be rendered.\n');

@@ -76,6 +76,24 @@ export const HOSTILE_ROW: ArtifactRow = {
   runFacts: [],
 };
 
+/**
+ * A path whose own segment spells the grammar's section marker.
+ *
+ * The most delicate rule in `src/domain/url.ts` — a directory genuinely called
+ * `section` is legal, and unescaped it would make this row's URL read as
+ * artifact `.../prds`, section `prd.md`. Added to the shared fixture in Story
+ * 2.1a's review round, where the rule was exercised only by the grammar's own
+ * unit test: no fixture row and no served request had ever carried one, so the
+ * escape and its round trip never ran through the surface or the adapter.
+ */
+export const SECTION_NAMED_ROW: ArtifactRow = {
+  path: '_bmad-output/planning-artifacts/prds/section/prd.md',
+  identity: { outcome: 'identified', shape: 'document', confidence: 'certain', resolvedAt: 'location' },
+  readability: { state: 'present', stage: undefined },
+  interpretation: 'interpreted',
+  runFacts: [],
+};
+
 /** FR-73: one family, two shapes, and the tool ranks neither. */
 export const AMBIGUOUS_SHAPE_ROW: ArtifactRow = {
   path: '_bmad-output/planning-artifacts/prds/prd-z-2026-08-30',
@@ -166,7 +184,7 @@ export const AMBIGUOUS_BOTH_ROW: ArtifactRow = {
  */
 export const FULL_INVENTORY_VIEW: InventoryView = {
   complete: true,
-  artifactCount: 11,
+  artifactCount: 13,
   namesLeftOut: 13,
   aliases: [{ name: '_bmad-output/specs/link.md', reportedAt: '_bmad-output/specs/SPEC.md' }],
   // Arbitrary but fixed: this fixture exercises every row shape the surface can
@@ -184,6 +202,7 @@ export const FULL_INVENTORY_VIEW: InventoryView = {
         UNREADABLE_ROW,
         NOT_FOUND_ROW,
         HOSTILE_ROW,
+        SECTION_NAMED_ROW,
         AMBIGUOUS_SHAPE_ROW,
         UNMEASURED_RUN_ROW,
       ],

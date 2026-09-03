@@ -931,6 +931,31 @@ test('the import reader sees every statement, not only the first', () => {
   assert.deepEqual(namedImports("import { a } from './xx.ts';", './x.ts'), []);
 });
 
+/**
+ * Every specifier one module imports, sorted and deduplicated.
+ *
+ * The companion to `importersOf` and `namedImportsIn`, and it answers the
+ * question neither can: *what may this module reach at all?* Added in Story
+ * 2.1a's review round, where two modules carry a "reaches no filesystem" claim
+ * that the gate cannot see — `node:path` is not a gated module, so a resolver
+ * that joined a URL key onto the project root would pass every other rule in
+ * this file. Greps for `resolve(` and `join(` were tried first and are the
+ * wrong instrument: `Array.prototype.join` is an honest call, so the list needs
+ * exceptions immediately and stops meaning anything.
+ *
+ * Uses the gate's own tokenizer, so a specifier mentioned in a doc comment is
+ * not counted and a computed one is denied separately by `findUnanalysable`.
+ */
+async function importSpecifiersIn(root: string, file: string): Promise<string[]> {
+  const scanned = scanSource(await readFile(join(root, file), 'utf8'));
+  const specifiers = new Set<string>();
+  for (const match of codeMatches(scanned, SPECIFIER_PATTERN)) {
+    const specifier = match[2];
+    if (specifier !== undefined) specifiers.add(specifier);
+  }
+  return [...specifiers].sort();
+}
+
 async function importersOf(root: string, target: string): Promise<string[]> {
   const importers: string[] = [];
   for (const file of await collectSourceFiles(root)) {
@@ -1099,25 +1124,32 @@ test('the URL grammar has a stated importer set, like every other domain module'
   // non-exhaustive — the reader cannot tell "deliberately unconstrained" from
   // "nobody added it".
   //
-  // Two importers, and the pair *is* AD-18. The spine says the URL grammar "is
-  // defined once and owned by the server"; the two ends of that one grammar are
-  // the surface that builds a link and the adapter that parses the request the
-  // link produces. A third importer would mean something else had started
+  // Three importers, and the split *is* AD-18. The spine says the URL grammar
+  // "is defined once and owned by the server"; the ends of that one grammar are
+  // the surfaces that build a link and the adapter that parses the request a
+  // link produces. A fourth importer would mean something else had started
   // deriving a URL of its own, which is the disagreement AD-18 exists to
   // prevent — four units on one contract, each with its own shape.
+  //
+  // `src/render/artifact.ts` is here because the header's refresh control has
+  // to point at the surface it is on (`EXPERIENCE.md:161`), which on that
+  // surface is the artifact's own URL.
   assert.deepEqual(
     await importersOf(REPO_ROOT, 'src/domain/url.ts'),
-    ['src/adapters/http/server.ts', 'src/render/inventory.ts'],
-    'the surface builds the link and the adapter parses it; a third importer is a second grammar',
+    ['src/adapters/http/server.ts', 'src/render/artifact.ts', 'src/render/inventory.ts'],
+    'the surfaces build links and the adapter parses them; a fourth importer is a second grammar',
   );
 
   // And each end takes only its own half, so neither can quietly grow into the
-  // other's job.
-  assert.deepEqual(
-    await namedImportsIn(REPO_ROOT, 'src/render/inventory.ts', '../domain/url.ts'),
-    ['artifactUrl'],
-    'the surface builds URLs and does not parse them',
-  );
+  // other's job. In particular the render layer cannot *parse* a URL: doing so
+  // would mean a surface resolving an address, which is the adapter's decision.
+  for (const surface of ['src/render/inventory.ts', 'src/render/artifact.ts']) {
+    assert.deepEqual(
+      await namedImportsIn(REPO_ROOT, surface, '../domain/url.ts'),
+      ['artifactUrl'],
+      `${surface} builds URLs and does not parse them`,
+    );
+  }
   assert.deepEqual(
     await namedImportsIn(REPO_ROOT, 'src/adapters/http/server.ts', '../../domain/url.ts'),
     ['parseArtifactUrl'],
@@ -1126,14 +1158,86 @@ test('the URL grammar has a stated importer set, like every other domain module'
 
   // The purity gate reads imports, and this module uses two *globals* —
   // `encodeURIComponent` and `decodeURIComponent` — which are invisible to it.
-  // So the property the gate cannot see is asserted directly: the module names
-  // nothing from `node:`, and nothing that resolves, reads or stats. A resolver
-  // that reached for `node:path` would satisfy every import rule in this file
-  // and destroy the confinement Story 2.1a rests on.
-  const source = await readFile(join(REPO_ROOT, 'src', 'domain', 'url.ts'), 'utf8');
-  const code = scanSource(source).code;
-  assert.doesNotMatch(code, /\bnode:/, 'the URL grammar reaches no Node built-in, not even through a global');
-  assert.doesNotMatch(code, /\b(?:resolve|realpath|normalize|readFile|statSync|existsSync)\s*\(/);
+  // So the property the gate cannot see is asserted directly, and as an exact
+  // **empty** specifier list rather than as a grep for suspicious names: the
+  // module's header claims zero imports, and anything that could resolve, join,
+  // read or stat a path would have to arrive through one. A grep for `resolve(`
+  // or `join(` cannot do this job — `Array.prototype.join` is an honest call
+  // and would have to be excused, which is how such a list rots.
+  assert.deepEqual(
+    await importSpecifiersIn(REPO_ROOT, 'src/domain/url.ts'),
+    [],
+    'the URL grammar imports nothing, so it can reach nothing',
+  );
+  assert.doesNotMatch(
+    scanSource(await readFile(join(REPO_ROOT, 'src', 'domain', 'url.ts'), 'utf8')).code,
+    /\bnode:|\brequire\b|getBuiltinModule/,
+    'and names no Node built-in, not even through a global',
+  );
+});
+
+test('the artifact view has a stated importer set, and reaches no filesystem', async () => {
+  // Finding from review round 1: the traversal argument leans on this module
+  // having no filesystem reach exactly as much as on `src/domain/url.ts`, and
+  // only the latter had the assertion. `findArtifact` *is* the resolver — a URL
+  // that names no row is a 404 because this function answers from the view's
+  // rows and from nothing else — so "it cannot consult a filesystem" is a
+  // load-bearing claim about this file, not a stylistic one.
+  assert.deepEqual(
+    await importersOf(REPO_ROOT, 'src/render/artifact.ts'),
+    ['src/adapters/http/server.ts'],
+    'the adapter asks for the artifact page; a second importer is a second route',
+  );
+
+  // What it may import, exactly. The import gate would happily pass a resolver
+  // that reached for `node:path` and joined the key onto the project root,
+  // because `node:path` is not a gated module — so the reach is denied by
+  // naming the whole list rather than by grepping for function names. Every
+  // entry here is a pure render or domain module; none of them can read a
+  // directory, and `./page.ts` reaches `node:path` only for `basename` and
+  // `isAbsolute` on a string it is handed.
+  assert.deepEqual(
+    await importSpecifiersIn(REPO_ROOT, 'src/render/artifact.ts'),
+    [
+      '../domain/identity.ts',
+      '../domain/url.ts',
+      './components.ts',
+      './html.ts',
+      './inventory.ts',
+      './page.ts',
+    ],
+    'a new import here is how a resolver would grow a filesystem reach',
+  );
+  assert.doesNotMatch(
+    scanSource(await readFile(join(REPO_ROOT, 'src', 'render', 'artifact.ts'), 'utf8')).code,
+    /\bnode:|\brequire\b|getBuiltinModule/,
+    'and the resolver names no Node built-in, not even through a global',
+  );
+});
+
+test('the document shell is reachable only from the render layer, which is its safety claim', async () => {
+  // Finding from review round 1. `documentShell` emits `main` **verbatim** and
+  // its docblock stakes that on "every caller is inside `src/render/` … Nothing
+  // outside this layer can reach it" — a claim nothing checked, while every
+  // comparable claim in this repository is held by an importer set. Exported
+  // from a module the HTTP adapter already imports, one `import { documentShell }`
+  // in the adapter would have made it a verbatim-HTML sink reachable from the
+  // transport layer, with the docblock still asserting the opposite.
+  assert.deepEqual(
+    await importersOf(REPO_ROOT, 'src/render/page.ts'),
+    ['src/adapters/http/server.ts', 'src/render/artifact.ts'],
+    'the adapter takes the Dashboard page; the artifact view takes the shell',
+  );
+  assert.deepEqual(
+    await namedImportsIn(REPO_ROOT, 'src/adapters/http/server.ts', '../../render/page.ts'),
+    ['renderPage'],
+    'the adapter takes a rendered document and may not compose one',
+  );
+  assert.deepEqual(
+    await namedImportsIn(REPO_ROOT, 'src/render/artifact.ts', './page.ts'),
+    ['documentShell'],
+    'and the second surface takes the shell, not the first surface',
+  );
 });
 
 test('the two most-coupled adapter modules have stated importer sets', async () => {

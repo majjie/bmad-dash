@@ -88,6 +88,11 @@ test('two paths that a sanitizer would collapse keep two distinct URLs', () => {
   const urls = paths.map(artifactUrl);
   assert.equal(new Set(urls).size, 3, `three paths, ${String(new Set(urls).size)} URLs: ${urls.join(' ')}`);
   for (const path of paths) assert.equal(pathOf(artifactUrl(path)), path);
+  // And the parse is one-to-one the other way too, so one artifact has one
+  // address: the only alias the grammar admits is a trailing slash, which the
+  // matrix asks for by name.
+  const keys = ['/artifact/a/b', '/artifact/a%2fb', '/artifact/a//b', '/artifact/a/./b'].map(pathOf);
+  assert.deepEqual(keys, ['a/b', undefined, undefined, 'a/b'], 'only `.` is an alias, not `%2f`');
 });
 
 test('a segment spelling the section marker is escaped, so the grammar stays unambiguous', () => {
@@ -149,7 +154,7 @@ test('a malformed percent escape is a miss, not a throw', () => {
   // would reach the request handler as a 500 for what is a bad address.
   for (const url of ['/artifact/%zz', '/artifact/%', '/artifact/%e0%a4', '/artifact/a/%ed%a0%80']) {
     assert.doesNotThrow(() => parseArtifactUrl(url));
-    assert.equal(parseArtifactUrl(url)?.path ?? undefined, undefined, url);
+    assert.equal(parseArtifactUrl(url), undefined, url);
   }
   assert.equal(parseArtifactUrl('/artifact/docs/prd.md/section/%zz'), undefined);
 });
@@ -157,15 +162,13 @@ test('a malformed percent escape is a miss, not a throw', () => {
 test('dot segments normalize per RFC 3986, in every encoding', () => {
   // The order is decode *then* normalize, and it is the order that makes these
   // agree: RFC 3986 treats `%2e%2e` as an ordinary segment, so a normalizer
-  // running first would pass it through untouched and hand `%2e%2e/etc` to the
+  // running first would pass it through untouched and hand `%2e%2e` to the
   // lookup as itself.
   assert.equal(pathOf('/artifact/a/../b'), 'b');
   assert.equal(pathOf('/artifact/a/./b'), 'a/b');
   assert.equal(pathOf('/artifact/a/b/../../c'), 'c');
   assert.equal(pathOf('/artifact/%2e%2e/%2e%2e/etc/passwd'), 'etc/passwd');
-  assert.equal(pathOf('/artifact/..%2f..%2fetc%2fpasswd'), 'etc/passwd');
-  assert.equal(pathOf('/artifact/%2e%2e%2fetc'), 'etc');
-  assert.equal(pathOf('/artifact/a%2f..%2fb'), 'b');
+  assert.equal(pathOf('/artifact/%2E/a'), 'a');
   // A `..` with nothing left to climb is dropped rather than refused: the
   // result is a lookup key, and a key that climbed past the root simply names
   // no row. What matters is that nothing outside the key space survives.
@@ -174,24 +177,87 @@ test('dot segments normalize per RFC 3986, in every encoding', () => {
   assert.equal(parseArtifactUrl('/artifact/a/..'), undefined);
 });
 
-test('no URL can name anything with a leading slash or a drive, whatever it spells', () => {
-  // The acceptance criterion, stated as a property over the shapes an attacker
-  // reaches for. None of these is *refused*; each simply produces a key, and a
-  // key is only ever compared against the snapshot's rows.
+test('a traversal squeezed into one segment is refused, not decoded into grammar', () => {
+  // The other half of decoding *per segment*. `..%2f..%2fetc%2fpasswd` is one
+  // URL segment, so it cannot become three: it decodes to a name containing the
+  // one character a filename cannot contain, which is a shape no walk entry
+  // has, and is refused. Decoding the joined path instead would have split it
+  // into `.. .. etc passwd` and normalized it to the key `etc/passwd` — safe by
+  // luck, since that names no row either, but it means a percent escape
+  // manufacturing grammar after the grammar was parsed.
   for (const url of [
+    '/artifact/..%2f..%2fetc%2fpasswd',
+    '/artifact/%2e%2e%2fetc',
+    '/artifact/%2e%2e%2f%2e%2e%2fetc%2fpasswd',
     '/artifact/%2fetc%2fpasswd',
-    '/artifact/%2e%2e%2f%2e%2e%2f%2e%2e%2fetc%2fpasswd',
-    '/artifact/....//etc/passwd',
-    '/artifact/%252e%252e%252fetc',
+    '/artifact/a%2f..%2fb',
+    '/artifact/a%2fb',
   ]) {
-    const path = pathOf(url);
-    assert.notEqual(path, undefined, `${url} produced no key at all`);
-    assert.ok(path !== undefined && !path.startsWith('/'), `${url} produced ${String(path)}`);
+    assert.equal(parseArtifactUrl(url), undefined, `${url} must name no artifact`);
   }
+  // An empty segment is refused on the same grounds, so `a//b` is not a
+  // second address for `a/b`.
+  assert.equal(parseArtifactUrl('/artifact/a//b'), undefined);
+  assert.equal(parseArtifactUrl('/artifact//a'), undefined);
+  assert.notEqual(pathOf('/artifact/a/b'), undefined);
+});
+
+test('every key is structurally a project-relative path, whatever the URL spelled', () => {
+  // The safety property, stated as an invariant over the key space rather than
+  // as a list of blocked inputs. Split a key on `/` and every segment is
+  // non-empty and is neither `.` nor `..` — dot segments normalized away, and
+  // the two shapes that could have survived as literals refused. That is what
+  // stops a key climbing even in the hands of a future consumer that mistakes
+  // it for a path, which is the one thing this module's callers must not do.
+  const hostile = [
+    '/artifact/../../etc/passwd',
+    '/artifact/%2e%2e/%2e%2e/etc/passwd',
+    '/artifact/..%2f..%2fetc%2fpasswd',
+    '/artifact/%2fetc%2fpasswd',
+    '/artifact/....//....//etc/passwd',
+    '/artifact/%252e%252e%252fetc%252fpasswd',
+    '/artifact/C%3a%5cWindows%5cSystem32',
+    '/artifact/%5c%5cserver%5cshare',
+    '/artifact/a/%00/b',
+    '/artifact/.%2e/.%2e/etc',
+    artifactUrl('docs/a b/c#d.md'),
+  ];
+  let keyed = 0;
+  for (const url of hostile) {
+    const path = pathOf(url);
+    if (path === undefined) continue;
+    keyed += 1;
+    for (const segment of path.split('/')) {
+      assert.notEqual(segment, '', `${url} keyed an empty segment: ${path}`);
+      assert.notEqual(segment, '.', `${url} kept a dot segment: ${path}`);
+      assert.notEqual(segment, '..', `${url} kept a climb: ${path}`);
+    }
+  }
+  // Not vacuous: several of these do produce keys, and the invariant is about
+  // those rather than about everything being refused.
+  assert.ok(keyed >= 4, `only ${String(keyed)} of these produced a key at all`);
+});
+
+test('a Windows drive or UNC spelling is one segment naming one file, not a path', () => {
+  // The case the previous title claimed and the body never carried. A backslash
+  // is a legal character in a POSIX filename, so it is *not* refused and is
+  // *never* a separator: what comes back is a single segment, which is the key
+  // for a file called `C:\Windows\System32` — a file this project does not
+  // contain, so it 404s like any other unknown name.
+  assert.equal(pathOf('/artifact/C%3a%5cWindows%5cSystem32'), 'C:\\Windows\\System32');
+  assert.equal(pathOf('/artifact/%5c%5cserver%5cshare'), '\\\\server\\share');
+  assert.equal(pathOf('/artifact/C%3a%5cWindows%5cSystem32')?.split('/').length, 1);
+  // And a backslash survives a round trip like any other legal character, so
+  // an artifact genuinely called that is still addressable.
+  assert.equal(pathOf(artifactUrl('docs/back\\slash.md')), 'docs/back\\slash.md');
+});
+
+test('a percent that is part of a name decodes once, never twice', () => {
   // `%252e` is a *literal* `%2e` in a filename, not a second-round dot segment:
-  // one decode, never two, or a name containing a percent could smuggle a
-  // traversal past the normalizer.
+  // one decode, or a name containing a percent could smuggle a traversal past
+  // the normalizer.
   assert.equal(pathOf('/artifact/%252e%252e%252fetc'), '%2e%2e%2fetc');
+  assert.equal(pathOf(artifactUrl('docs/100%.md')), 'docs/100%.md');
 });
 
 test('a trailing slash names the same resource as none', () => {

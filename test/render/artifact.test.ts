@@ -31,14 +31,24 @@ import {
 } from '../../src/render/artifact.ts';
 import { UNPLACED_TILE_LABEL, type InventoryView } from '../../src/render/inventory.ts';
 import { FAMILY_LABELS } from '../../src/domain/identity.ts';
-import { PAGE_TITLE } from '../../src/render/page.ts';
-import { REFRESH_HREF, SIGNAL_NOT_CHECKED } from '../../src/render/chrome.ts';
-import { allLevelsTried, UNINTERPRETED } from '../../src/render/inventory.ts';
+import { PAGE_TITLE, renderPage } from '../../src/render/page.ts';
+import { DASHBOARD_HREF, SIGNAL_NOT_CHECKED } from '../../src/render/chrome.ts';
+import {
+  NO_DATE_IN_NAME,
+  REUSE_ACCIDENTAL,
+  REUSE_DELIBERATE,
+  RUN_MAY_HOLD_SEVERAL,
+  UNINTERPRETED,
+  allLevelsTried,
+} from '../../src/render/inventory.ts';
+import { escapeHtml } from '../../src/render/html.ts';
+import { artifactUrl } from '../../src/domain/url.ts';
 import { canonical } from '../../src/adapters/fs/paths.ts';
 import { snapshotIdOf } from '../../src/cli/index.ts';
 import {
   AMBIGUOUS_BOTH_ROW,
   CERTAIN_ROW,
+  DELIBERATE_RUN_ROW,
   FULL_INVENTORY_VIEW,
   HOSTILE_NAME,
   HOSTILE_PATH,
@@ -145,7 +155,14 @@ test('the shell is a whole document: head, chrome, one h1, one main', () => {
   assert.ok(page.includes('<header class="project-header">'));
   assert.ok(page.includes(PROJECT_ROOT), 'the header names the project that is open');
   assert.ok(page.includes(`${'Git:'} ${SIGNAL_NOT_CHECKED}`), 'the chrome signal comes with it');
-  assert.ok(page.includes(`href="${REFRESH_HREF}"`), 'and so does the refresh control');
+  // And the refresh control re-requests *this* artifact rather than the
+  // Dashboard: `EXPERIENCE.md:161` forbids replacing the current surface under
+  // the reader, and `:153` gives this surface "stays on its snapshot".
+  assert.ok(
+    page.includes(`class="project-refresh" href="${artifactUrl(CERTAIN_ROW.path)}"`),
+    'the refresh control points at the artifact, not at the Dashboard',
+  );
+  assert.ok(!page.includes(`class="project-refresh" href="${DASHBOARD_HREF}"`));
   assert.equal((page.match(/<h1>/g) ?? []).length, 1, 'one h1 per surface');
   assert.ok(page.includes(`<h1>${ARTIFACT_SURFACE_TITLE}</h1>`));
   assert.equal((page.match(/<main>/g) ?? []).length, 1);
@@ -167,6 +184,67 @@ test('the page states exactly what the inventory row states about the artifact',
   const unreadable = pageFor(FULL_INVENTORY_VIEW, '_bmad-output/planning-artifacts/prds/binary.md');
   assert.ok(unreadable.includes('Content: Unreadable'));
   assert.ok(unreadable.includes('<code class="artifact-stage">decode</code>'));
+});
+
+/** Every state cell in a fragment, in document order: the row's facts as markup. */
+function factCells(html: string): readonly string[] {
+  return [...html.matchAll(/<span class="artifact-(?:type|state|note)">[\s\S]*?<\/span>/g)].map(
+    (match) => match[0],
+  );
+}
+
+test('a run folder page carries the run sentences, not only its path', () => {
+  // **Finding from Story 2.1a's review round.** Every row this file rendered had
+  // `runFacts: []`, and the one server test touching a run row asserted only
+  // status and path — so `renderArtifact` could have stopped calling
+  // `artifactFacts` altogether and shipped a run-folder page missing FR-71's
+  // disclosure, the reuse verdict and FR-72's dateless sentence, with the whole
+  // suite green. These are the facts a reader opening a run folder most needs.
+  const page = pageFor(FULL_INVENTORY_VIEW, DELIBERATE_RUN_ROW.path);
+  assert.ok(page.includes(RUN_MAY_HOLD_SEVERAL), "FR-71's disclosure");
+  assert.ok(page.includes(REUSE_DELIBERATE), 'and which way the reuse goes');
+  assert.ok(page.includes(NO_DATE_IN_NAME), "and FR-72's dateless pair");
+  // The other direction of the reuse distinction, so this cannot pass by the
+  // page carrying one fixed sentence.
+  const accidental = pageFor(FULL_INVENTORY_VIEW, '_bmad-output/planning-artifacts/prds/prd-z-2026-08-30');
+  assert.ok(accidental.includes(REUSE_ACCIDENTAL));
+  assert.ok(!accidental.includes(REUSE_DELIBERATE));
+});
+
+test('every fact the Dashboard row shows, the artifact page shows too — and no other', () => {
+  // The module header claims sharing `artifactFacts` makes a divergent account
+  // of one artifact "a failing test rather than a bug report". This is that
+  // test, and it is a cross-check between two *renders* rather than two calls to
+  // the same function: the cells are extracted from the Dashboard's markup and
+  // from the artifact page's markup and compared as sequences, so dropping a
+  // fact from either surface, reordering them, or rendering one of them
+  // differently all fail here.
+  const dashboard = renderPage(PROJECT_ROOT, FULL_INVENTORY_VIEW);
+  const rows = [...dashboard.matchAll(/<li class="artifact-row">([\s\S]*?)<\/li>/g)].map(
+    (match) => match[1] ?? '',
+  );
+  assert.ok(rows.length > 5, `only ${String(rows.length)} rows on the Dashboard`);
+
+  let compared = 0;
+  for (const group of FULL_INVENTORY_VIEW.groups) {
+    for (const row of group.rows) {
+      const onDashboard = rows.find((markup) => markup.includes(`>${escapeHtml(row.path)}</code>`));
+      assert.ok(onDashboard !== undefined, `${row.path} has no row on the Dashboard`);
+      assert.deepEqual(
+        factCells(pageFor(FULL_INVENTORY_VIEW, row.path)),
+        factCells(onDashboard ?? ''),
+        `the two surfaces disagree about ${row.path}`,
+      );
+      compared += 1;
+    }
+  }
+  // Not vacuous, and it covers every shape the fixture carries — run facts,
+  // ambiguity, unreadable, absent, unidentified.
+  assert.equal(compared, FULL_INVENTORY_VIEW.artifactCount);
+  assert.ok(
+    factCells(pageFor(FULL_INVENTORY_VIEW, DELIBERATE_RUN_ROW.path)).length >= 4,
+    'and at least one compared row carries more than a type and a state',
+  );
 });
 
 test('the tile is labelled by the family the row was placed under', () => {

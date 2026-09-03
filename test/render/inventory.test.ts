@@ -55,7 +55,7 @@ import {
 } from '../../src/render/inventory.ts';
 import { tileGrid } from '../../src/render/components.ts';
 import { renderPage } from '../../src/render/page.ts';
-import { fillIndexString } from '../../src/render/html.ts';
+import { escapeHtml, fillIndexString } from '../../src/render/html.ts';
 import {
   CONFIDENCE_LABELS,
   FAMILIES,
@@ -89,6 +89,7 @@ import {
   FULL_INVENTORY_VIEW,
   HOSTILE_NAME,
   HOSTILE_PATH,
+  SECTION_NAMED_ROW,
   UNIDENTIFIED_ROW,
   UNINTERPRETED_ROW,
 } from '../support/inventory.ts';
@@ -1348,7 +1349,19 @@ test('a bound reached is reported: the page says the scan did not finish', () =>
   assert.equal((stopped.match(/tile-raised/g) ?? []).length, 1);
   // A complete pass still reports, so "nothing was flagged" is not silence.
   const finished = render(FULL_INVENTORY_VIEW);
-  assert.ok(finished.includes('The scan finished. Artifacts examined: 11.'));
+  // The count comes from the fixture rather than a literal restating it: a row
+  // added to the shared fixture is a change to what the surface renders, not a
+  // reason to edit a number in a test about completeness.
+  assert.ok(
+    finished.includes(`The scan finished. Artifacts examined: ${String(FULL_INVENTORY_VIEW.artifactCount)}.`),
+  );
+  // And the fixture's own count agrees with the rows it holds, so the sentence
+  // cannot be right about a number that is wrong about the project.
+  assert.equal(
+    FULL_INVENTORY_VIEW.artifactCount,
+    FULL_INVENTORY_VIEW.groups.reduce((total, group) => total + group.rows.length, 0),
+    'the fixture must count the rows it actually carries',
+  );
   assert.ok(!finished.includes('tile-raised'), 'a finished scan is not the thing to see first');
 });
 
@@ -1652,7 +1665,12 @@ test('following a link the page emits resolves to the row that emitted it', () =
     assert.ok(target !== undefined, `${href} does not parse as an artifact URL`);
     const found = findArtifact(FULL_INVENTORY_VIEW, target?.path ?? '');
     assert.ok(found !== undefined, `${href} parsed to ${String(target?.path)}, which is no row`);
-    assert.ok(html.includes(`>${escapedPath(found?.row.path ?? '')}</code>`), 'and to the row shown');
+    // `escapeHtml` rather than a second implementation of it here: this
+    // assertion is about the *link* resolving to the row that is shown, and a
+    // hand-rolled escaper beside the one under test is two copies of one belief
+    // where a matching mistake in both passes. `test/render/html.test.ts` owns
+    // whether the escaping itself is right.
+    assert.ok(html.includes(`>${escapeHtml(found?.row.path ?? '')}</code>`), 'and to the row shown');
   }
   // Named specifically, so this cannot pass over a fixture that lost its
   // hostile row: the one path here that needs encoding is the one that would
@@ -1662,15 +1680,46 @@ test('following a link the page emits resolves to the row that emitted it', () =
   assert.ok(!linked.some((href) => href.includes('<')), 'and none carries a raw angle bracket');
 });
 
-/** A path as the surface writes it inside `<code>`: HTML-escaped, nothing else. */
-function escapedPath(path: string): string {
-  return path
-    .replaceAll('&', '&amp;')
-    .replaceAll('<', '&lt;')
-    .replaceAll('>', '&gt;')
-    .replaceAll('"', '&quot;')
-    .replaceAll("'", '&#39;');
-}
+test('a row whose path the grammar cannot address costs its link, not the surface', () => {
+  // **Finding from Story 2.1a's review round.** `artifactUrl` throws for a path
+  // no `WalkEntry.relative` can carry — and it is called once per openable row
+  // while the Dashboard renders — so one malformed path anywhere in a project
+  // turned a 200 into a 500 for *every* row on the page. The row now renders
+  // unlinked, which is the treatment an unidentified row already gets, and is
+  // AD-7's "never fatal to its neighbours" applied to a link.
+  for (const bad of ['', '/absolute/prd.md', 'docs//prd.md', 'docs/../prd.md', 'docs/./prd.md', '.']) {
+    assert.throws(() => artifactUrl(bad), `${bad} must still be refused by the grammar`);
+    const view = viewOf({
+      groups: [{ family: 'prd', rows: [{ ...CERTAIN_ROW, path: bad }, CERTAIN_ROW], notes: [] }],
+    });
+    const html = render(view);
+    // The surface still renders, and the good row beside it still links.
+    assert.ok(html.includes(`href="${artifactUrl(CERTAIN_ROW.path)}"`), `the neighbour survives ${bad}`);
+    // The bad row is present and unlinked — never dropped, which would be the
+    // other way to keep the page alive and the one AD-7 forbids.
+    const rows = rowMarkup(html);
+    assert.equal(rows.length, 2, `both rows must render for ${bad}`);
+    const carrying = rows.filter((row) => !row.includes('<a '));
+    assert.equal(carrying.length, 1, `exactly one unlinked row for ${bad}`);
+    assert.equal(hrefs(html).length, 1, `and exactly one link for ${bad}`);
+  }
+});
+
+test('a path segment spelling the section marker links to an escaped URL that comes back', () => {
+  // The grammar's most delicate rule, exercised through the surface rather than
+  // only through `test/domain/url.test.ts`: a directory genuinely called
+  // `section` would, unescaped, make this row's URL read as artifact `…/prds`
+  // with section `prd.md`.
+  const html = render(FULL_INVENTORY_VIEW);
+  const href = artifactUrl(SECTION_NAMED_ROW.path);
+  assert.ok(href.includes('/%73ection/'), `the marker must be escaped: ${href}`);
+  assert.ok(html.includes(`href="${href}"`), 'and the page links the escaped form');
+  assert.ok(!html.includes(`href="/artifact/${SECTION_NAMED_ROW.path}"`), 'never the bare form');
+  const target = parseArtifactUrl(href);
+  assert.equal(target?.path, SECTION_NAMED_ROW.path, 'and it round-trips to this row');
+  assert.equal(target?.section, undefined, 'as an artifact, not as a section of another');
+  assert.equal(findArtifact(FULL_INVENTORY_VIEW, target?.path ?? '')?.row, SECTION_NAMED_ROW);
+});
 
 test('an unidentified row occupies a row, carries no link, and is never hidden', () => {
   // `EXPERIENCE.md:183`, in three clauses, each of which is a separate way to
@@ -1719,11 +1768,27 @@ test('every linked row takes focus in document order and opens with Enter', () =
   //    wrapping the whole row buys: an anchor's name is its text content, so a
   //    screen-reader user hears the path *and* what the tool knows about it.
   //    `EXPERIENCE.md:226` requires exactly that.
+  //
+  //    **Asserted as the exact expected name, not as four `includes` calls.**
+  //    The first version stripped tags by replacing each with a *space*, which
+  //    the DOM does not do — so the run-together concatenation this module's own
+  //    header warns about (`prdsFamily directoryNot checked`) would have
+  //    satisfied every one of those `includes` and the assertion could not fail
+  //    for the thing it claimed. Tags are stripped to nothing here, so what is
+  //    left is the text a browser would compute, and it is compared whole.
   const named = linked.find((row) => row.includes(UNINTERPRETED_ROW.path));
   assert.ok(named !== undefined);
-  const text = (named ?? '').replace(/<[^>]*>/g, ' ');
-  assert.ok(text.includes(UNINTERPRETED_ROW.path), 'the name includes the path');
-  assert.ok(text.includes(UNINTERPRETED), 'and the state the row reports');
+  const text = (named ?? '').replace(/<[^>]*>/g, '');
+  assert.equal(
+    text,
+    [
+      UNINTERPRETED_ROW.path,
+      SHAPE_LABELS.unknown,
+      `${CONTENT_SIGNAL_LABEL} ${SIGNAL_LABELS.unchecked}`,
+      UNINTERPRETED,
+    ].join('\n'),
+    'the accessible name is the path and every state the row reports, separated by real whitespace',
+  );
 });
 
 test('over this repository, every linked row resolves and the unidentified ones are not links', async (t) => {

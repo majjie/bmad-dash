@@ -2,7 +2,7 @@
 title: 'Open an artifact at its own URL'
 type: 'feature'
 created: '2026-09-03'
-status: 'in-progress'
+status: 'in-review'
 baseline_commit: '6c8922cf4e28c45b58a8a94a27723313c5be3bd6'
 review_loop_iteration: 0
 context: []

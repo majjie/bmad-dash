@@ -25,7 +25,7 @@ import {
   SIGNAL_NOT_CHECKED,
   GIT_SIGNAL_LABEL,
   REFRESH_LABEL,
-  REFRESH_HREF,
+  DASHBOARD_HREF,
 } from '../../src/render/chrome.ts';
 
 const EXPERIENCE_PATH = join(
@@ -82,12 +82,12 @@ test('the header strings follow the index conventions for their shape', () => {
 // ---------------------------------------------------------------------------
 
 test('the header is a banner carrying the four elements this story owns', () => {
-  const html = projectHeader(PROJECT_ROOT);
+  const html = projectHeader(PROJECT_ROOT, DASHBOARD_HREF);
   assert.match(html, /^<header class="project-header">/);
   assert.ok(html.includes('<p class="project-name">bmad-dash-test-project</p>'), 'the name');
   assert.ok(html.includes(`<code class="project-path">${PROJECT_ROOT}</code>`), 'the full path');
   assert.ok(html.includes(`${GIT_SIGNAL_LABEL} ${SIGNAL_NOT_CHECKED}`), 'the git signal');
-  assert.ok(html.includes(`href="${REFRESH_HREF}"`), 'the refresh control');
+  assert.ok(html.includes(`href="${DASHBOARD_HREF}"`), 'the refresh control');
   assert.ok(html.includes(`>${REFRESH_LABEL}</a>`));
   assert.ok(html.endsWith('</header>'));
 });
@@ -96,7 +96,7 @@ test('the path is shown in full, not truncated or abbreviated', () => {
   // A shortened path is a path the reader cannot check, and checking is the
   // whole point of showing it.
   const deep = '/home/someone/work/clients/acme/services/api/bmad-workspace';
-  const html = projectHeader(deep);
+  const html = projectHeader(deep, DASHBOARD_HREF);
   assert.ok(html.includes(deep), 'the whole path must appear');
   assert.ok(!html.includes('…') && !html.includes('...'), 'no elision');
 });
@@ -105,13 +105,13 @@ test('the git signal is present and unexamined, not absent', () => {
   // A signal missing from the page is indistinguishable from a signal that does
   // not exist. Telling those apart is why the four-state vocabulary exists, so
   // the deferred probe must still occupy its place.
-  const html = projectHeader(PROJECT_ROOT);
+  const html = projectHeader(PROJECT_ROOT, DASHBOARD_HREF);
   assert.ok(html.includes(SIGNAL_NOT_CHECKED));
   assert.ok(!/\bPresent\b|\bNot found\b|\bUnreadable\b/.test(html), 'it must claim no verdict');
 });
 
 test('the refresh control is a link, and the header carries no script', () => {
-  const html = projectHeader(PROJECT_ROOT);
+  const html = projectHeader(PROJECT_ROOT, DASHBOARD_HREF);
   assert.match(html, /<a class="project-refresh" href="\/">/);
   assert.doesNotMatch(html, /<script|onclick|on[a-z]+=/i, 'refresh is navigation, not script');
   assert.doesNotMatch(html, /<button/i, 'a page load is the refresh; there is nothing to submit');
@@ -123,7 +123,7 @@ test('the refresh control is a link, and the header carries no script', () => {
 
 test('a blank root fails loudly rather than rendering a nameless project', () => {
   for (const bad of ['', '   ', '\n']) {
-    assert.throws(() => projectHeader(bad), /needs the resolved project root/);
+    assert.throws(() => projectHeader(bad, DASHBOARD_HREF), /needs the resolved project root/);
   }
 });
 
@@ -131,13 +131,13 @@ test('a relative root fails loudly, naming what it got', () => {
   // A cwd-relative root would be resolved differently by every later story,
   // depending on what directory happened to be current.
   for (const bad of ['.', './project', 'project', '../sibling']) {
-    assert.throws(() => projectHeader(bad), /must be absolute/);
-    assert.throws(() => projectHeader(bad), new RegExp(bad.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+    assert.throws(() => projectHeader(bad, DASHBOARD_HREF), /must be absolute/);
+    assert.throws(() => projectHeader(bad, DASHBOARD_HREF), new RegExp(bad.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
   }
 });
 
 test('a filesystem root is named by its path, since it has no final segment', () => {
-  const html = projectHeader('/');
+  const html = projectHeader('/', DASHBOARD_HREF);
   assert.ok(html.includes('<p class="project-name">/</p>'), 'never a blank name');
   assert.ok(html.includes('<code class="project-path">/</code>'));
 });
@@ -146,7 +146,7 @@ test('a path carrying markup is escaped, so a directory name cannot inject', () 
   // Nothing stops a repository from containing a directory called `"><script>`,
   // and the tool is pointed at projects the user did not necessarily write.
   const hostile = '/tmp/"><script>alert(1)</script>';
-  const html = projectHeader(hostile);
+  const html = projectHeader(hostile, DASHBOARD_HREF);
   assert.ok(!html.includes('<script>'), 'the path must not reach the document as markup');
   assert.ok(html.includes('&lt;script&gt;'), 'it is shown, escaped, rather than dropped');
   assert.ok(html.includes('&quot;'), 'the quote is escaped, not stripped');
@@ -168,7 +168,7 @@ test('a path carrying markup is escaped, so a directory name cannot inject', () 
 
 test('rendering is pure: the same root twice gives the same header', () => {
   // A page load is a refresh, so nothing may carry across one.
-  assert.equal(projectHeader(PROJECT_ROOT), projectHeader(PROJECT_ROOT));
+  assert.equal(projectHeader(PROJECT_ROOT, DASHBOARD_HREF), projectHeader(PROJECT_ROOT, DASHBOARD_HREF));
 });
 
 test('the render layer invokes nothing: no git, no subprocess, no filesystem', async () => {
