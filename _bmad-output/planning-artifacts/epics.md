@@ -430,15 +430,37 @@ So that I am never shown two halves of two different states and cannot tell.
 
 ### Story 2.1a: Open an artifact at its own URL
 
-*The original Story 2.1, carrying its title, FR-18 and its URL and rendering decisions. Built after 2.1 because its rendering cache keys to that story's snapshot identity. Recorded here rather than tracked only in sprint status — the Epic 1 retrospective (item 7) found that 1.6a was built and tracked while never appearing in this file.*
+*Split three ways on 2026-09-03 by user decision, at the build workflow's multi-goal checkpoint — see 2.1b and 2.1c below. The three sit in different risk classes: URL identity and sanitization here, a bundled parser and injection defence in 2.1b, cache coherence in 2.1c. Epic 1's retrospective recorded that pairing risk classes in one review round produced three consecutive `bad_spec` loops, and Story 2.1 — a single concern — still took two.*
 
 As a practitioner who found something in the inventory,
-I want to open it and read it in the tool,
-So that I do not have to leave for my editor just to look.
+I want to reach it at its own address and get back to it later,
+So that I can link to it, reload it, and use the back button like any other page.
 
-**Satisfies:** FR-18 · AD-2, AD-3 (the render-cache half), AD-18 · UX-DR15
+**Satisfies:** AD-18 · NFR-17 (the URL half) · UX-DR15 (the Artifact view surface, reachable by URL)
 
-**Done when:** an artifact is reachable at a stable URL that survives reload; its content is HTML produced on the server, with the client only enhancing delivered markup; and the rendering parse happens on first open and is cached for the life of the snapshot Story 2.1 introduced. **AD-18's division-independence is not verifiable here** — a section URL that resolves identically whether a document arrived whole or sharded cannot be tested until sharding exists in Stories 2.9–2.11, so this story defines the grammar and 2.11 is where that half is asserted; a claim of AD-18 satisfied in full would be the unenforceable-mechanism defect the Epic 1 retrospective found seven times.
+**Done when:** the URL grammar for artifacts and their sections is defined once and owned by the server; an artifact is reachable at a stable URL that survives reload, with browser back and forward working because no client router owns it; every content-derived segment that reaches a URL is sanitized by rules written for URLs rather than reused from the filesystem — percent-encoding, dot-segment normalization and `..` all differ, which is why the two halves of NFR-17 were never one piece of code; inventory rows are real links, so the surface is keyboard-operable natively and gets the project's first keyboard test; and a URL naming an artifact the snapshot does not hold is answered honestly rather than with a blank page. **AD-18's division-independence is not verifiable here** — a section URL resolving identically whether a document arrived whole or sharded cannot be tested until sharding exists in 2.9–2.11, so this story defines the grammar and 2.11 asserts that half.
+
+### Story 2.1b: Show an artifact's content, safely
+
+As a practitioner who opened an artifact,
+I want to read its content in the page,
+So that I do not leave for my editor just to look.
+
+**Satisfies:** AD-2 · NFR-17 (continues) — and **founds** FR-18 without satisfying it, see below
+
+**FR-18 is deliberately not claimed here.** It requires each artifact type to be rendered "by a viewer designed for its shape, **not by a generic markdown renderer**", and a generic renderer is exactly what this story ships. That is correct as a *fallback* for types whose viewer does not exist yet, and FR-18 is satisfied progressively as Stories 2.4–2.8 replace it per type (FR-19 to FR-23). Claiming FR-18 satisfied here would be the unenforceable-claim defect the Epic 1 retrospective found seven times; the original Story 2.1 carried that claim and it was wrong then too.
+
+**Done when:** an artifact's content is HTML produced on the server, with the client enhancing delivered markup only and never assembling content; the markdown parser is a **bundled** dependency rather than an installed runtime one, following the measured precedent already recorded for `yaml`; and the response carries hardening headers and a Content-Security-Policy. The headers are not optional dressing here: until now the page has been safe *structurally*, because every interpolated value is escaped and raw strings are refused outright, and rendering markdown is precisely what ends that guarantee — so the story that first emits raw markup is the story that owes the defence.
+
+### Story 2.1c: Parse each document once per snapshot
+
+As a practitioner rereading a long document,
+I want the page back without the tool redoing work it already did,
+So that reading does not get slower the longer the document is.
+
+**Satisfies:** AD-3 (the render-cache half)
+
+**Done when:** the rendering parse happens on first open and is cached for the life of the snapshot identity Story 2.1 introduced, and is discarded with it; a repeat load of an unchanged project reuses the parse rather than redoing it; and any change to the project invalidates the cache, which follows from the identity being content-derived. Note what this does **not** fix: every page load is still a full scan, because refresh is Epic 3 and AD-3's bounded-work limit is deferred — so a repeat load skips the parse and still pays the walk.
 
 ### Story 2.2: Know when what you are reading has moved
 
