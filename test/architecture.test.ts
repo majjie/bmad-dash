@@ -1070,6 +1070,13 @@ test('the snapshot identity has a stated importer set, like every other domain m
   // would mean something else had started deriving an identity of its own,
   // which is the AD-4 mistake — one authority, consumed everywhere — applied to
   // snapshots rather than to identification.
+  //
+  // **Shipped source only, and that is what makes the set exactly two.**
+  // `importersOf` walks `SCANNED_ROOTS` — `src`, `web` and `scripts` — so the
+  // test-support fixtures that import `digestOf` to stamp a fixed id
+  // (`test/support/cli.ts`, `test/support/inventory.ts`) are invisible to it,
+  // as is every test file. The rule constrains what ships, not what the suite
+  // is allowed to reach for.
   assert.deepEqual(
     await importersOf(REPO_ROOT, 'src/domain/snapshot.ts'),
     ['src/cli/index.ts', 'src/render/inventory.ts'],

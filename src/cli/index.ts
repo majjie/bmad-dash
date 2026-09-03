@@ -472,7 +472,7 @@ export function projectInventory(inventory: Inventory): InventoryView {
     aliases: inventory.aliases.map(aliasReport),
     groups,
   };
-  return { ...content, snapshotId: snapshotIdOf(content) };
+  return { ...content, snapshotId: snapshotIdOf(inventory.root, content) };
 }
 
 /**
@@ -488,17 +488,26 @@ export type ViewContent = Omit<InventoryView, 'snapshotId'>;
  * The view's own identity (AD-17), derived from the facts this projection just
  * built rather than minted.
  *
- * **The whole view, every field except the identity itself, and not a chosen
- * subset.** `src/render/inventory.ts` is a pure function of the view, so
- * digesting all of the view is what makes "anything that changes what is
- * rendered changes the id" true *by construction*. Iteration 1 of this story
- * enumerated three per-row fields plus three scalars and argued the rest never
- * reached the page. That argument was false — an ambiguous verdict's second
- * reading, the run facts, the aliases, `readability.stage`, the interpretation
- * state, a group's notes and a group's family all render — and, worse, nothing
- * failed when the digest's input was reduced to the artifact count alone. An
- * enumeration also has to be re-audited every time the view gains a field, and
- * a skipped audit is silent. A structural walk carries no such obligation.
+ * **Everything `renderPage` is given, and not a chosen subset of it.**
+ * `renderPage(root, view)` is a pure function of exactly two arguments, so
+ * digesting both is what makes "anything that changes what is rendered changes
+ * the id" true *by construction*. Iteration 1 of this story enumerated three
+ * per-row fields plus three scalars and argued the rest never reached the page.
+ * That argument was false — an ambiguous verdict's second reading, the run
+ * facts, the aliases, `readability.stage`, the interpretation state, a group's
+ * notes and a group's family all render — and, worse, nothing failed when the
+ * digest's input was reduced to the artifact count alone. An enumeration also
+ * has to be re-audited every time the view gains a field, and a skipped audit
+ * is silent. A structural walk carries no such obligation.
+ *
+ * **The root is the second argument, and iteration 2 left it out.** It is not
+ * on the view — this projection drops `Inventory.root` — yet `renderPage`
+ * renders it as the project's name and its path (`src/render/chrome.ts`), so a
+ * digest over the view alone gave two projects at different paths with
+ * identical inventories one identity for two visibly different pages. The
+ * *canonical* root is what is folded in, while the page shows
+ * `toPlatform(root)`: that is a deterministic function of this one, so the two
+ * distinguish exactly the same roots.
  *
  * **The conservatism to accept.** Any change anywhere in the project changes
  * the id, so Story 2.1a's parse cache — which this identity is the key for —
@@ -507,12 +516,12 @@ export type ViewContent = Omit<InventoryView, 'snapshotId'>;
  * not make one.
  *
  * A thin wrapper over `digestOf` and deliberately so: it is the one place that
- * names *what* is digested, and it is exported so a test can build two views
+ * names *what* is digested, and it is exported so a test can build two pages
  * that render differently and compare their identities without going through a
  * filesystem that cannot produce such a pair on demand.
  */
-export function snapshotIdOf(content: ViewContent): SnapshotId {
-  return digestOf(content);
+export function snapshotIdOf(root: CanonicalPath, content: ViewContent): SnapshotId {
+  return digestOf({ root, view: content });
 }
 
 /**

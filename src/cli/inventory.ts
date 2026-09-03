@@ -678,24 +678,41 @@ function unfinishedListings(
  * one today, and a walk that silently ignored them would leave a mutable
  * branch behind if one appeared.
  *
- * **Two limits worth stating rather than discovering.** `Object.freeze` does
- * **not** make a `Map` or a `Set` immutable — `set`, `add`, `delete` and
- * `clear` all still work on a frozen one — so nothing in this graph may be
- * either, and today nothing is. And two values the recursion reaches are
- * *shared module singletons*: `UNREAD` and `LISTING_NOT_TEXT` from
- * `src/domain/signal.ts`, returned for every unread entry. Freezing the graph
- * is safe because those are already frozen where they are defined, not because
- * nothing here is shared.
+ * **A keyed collection is refused, not walked.** `Object.freeze` does **not**
+ * make a `Map` or a `Set` immutable — `set`, `add`, `delete` and `clear` all
+ * still work on a frozen one — so a graph holding one would be reported frozen
+ * while staying mutable through it. Saying "nothing here has one" in a comment
+ * is the same unenforced shape as the array hole `digestOf` had, so this
+ * throws instead. Nothing in `Inventory` holds one today, and the pass over
+ * this repository is what proves it.
+ *
+ * Two values the recursion reaches *are* shared module singletons: `UNREAD`
+ * and `LISTING_NOT_TEXT` from `src/domain/signal.ts`, returned for every
+ * unread entry. Freezing the graph is safe because those are already frozen
+ * where they are defined — asserted in `test/cli/inventory.test.ts` rather
+ * than assumed — not because nothing here is shared.
  *
  * A `WeakSet` of what has already been frozen guards a cycle turning this into
  * an infinite recursion, though nothing in `Inventory`'s shape is expected to
  * have one — every field here is a tree built fresh by this call, not a graph
  * with back-references. It doubles as a visit cache for the shared singletons
  * above, which are reached once per unread entry.
+ *
+ * **Exported for its own tests, and for nothing else.** It is reachable in
+ * production only through `takeInventory`, over a real tree — which cannot
+ * produce a getter, a symbol-keyed branch, a non-enumerable field or a cycle
+ * on demand, so every mechanism this doc block promises was unreachable by any
+ * assertion. Collapsing the body to `Object.values(value)` left the whole
+ * suite green. Nothing under `src/` imports it.
  */
-function deepFreeze<T>(value: T, seen: WeakSet<object> = new WeakSet()): T {
+export function deepFreeze<T>(value: T, seen: WeakSet<object> = new WeakSet()): T {
   if (value === null || typeof value !== 'object') return value;
   if (seen.has(value)) return value;
+  if (value instanceof Map || value instanceof Set || value instanceof WeakMap || value instanceof WeakSet) {
+    throw new Error(
+      'a snapshot cannot hold a Map or a Set: Object.freeze does not seal their contents',
+    );
+  }
   seen.add(value);
   Object.freeze(value);
   for (const key of Reflect.ownKeys(value)) {

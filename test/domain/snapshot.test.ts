@@ -88,6 +88,100 @@ test('a key name is part of the identity, not only its value', () => {
   assert.notEqual(digestOf({ complete: true }), digestOf({ certain: true }));
 });
 
+test('an array is held to the same refusal discipline as an object', () => {
+  // **The branch that was exempt, and every collision here was real.** An
+  // array is digested as its length then its elements in order, so anything
+  // the element walk cannot see is data that silently left the identity.
+  // Measured before this: `Object.assign([1], { x: 'hidden' })` digested
+  // identically to `[1]`, a `class Sub extends Array` digested identically to
+  // the plain array it was not, and `[, 1]` digested identically to
+  // `[undefined, 1]` — while the object branch was careful to keep
+  // `{ a: undefined }` distinct from `{}`.
+  assert.throws(() => digestOf(Object.assign([1], { x: 'hidden' })), /array property x/);
+  class Sub extends Array {}
+  const subclass = new Sub();
+  subclass.push(1);
+  assert.throws(() => digestOf(subclass), /Sub value/);
+  // A hole, refused rather than tagged: nothing in this tool produces a sparse
+  // array, and a tag would quietly imply the case was expected.
+  assert.throws(() => digestOf([, 1]), /sparse array/);
+  assert.match(digestOf([undefined, 1]), /^[0-9a-f]{16}$/, 'an explicit undefined is still fine');
+  // An index accessor, refused for the reason an object's is.
+  assert.throws(
+    () =>
+      digestOf(
+        Object.defineProperty([1], 0, {
+          get: () => 2,
+          configurable: true,
+        }),
+      ),
+    /accessor property 0/,
+  );
+  // And the plain array is untouched by all of it.
+  assert.match(digestOf([1, 'two', false]), /^[0-9a-f]{16}$/);
+});
+
+test('a refusal never runs anything to describe what it refused', () => {
+  // `value.constructor.name` was the obvious way to name the kind in the
+  // message, and it resolves `constructor` up the prototype chain — so it ran
+  // a getter, which this module promises never to do, and a `constructor`
+  // getter that threw replaced the refusal with an unrelated error that no
+  // caller could recognize as a refusal.
+  let reads = 0;
+  const watched = Object.create({
+    get constructor(): never {
+      reads += 1;
+      throw new Error('a getter ran while a refusal was being described');
+    },
+  }) as object;
+  Object.defineProperty(watched, 'kind', { value: new Map(), enumerable: true });
+
+  assert.throws(() => digestOf(watched), /no canonical form/);
+  assert.equal(reads, 0, 'the prototype’s constructor getter must not be invoked');
+});
+
+test('a symbol-keyed property is refused rather than dropped', () => {
+  // Not a variation on the row below: this is the one refusal whose `throw`
+  // could be replaced with `continue` and still typecheck, ship, and leave
+  // every other assertion in this file green — the property would simply fall
+  // out of the identity, silently.
+  assert.throws(() => digestOf({ [Symbol('hidden')]: 'value' }), /symbol-keyed property/);
+  assert.throws(() => digestOf({ visible: 1, [Symbol('hidden')]: 2 }), /symbol-keyed property/);
+});
+
+test('a non-enumerable own field is part of the identity', () => {
+  // The walk uses `Reflect.ownKeys`, not `Object.keys`, and this is what pins
+  // the difference: swapping in `Object.keys` leaves the accessor row below
+  // green — a literal getter is enumerable — while every non-enumerable own
+  // field drops out of the identity unnoticed.
+  const hidden = Object.defineProperty({ a: 1 }, 'b', { value: 2, enumerable: false });
+  assert.notEqual(digestOf(hidden), digestOf({ a: 1 }));
+  assert.equal(digestOf(hidden), digestOf({ a: 1, b: 2 }), 'and it is the field, not its visibility');
+});
+
+test('the documented numeric cases are what the digest actually does', () => {
+  // Three claims made in comments and asserted nowhere until now. `-0` folding
+  // onto `0` is deliberate — the two are `===`, so nothing downstream can tell
+  // them apart either — and the other two are the values `String` has a
+  // canonical spelling for.
+  assert.equal(digestOf(-0), digestOf(0), '-0 and 0 are one value here, on purpose');
+  assert.equal(digestOf(NaN), digestOf(NaN), 'NaN digests, and digests stably');
+  assert.notEqual(digestOf(NaN), digestOf('NaN'), 'and is not its own spelling as a string');
+  assert.equal(digestOf(Infinity), digestOf(Infinity));
+  assert.notEqual(digestOf(Infinity), digestOf(-Infinity));
+  assert.notEqual(digestOf(Infinity), digestOf(Number.MAX_VALUE));
+});
+
+test('a bigint digests by its decimal form, which is reserved surface rather than a used case', () => {
+  // No field of any view is a `bigint`; the branch exists because a `bigint`
+  // has a canonical decimal form, so refusing one would be arbitrary where
+  // refusing a `Map` is not. Pinned so it is neither dead code nor mistaken
+  // for a case the tool relies on.
+  assert.equal(digestOf(10n), digestOf(10n));
+  assert.notEqual(digestOf(10n), digestOf(10), 'a bigint is tagged apart from a number');
+  assert.notEqual(digestOf(10n), digestOf('10'), 'and apart from its own spelling');
+});
+
 test('a value that cannot be walked deterministically is refused, not digested as {}', () => {
   // The hole a structural walk could reintroduce: digesting a `Map` as `{}`
   // would silently drop everything in it, which is exactly the failure the

@@ -54,6 +54,7 @@ import {
   type StoryLocationReport,
 } from '../../src/render/inventory.ts';
 import { tileGrid } from '../../src/render/components.ts';
+import { renderPage } from '../../src/render/page.ts';
 import { fillIndexString } from '../../src/render/html.ts';
 import {
   CONFIDENCE_LABELS,
@@ -72,7 +73,7 @@ import {
 import { OUTPUT_DIRECTORY, takeInventory } from '../../src/cli/inventory.ts';
 import { projectInventory, snapshotIdOf } from '../../src/cli/index.ts';
 import { ConfinedReader } from '../../src/adapters/fs/read.ts';
-import { canonical, toPlatform } from '../../src/adapters/fs/paths.ts';
+import { canonical, toPlatform, type CanonicalPath } from '../../src/adapters/fs/paths.ts';
 import { EMPTY_INVENTORY, observeRun } from '../support/cli.ts';
 import {
   deniableDirectories,
@@ -107,15 +108,31 @@ function render(view: InventoryView): string {
 }
 
 /**
+ * A synthetic project root for a hand-built view, and a second one that differs
+ * only in its last segment.
+ *
+ * The root is not on the view, but it *is* the other half of what the identity
+ * covers — `renderPage(root, view)` — so a fixture builder has to name one to
+ * derive an id at all. Fixed and unlike this repository's own path, on
+ * `test/server.test.ts`'s reasoning for the same constant: a real path leaking
+ * into an assertion should be visible.
+ */
+const VIEW_ROOT = canonical('/tmp/bmad-dash-view-fixture');
+const OTHER_VIEW_ROOT = canonical('/tmp/bmad-dash-other-fixture');
+
+/**
  * A view holding exactly the rows given, all under one family.
  *
  * The identity is **derived** from the content this builds, through the
  * composition root's own `snapshotIdOf`, rather than stubbed: that is what lets
- * the matrix below compare two hand-built views that render differently and
+ * the matrix below compare two hand-built pages that render differently and
  * assert their identities differ. A fixture with a constant id could not ask
  * that question at all.
  */
-function viewOf(view: Partial<InventoryView> & Pick<InventoryView, 'groups'>): InventoryView {
+function viewOf(
+  view: Partial<InventoryView> & Pick<InventoryView, 'groups'>,
+  root: CanonicalPath = VIEW_ROOT,
+): InventoryView {
   const content = {
     complete: view.complete ?? true,
     artifactCount:
@@ -124,7 +141,7 @@ function viewOf(view: Partial<InventoryView> & Pick<InventoryView, 'groups'>): I
     aliases: view.aliases ?? [],
     groups: view.groups,
   };
-  return { ...content, snapshotId: view.snapshotId ?? snapshotIdOf(content) };
+  return { ...content, snapshotId: view.snapshotId ?? snapshotIdOf(root, content) };
 }
 
 /**
@@ -732,6 +749,27 @@ test('the identity crosses the projection: equal for two unchanged passes, and i
     'a changed project must carry a different identity',
   );
 
+  // **And the same content at a different path is a different page.** The
+  // matrix below pins this over hand-built views; this is the composed proof,
+  // because `projectInventory` is where the root is folded in and the root is
+  // the one digest input that never appears on the view.
+  const elsewhere = await makeTree(t, [
+    { dir: '_bmad' },
+    { file: '_bmad-output/loose/one.md', text: '# One\n' },
+    { file: '_bmad-output/loose/two.md', text: '# Two\n' },
+  ]);
+  const copied = projectInventory(takeInventory(new ConfinedReader(canonical(elsewhere))));
+  assert.deepEqual(
+    copied.groups.flatMap((group) => group.rows.map((row) => row.path)),
+    third.groups.flatMap((group) => group.rows.map((row) => row.path)),
+    'the two trees must hold the same artifacts, or the row proves nothing',
+  );
+  assert.notEqual(
+    copied.snapshotId,
+    third.snapshotId,
+    'two projects at different paths render different pages, so they are different snapshots',
+  );
+
   // Present on every view — the fixtures included, so no branch of the
   // projection and no fixture may build one without it.
   assert.match(EMPTY_INVENTORY.snapshotId, /^[0-9a-f]{16}$/);
@@ -775,6 +813,10 @@ test('an empty project still derives an identity, and it is stable', async (t) =
  * that digested only these — as the reverted one did — passes every
  * equal-for-unchanged and different-after-a-change assertion in this file and
  * fails every row of that matrix.
+ *
+ * It takes the view alone because that is all iteration 1 had: the project
+ * root was not among its inputs either, which is the point the matrix's own
+ * root row makes.
  */
 function iterationOneInputs(view: InventoryView): string {
   const rows = view.groups.flatMap((group) =>
@@ -783,30 +825,40 @@ function iterationOneInputs(view: InventoryView): string {
   return [...rows, view.complete, view.artifactCount, view.namesLeftOut].join('\n');
 }
 
-test('a rendering difference is an identity difference, for every field the view carries', async () => {
+test('a rendering difference is an identity difference, over every input the page renders', async () => {
   // **The property that pins the digest's coverage.** Equal-for-unchanged and
   // different-after-a-change are both satisfied by digesting the artifact
-  // count alone — measured: reducing the whole digest body to it left 875/875
-  // green, because every "must differ" case added a file and so moved the
-  // count. So the pairs here hold the row set fixed and change one thing the
-  // page renders, which is the only shape of test that can tell a whole-view
+  // count alone: reducing the whole digest body to it moved no test's outcome,
+  // because every "must differ" case added a file and so moved the count. So
+  // the pairs here hold the row set fixed and change one thing the page
+  // renders, which is the only shape of test that can tell a whole-input
   // digest from a lucky one.
   //
-  // Each row is: a name, and two views whose `iterationOneInputs` agree.
-  const CERTAIN: ArtifactRow['identity'] = {
-    outcome: 'identified',
-    shape: 'document',
-    confidence: 'certain',
-    resolvedAt: 'location',
-  };
+  // **This is not an exhaustiveness proof, and the name should not be read as
+  // one.** What it enumerates is the aliases, a group's family, a group's
+  // notes, the project root, and four row fields — the cases iteration 1's
+  // enumeration got wrong. Coverage of everything *else* rests on the walk
+  // being structural over `{ root, view }` rather than on a row per field
+  // here; `test/domain/snapshot.test.ts` is where that structural property is
+  // asserted. A field the view gains later is covered by construction and
+  // gains no row here.
+  //
+  // Each row is a name and two **pages** — a root and a view, which is exactly
+  // what `renderPage` takes — whose `iterationOneInputs` agree.
+  type Page = { readonly root: CanonicalPath; readonly view: InventoryView };
+  const draw = (page: Page): string => renderPage(toPlatform(page.root), page.view);
+  const pageOf = (
+    over: Partial<InventoryView> & Pick<InventoryView, 'groups'>,
+    root: CanonicalPath = VIEW_ROOT,
+  ): Page => ({ root, view: viewOf(over, root) });
   const rowAt = (over: Partial<ArtifactRow> = {}): ArtifactRow => ({
     ...CERTAIN_ROW,
     ...over,
   });
-  const oneGroup = (rows: readonly ArtifactRow[], over: Partial<InventoryView> = {}): InventoryView =>
-    viewOf({ groups: [{ family: 'prd', rows, notes: [] }], ...over });
+  const oneGroup = (rows: readonly ArtifactRow[], over: Partial<InventoryView> = {}): Page =>
+    pageOf({ groups: [{ family: 'prd', rows, notes: [] }], ...over });
 
-  const pairs: readonly (readonly [string, InventoryView, InventoryView])[] = [
+  const pairs: readonly (readonly [string, Page, Page])[] = [
     [
       'an added alias, which has no row of its own',
       oneGroup([CERTAIN_ROW]),
@@ -855,12 +907,12 @@ test('a rendering difference is an identity difference, for every field the view
     ],
     [
       'a different group note',
-      viewOf({
+      pageOf({
         groups: [
           { family: 'story', rows: [CERTAIN_ROW], notes: [{ kind: 'story-location', report: { kind: 'none' } }] },
         ],
       }),
-      viewOf({
+      pageOf({
         groups: [
           {
             family: 'story',
@@ -873,16 +925,27 @@ test('a rendering difference is an identity difference, for every field the view
     [
       "a row's family, which decides the tile it is placed on",
       oneGroup([CERTAIN_ROW]),
-      viewOf({ groups: [{ family: 'brief', rows: [CERTAIN_ROW], notes: [] }] }),
+      pageOf({ groups: [{ family: 'brief', rows: [CERTAIN_ROW], notes: [] }] }),
     ],
     [
       "a confidence below certain, which the row states",
-      oneGroup([rowAt({ identity: CERTAIN })]),
+      oneGroup([rowAt({ identity: CERTAIN_ROW.identity })]),
       oneGroup([
         rowAt({
           identity: { outcome: 'identified', shape: 'document', confidence: 'likely', resolvedAt: 'location' },
         }),
       ]),
+    ],
+    [
+      // **The project root, which is not on the view at all.** It is
+      // `renderPage`'s other argument and `chrome.ts` renders it as the
+      // project's name and its path, so two projects at different paths with
+      // identical inventories rendered two different pages under one identity
+      // until the root was folded in. Nothing else in this file could have
+      // caught it: every other row varies a field of the view.
+      'the project root, which the page renders and the view does not carry',
+      pageOf({ groups: [{ family: 'prd', rows: [CERTAIN_ROW], notes: [] }] }, VIEW_ROOT),
+      pageOf({ groups: [{ family: 'prd', rows: [CERTAIN_ROW], notes: [] }] }, OTHER_VIEW_ROOT),
     ],
     [
       'an interpretation state under one identity outcome',
@@ -893,15 +956,15 @@ test('a rendering difference is an identity difference, for every field the view
 
   for (const [name, left, right] of pairs) {
     assert.equal(
-      iterationOneInputs(left),
-      iterationOneInputs(right),
+      iterationOneInputs(left.view),
+      iterationOneInputs(right.view),
       `${name}: the pair must be identical under the inputs iteration 1 digested, or it proves nothing`,
     );
-    assert.notEqual(render(left), render(right), `${name}: the pair must render differently`);
+    assert.notEqual(draw(left), draw(right), `${name}: the pair must render differently`);
     assert.notEqual(
-      left.snapshotId,
-      right.snapshotId,
-      `${name}: two views that render differently must not share one identity`,
+      left.view.snapshotId,
+      right.view.snapshotId,
+      `${name}: two pages that render differently must not share one identity`,
     );
   }
 });

@@ -22,11 +22,20 @@
  * iteration of this module took a `readonly string[]` its caller assembled
  * from three per-row fields plus three scalars, and argued the rest of the view
  * never reached the page; that argument was false on six counts and no test
- * enforced it — reducing the whole digest body to the artifact count left the
- * suite green. A structural walk makes the property true by construction
- * instead: the page is a pure function of the view, so digesting *all* of the
- * view means any rendering difference implies an identity difference, and a
- * field added to the view later needs no audit here to be covered.
+ * enforced it — reducing the whole digest body to the artifact count changed
+ * no test's outcome at all. A structural walk makes the property true by
+ * construction instead: `renderPage` is a pure function of the project root and
+ * the view, so digesting *all* of both means any rendering difference implies
+ * an identity difference, and a field added to the view later needs no audit
+ * here to be covered.
+ *
+ * **The root is half of that, and leaving it out was a real defect.**
+ * `renderPage(root, view)` takes the root as a *second argument* and renders it
+ * as the project's name and path (`src/render/chrome.ts`), so a digest over the
+ * view alone gave two projects at different paths with identical inventories
+ * one identity for two visibly different pages. `src/cli/index.ts`'s
+ * `snapshotIdOf` folds in the root the pass recorded; what this module
+ * guarantees is only that everything it is handed is covered.
  *
  * **Canonical, so the walk is a function of the value and not of its
  * construction.** Object keys are visited in sorted order, because two objects
@@ -112,8 +121,13 @@ function mixCodeUnit(hash: bigint, unit: number): bigint {
  * Folded in **before** the thing it counts — a string's code units, an array's
  * elements, an object's keys — which is the length-delimiting: the count is
  * data the hash consumes, not a separator that could collide with content.
- * `>>> 24` caps out at 4,294,967,295, which nothing this tool digests can
- * approach.
+ *
+ * Four bytes, so a count of 2^32 or more is not representable and would fold in
+ * as its low 32 bits. That is a limit rather than a behaviour to rely on:
+ * reaching it needs a single string or array of over four billion entries,
+ * which exceeds what V8 will allocate for either, so no input this tool can
+ * hold gets near it. Nothing is asserted about the wrap because nothing may
+ * depend on it.
  */
 function mixCount(hash: bigint, count: number): bigint {
   return mixByte(
@@ -135,17 +149,20 @@ function mixText(hash: bigint, text: string): bigint {
 }
 
 /**
- * Whether `value` is an object this walk can canonicalize: a plain object or
- * an array, and nothing else.
+ * Whether `value` is an object this walk can canonicalize: a plain object or a
+ * plain array, and nothing else.
  *
  * Prototype-checked rather than checked against a list of built-ins, so it
  * refuses a `Map`, a `Set`, a `Date`, a `RegExp`, an `Error` and any class
- * instance by the same rule — including the ones nobody has written yet.
+ * instance by the same rule — including the ones nobody has written yet, and
+ * including an `Array` subclass. `Array.isArray` is deliberately **not** the
+ * array test: it answers true for `class Sub extends Array`, whose own
+ * behaviour a walk over indices cannot see, so an earlier version of this
+ * function let a subclass digest identically to the plain array it was not.
  */
 function isWalkableObject(value: object): boolean {
-  if (Array.isArray(value)) return true;
   const prototype = Object.getPrototypeOf(value) as object | null;
-  return prototype === Object.prototype || prototype === null;
+  return prototype === Object.prototype || prototype === Array.prototype || prototype === null;
 }
 
 /** What a refusal says, so every one of them says the same thing. */
@@ -153,6 +170,76 @@ function unwalkable(description: string): Error {
   return new Error(
     `a snapshot identity cannot be derived from ${description}: it has no canonical form`,
   );
+}
+
+/**
+ * Name `value`'s kind for a refusal message, **without running anything**.
+ *
+ * `value.constructor.name` was the obvious spelling and it is wrong here:
+ * `constructor` resolves up the prototype chain, so reading it runs a getter
+ * defined there — and this module's own header promises the walk never invokes
+ * an accessor. Worse, a `constructor` getter that threw replaced the refusal
+ * with an unrelated error, which is a refusal the caller cannot recognize. So
+ * only the immediate prototype's own *data* descriptor is read, and anything
+ * else falls back to a fixed phrase.
+ */
+function describeKind(value: object): string {
+  // A `null` prototype cannot arrive here — `isWalkableObject` accepts one, so
+  // a null-prototype object is walked rather than refused — but it is folded
+  // into the fallback rather than given a branch of its own, which would read
+  // as a state that happens.
+  const prototype = Object.getPrototypeOf(value) as object | null;
+  const descriptor =
+    prototype === null ? undefined : Object.getOwnPropertyDescriptor(prototype, 'constructor');
+  const constructor = descriptor !== undefined && 'value' in descriptor ? descriptor.value : undefined;
+  const name = typeof constructor === 'function' ? constructor.name : '';
+  return name === '' ? 'a non-plain value' : `a ${name} value`;
+}
+
+/**
+ * One own key of a plain object or array, refused if it is anything the walk
+ * would have to drop or invoke.
+ *
+ * Both container branches route through this, which is the point: the object
+ * branch had this discipline and the array branch did not, so an array's extra
+ * own properties, its index accessors and its holes were all silently absent
+ * from the identity — the same silent-drop hole the header says this module
+ * closes, reached one branch over.
+ */
+function assertWalkableKey(container: object, key: string | symbol): asserts key is string {
+  if (typeof key === 'symbol') throw unwalkable('a symbol-keyed property');
+  const descriptor = Object.getOwnPropertyDescriptor(container, key);
+  if (descriptor !== undefined && !('value' in descriptor)) {
+    throw unwalkable(`the accessor property ${key}`);
+  }
+}
+
+/**
+ * Refuse an array that holds anything the element walk cannot see.
+ *
+ * An array is digested as `length` then its elements in order, so any own key
+ * that is not an index — and any index with no own key at all — is data the
+ * walk would drop. Both were verified to collide before this existed:
+ * `Object.assign([1], { x: 'hidden' })` digested as `[1]`, and `[, 1]` digested
+ * as `[undefined, 1]` even though the object branch is careful to keep
+ * `{ a: undefined }` distinct from `{}`.
+ *
+ * A hole is refused rather than given a tag of its own. A tag would be defensible,
+ * but nothing in this tool produces a sparse array, and a refusal says so where a
+ * fifth primitive tag would quietly imply the case was expected.
+ */
+function assertPlainArray(array: readonly unknown[]): void {
+  let indices = 0;
+  for (const key of Reflect.ownKeys(array)) {
+    if (key === 'length') continue;
+    assertWalkableKey(array, key);
+    const index = Number(key);
+    if (!Number.isInteger(index) || index < 0 || index >= array.length) {
+      throw unwalkable(`the array property ${key}`);
+    }
+    indices += 1;
+  }
+  if (indices !== array.length) throw unwalkable('a sparse array');
 }
 
 /**
@@ -179,6 +266,12 @@ function mixValue(hash: bigint, value: unknown, ancestors: Set<object>): bigint 
       // apart either.
       return mixText(mixByte(hash, TAG_NUMBER), String(value));
     case 'bigint':
+      // **Forward-looking reserved surface**, and stated as such rather than
+      // left to be read as a covered case: no field of any view is a `bigint`
+      // today, so nothing in the tool reaches this. It is here because a
+      // `bigint` *has* a canonical decimal form, so refusing one would be
+      // arbitrary where refusing a `Map` is not. `test/domain/snapshot.test.ts`
+      // pins it so the branch is not dead code either.
       return mixText(mixByte(hash, TAG_BIGINT), value.toString());
     case 'string':
       return mixText(mixByte(hash, TAG_STRING), value);
@@ -191,13 +284,12 @@ function mixValue(hash: bigint, value: unknown, ancestors: Set<object>): bigint 
   }
 
   const object = value as object;
-  if (!isWalkableObject(object)) {
-    throw unwalkable(`a ${object.constructor?.name ?? 'non-plain'} value`);
-  }
+  if (!isWalkableObject(object)) throw unwalkable(describeKind(object));
   if (ancestors.has(object)) throw unwalkable('a value that contains itself');
   ancestors.add(object);
   try {
     if (Array.isArray(object)) {
+      assertPlainArray(object);
       // Length first, then the elements in order: order is content for an
       // array, so this is the one place the walk deliberately does not sort.
       let next = mixCount(mixByte(hash, TAG_ARRAY), object.length);
@@ -208,16 +300,11 @@ function mixValue(hash: bigint, value: unknown, ancestors: Set<object>): bigint 
     // Own keys rather than enumerable ones, and refusing an accessor rather
     // than invoking it: a getter can return a different value each time it is
     // read, which is exactly what a derived identity may not be built on. A
-    // symbol-keyed property is refused for the same reason `mixValue` refuses
-    // a symbol value — there is no canonical ordering of symbols, so the key
-    // could only be dropped.
+    // non-enumerable own field is walked for the mirror-image reason — it is
+    // part of the value, so leaving it out would leave it out of the identity.
     const keys: string[] = [];
     for (const key of Reflect.ownKeys(object)) {
-      if (typeof key === 'symbol') throw unwalkable('a symbol-keyed property');
-      const descriptor = Object.getOwnPropertyDescriptor(object, key);
-      if (descriptor !== undefined && !('value' in descriptor)) {
-        throw unwalkable(`the accessor property ${key}`);
-      }
+      assertWalkableKey(object, key);
       keys.push(key);
     }
     // Sorted, so an object is digested as the set of fields it holds rather

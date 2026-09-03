@@ -2,7 +2,7 @@
 title: 'Serve every response from one snapshot'
 type: 'feature'
 created: '2026-09-03'
-status: 'in-progress'
+status: 'in-review'
 review_loop_iteration: 1
 baseline_commit: 'faa0e27749ad23b71049dcbc990ee4bcf87b20dd'
 context: []

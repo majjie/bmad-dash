@@ -34,6 +34,7 @@ import {
   MAX_RECORDED_SKIPS,
   OUTPUT_DIRECTORY,
   SKIPPED_NAMES,
+  deepFreeze,
   takeInventory,
   type Alias,
   type Inventory,
@@ -43,7 +44,7 @@ import {
 import { MAX_RECORDED_SUPPRESSIONS, type WalkTruncation } from '../../src/adapters/fs/walk.ts';
 import type { Verdict } from '../../src/domain/identity.ts';
 import { interpret } from '../../src/domain/interpretation.ts';
-import { UNREAD, type Readability } from '../../src/domain/signal.ts';
+import { LISTING_NOT_TEXT, UNREAD, type Readability } from '../../src/domain/signal.ts';
 import { documentsOf, type Composition } from '../../src/domain/document.ts';
 import { projectInventory } from '../../src/cli/index.ts';
 import { renderPage } from '../../src/render/page.ts';
@@ -1874,18 +1875,84 @@ test('the returned inventory is frozen by construction, deeply', async (t) => {
     (entry) => entry.children.available && entry.children.names.length > 0,
   );
   assert.ok(directory !== undefined, 'the fixture must produce a non-empty directory listing');
+  // Narrowed by `assert.fail`, which returns `never`, rather than by an `if`
+  // guarding the assertions: `assert.ok(x); if (x) { … }` lets the block go
+  // vacuous, which is the same failure mode this test asserts `TypeError` to
+  // avoid one paragraph up.
   const children = directory.children;
-  assert.ok(children.available);
-  if (children.available) {
-    assert.ok(Object.isFrozen(children.names));
-    assert.throws(() => {
-      (children.names as string[]).push('nope');
-    }, TypeError);
-  }
+  if (!children.available) assert.fail('the fixture must produce an available listing');
+  assert.ok(Object.isFrozen(children.names));
+  assert.throws(() => {
+    (children.names as string[]).push('nope');
+  }, TypeError);
 
   // And one nested field for good measure — an entry's own verdict, reached
   // two levels down from the array `entries` holds.
   assert.ok(Object.isFrozen(directory.identity));
+});
+
+test('the shared domain singletons the freeze walks are already frozen where they are defined', () => {
+  // `deepFreeze`'s safety argument rests on this and nothing asserted it: the
+  // recursion reaches `UNREAD` and `LISTING_NOT_TEXT` once per unread entry —
+  // the *same* objects every other reader of the domain holds — so freezing
+  // the graph is only safe because they are frozen at their definition rather
+  // than because nothing here is shared. If either stopped being frozen there,
+  // the pass would start freezing a module singleton as a side effect.
+  assert.ok(Object.isFrozen(UNREAD), 'UNREAD is frozen at its definition');
+  assert.ok(Object.isFrozen(LISTING_NOT_TEXT), 'LISTING_NOT_TEXT is frozen at its definition');
+});
+
+test('deepFreeze freezes the branches a real tree cannot produce, and runs nothing to do it', () => {
+  // **Why this exists.** `deepFreeze` is reachable in production only through
+  // `takeInventory` over a real filesystem, which cannot produce a getter, a
+  // symbol-keyed branch, a non-enumerable field or a cycle on demand — so
+  // every mechanism its doc block promises was unreachable by any assertion,
+  // and collapsing its body to `for (const child of Object.values(value))`
+  // left the whole suite green while losing three of the four.
+  let reads = 0;
+  const symbolKey = Symbol('branch');
+  const throughGetter = { deep: [1] };
+  const subject: Record<string | symbol, unknown> = {
+    plain: { deep: [1] },
+    [symbolKey]: { deep: [1] },
+  };
+  Object.defineProperty(subject, 'shifting', {
+    get: () => {
+      reads += 1;
+      return throughGetter;
+    },
+    enumerable: true,
+    configurable: true,
+  });
+  Object.defineProperty(subject, 'quiet', {
+    value: { deep: [1] },
+    enumerable: false,
+    configurable: true,
+  });
+
+  deepFreeze(subject);
+
+  assert.equal(reads, 0, 'an accessor is skipped, not invoked');
+  assert.equal(Object.isFrozen(throughGetter), false, 'so what it would have returned is untouched');
+  assert.ok(Object.isFrozen(subject.plain), 'an ordinary branch is frozen');
+  assert.ok(Object.isFrozen(subject[symbolKey]), 'a symbol-keyed branch is frozen');
+  assert.ok(Object.isFrozen(subject.quiet), 'a non-enumerable branch is frozen');
+  assert.ok(
+    Object.isFrozen((subject.plain as { deep: unknown[] }).deep),
+    'and the recursion reaches the array under it',
+  );
+
+  // A repeated reference terminates rather than recursing forever — the guard
+  // is what makes the walk safe over a graph nobody has audited for cycles.
+  const cyclic: { self?: unknown; leaf: number[] } = { leaf: [1] };
+  cyclic.self = cyclic;
+  assert.equal(deepFreeze(cyclic), cyclic, 'a cycle returns rather than overflowing the stack');
+  assert.ok(Object.isFrozen(cyclic.leaf));
+
+  // And a keyed collection is refused rather than reported frozen while
+  // staying mutable through `set`/`add`.
+  assert.throws(() => deepFreeze({ counts: new Map([['a', 1]]) }), /Object\.freeze does not seal/);
+  assert.throws(() => deepFreeze({ seen: new Set(['a']) }), /Object\.freeze does not seal/);
 });
 
 test('freezing surfaces nothing: the pass over this repository still projects and renders', () => {

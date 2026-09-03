@@ -436,15 +436,72 @@ test('error responses are plain text and uncached', async (t) => {
   const server = await startServer({ projectRoot: PROJECT_ROOT, inventory: emptyInventory });
   t.after(() => server.close());
 
-  for (const response of [
-    await get({ port: server.port, path: '/nope' }),
-    await get({ port: server.port, host: 'evil.example' }),
-    await get({ port: server.port, method: 'POST' }),
-  ]) {
+  // **Both 500s are in this loop, and neither was.** The loop covered 404, 403
+  // and 405 only, so an html-typed 500 passed everything — and a 500 is the
+  // response most likely to be reached for by a reader who is trying to report
+  // what went wrong. The two arrive by different routes: a supplier that
+  // throws before any snapshot exists, and a `renderPage` that throws over a
+  // snapshot the supplier produced successfully.
+  const supplierThrows = await startServer({
+    projectRoot: PROJECT_ROOT,
+    inventory: () => {
+      throw new Error('the project went away');
+    },
+    onError: () => {},
+  });
+  t.after(() => supplierThrows.close());
+  const renderThrows = await startServer({
+    projectRoot: PROJECT_ROOT,
+    inventory: () => refusedView(),
+    onError: () => {},
+  });
+  t.after(() => renderThrows.close());
+
+  for (const [status, response] of [
+    [404, await get({ port: server.port, path: '/nope' })],
+    [403, await get({ port: server.port, host: 'evil.example' })],
+    [405, await get({ port: server.port, method: 'POST' })],
+    [500, await get({ port: supplierThrows.port })],
+    [500, await get({ port: renderThrows.port })],
+  ] as const) {
+    assert.equal(response.status, status, 'the row must be about the response it names');
     assert.equal(response.headers['content-type'], 'text/plain; charset=utf-8');
     assert.equal(response.headers['cache-control'], 'no-store');
   }
 });
+
+/**
+ * A view the supplier can hand over successfully and `renderPage` must refuse:
+ * an `unidentified` verdict with no attempted levels, which no authority
+ * produces and which would otherwise render as `Not identified. Tried: .`
+ *
+ * This is the only way to reach the *second* 500 — the one where a snapshot
+ * did exist, which is what the adapter's own comment stakes its reasoning on.
+ * `test/render/inventory.test.ts` owns the refusal itself and says in as many
+ * words that "the adapter's own `catch` turns it into a reportable 500"; this
+ * is the assertion that the sentence was true.
+ */
+function refusedView(): InventoryView {
+  return {
+    ...EMPTY_INVENTORY,
+    artifactCount: 1,
+    groups: [
+      {
+        family: 'prd',
+        rows: [
+          {
+            path: 'a',
+            identity: { outcome: 'unidentified', attempted: [] },
+            readability: { state: 'present', stage: undefined },
+            interpretation: 'interpreted',
+            runFacts: [],
+          },
+        ],
+        notes: [],
+      },
+    ],
+  };
+}
 
 test('over a real project, two loads carry one identity and identical bodies', async (t) => {
   // The I/O matrix's first row, both clauses, over the **composed** path. The
@@ -509,6 +566,14 @@ test('the identity header is on 200 and HEAD, and absent on 403, 404, 405 and 50
   // snapshot exists for them to name, while a 500 from a render throw happens
   // after a snapshot existed — and omits the header because no body was
   // produced from it.
+  // **The literal, asserted once.** Every assertion below indexes
+  // `SNAPSHOT_ID_HEADER`, so renaming the constant's value to anything at all
+  // would leave them green while breaking the wire contract the spec fixes by
+  // name and the RFC 6648 reasoning behind it. Same shape as
+  // `test/architecture.test.ts`'s `assert.equal(MAX_PORT, 65535, …)` beside
+  // its own importer-set rule.
+  assert.equal(SNAPSHOT_ID_HEADER, 'bmad-snapshot-id', 'the header name is an external contract');
+
   const server = await startServer({ projectRoot: PROJECT_ROOT, inventory: emptyInventory });
   t.after(() => server.close());
 
@@ -548,21 +613,38 @@ test('the identity header is on 200 and HEAD, and absent on 403, 404, 405 and 50
   const rejected = await get({ port: server.port, method: 'POST' });
   assert.equal(rejected.headers['allow'], 'GET, HEAD');
 
-  const failing = await startServer({
+  // **Both 500s, because they have different reasons and only one of them was
+  // exercised.** A throwing supplier means no snapshot was ever produced. A
+  // throwing `renderPage` means the supplier *succeeded* — a snapshot did
+  // exist — and the header is omitted because no body was produced from it,
+  // which is precisely the distinction the adapter's comment draws and which
+  // nothing here checked.
+  const supplierThrew = await startServer({
     projectRoot: PROJECT_ROOT,
     inventory: () => {
       throw new Error('the project went away');
     },
     onError: () => {},
   });
-  t.after(() => failing.close());
-  const failed = await get({ port: failing.port });
-  assert.equal(failed.status, 500);
-  assert.equal(
-    failed.headers[SNAPSHOT_ID_HEADER],
-    undefined,
-    'no body was produced from the snapshot, so a 500 carries no identity either',
-  );
+  t.after(() => supplierThrew.close());
+  const renderThrew = await startServer({
+    projectRoot: PROJECT_ROOT,
+    inventory: () => refusedView(),
+    onError: () => {},
+  });
+  t.after(() => renderThrew.close());
+
+  for (const [reason, response] of [
+    ['no snapshot was ever produced', await get({ port: supplierThrew.port })],
+    ['a snapshot existed but no body came from it', await get({ port: renderThrew.port })],
+  ] as const) {
+    assert.equal(response.status, 500, reason);
+    assert.equal(
+      response.headers[SNAPSHOT_ID_HEADER],
+      undefined,
+      `a 500 carries no identity: ${reason}`,
+    );
+  }
 });
 
 test('a view whose identity cannot be a header value is a 500, not a hung request', async (t) => {

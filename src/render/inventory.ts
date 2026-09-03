@@ -401,14 +401,15 @@ export interface InventoryView {
   readonly aliases: readonly AliasReport[];
   readonly groups: readonly FamilyGroup[];
   /**
-   * AD-17: which scan this view came from, derived from every other field on
-   * it rather than minted.
+   * AD-17: which scan this view came from, derived rather than minted.
    *
    * Two views built from an unchanged project carry the same id, and anything
    * that changes what is rendered changes it — true by construction rather
    * than by a judgement about which fields render, because the digest walks
-   * the whole view and this surface is a pure function of the whole view. See
-   * `src/cli/index.ts`'s `snapshotIdOf`.
+   * every field of this view **and the project root beside it**. The root is
+   * `renderPage`'s other argument and `chrome.ts` renders it, so the view
+   * alone is not what the page is a function of; see `src/cli/index.ts`'s
+   * `snapshotIdOf`.
    *
    * Nothing on this page renders it: it is recorded as a response header
    * (`bmad-snapshot-id`), which is what AD-17 asks for. A *visible* currency
