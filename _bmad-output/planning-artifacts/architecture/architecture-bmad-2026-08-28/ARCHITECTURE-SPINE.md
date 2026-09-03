@@ -19,9 +19,9 @@ companions: []
 
 ## Design Paradigm
 
-**Hexagonal (ports and adapters).** The domain holds the project model and every decision made about it; all I/O lives in adapters behind ports the domain defines.
+**Layered — a pure domain with adapters at the edges.** The domain holds the project model and every decision made about it; all I/O lives in adapters, which depend on the domain rather than the reverse. Adapters import the domain directly: there is no ports ring, and none was ever built (see the Amendment log, 2026-09-03).
 
-Chosen for enforceability rather than tidiness: NFR-1 requires read-only to be *verified by test, not convention*, and hexagonal makes that a mechanical assertion — only one module may import `node:fs`. It also leaves identification, normalization, ordering, and sectioning as pure functions over data, which is where this product's correctness actually lives.
+Chosen for enforceability rather than tidiness: NFR-1 requires read-only to be *verified by test, not convention*, and a one-directional dependency makes that a mechanical assertion — only one directory may import `node:fs`, and the domain may import nothing at all. Both halves are enforced by `test/architecture.test.ts` rather than asserted here. It also leaves identification, normalization, ordering, and sectioning as pure functions over data, which is where this product's correctness actually lives.
 
 | Layer | Directory | May import |
 | --- | --- | --- |
@@ -291,4 +291,5 @@ auditable from this file alone.
 | 2026-09-02 | **Stack:** third-party runtime code is bundled, not installed. Takes effect when the first such library lands — which the deferred FR-10 config story owns, so it governs nothing today. | Dated in Stack |
 | 2026-09-03 | **Paradigm and layer table corrected to what was built:** the `src/ports/` ring was declared here and in the dependency diagram and was never created in any commit of Epic 1, so it is removed along with its three edges, and the paradigm line no longer claims ports and adapters. The pure-domain invariant it was meant to protect is unaffected and is mechanically enforced. | This log |
 | 2026-09-03 | **AD-9 rule 1 corrected:** it asserted that artifact roots are read from the project's own configuration, two rules above rule 3's note that FR-10 is deferred indefinitely — the AD contradicted itself. | This log |
+| 2026-09-03 | **Design Paradigm prose brought in line with the frontmatter:** the amendment earlier this day corrected the `paradigm:` field and the layer table but left this section declaring "Hexagonal (ports and adapters)" and "ports the domain defines" — so the document contradicted itself two ways in twenty lines, which is the defect that amendment existed to remove. The enforceability argument is kept and now names the two rules a test actually enforces. | This log |
 | 2026-09-03 | **Family axis corrected** in Consistency Conventions: it named eight families while the code had twelve. FR-11's seven constrain *run folders*; the artifact vocabulary is wider. | This log |

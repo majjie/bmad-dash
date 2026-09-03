@@ -141,11 +141,79 @@ test('the subprocess allowance for tooling cannot leak into the package', async 
   }
 });
 
-test('no stale .js implementation sits beside its .ts replacement', async () => {
-  const stale = (await collectSourceFiles(REPO_ROOT)).filter(
-    (file) => file.startsWith('src/') && /\.(js|mjs|cjs|jsx)$/.test(file),
+// The two Node floors this project runs on are different numbers, and the
+// difference was documented only in package.json's `"//"` string, which no tool
+// read -- so nothing failed if the field and its own explanation drifted apart.
+// This row makes the note the source of truth and reads both floors out of it
+// rather than holding a second copy: the suite needs >= 22.18 for unflagged
+// type stripping, the shipped tool needs only >= 22 because it ships compiled
+// JavaScript and runs no build on install. That last clause is the *reason* the
+// floors may differ, so it is asserted too -- add an install-time hook and the
+// shipped floor is no longer justified, which is the drift worth catching.
+test("the engines floor agrees with package.json's own explanation of it", async () => {
+  const manifest: unknown = JSON.parse(await readFile(join(REPO_ROOT, 'package.json'), 'utf8'));
+  const { '//': note, engines, scripts } = manifest as Record<string, unknown>;
+
+  assert.equal(typeof note, 'string', 'package.json must keep its "//" explanation');
+  const suiteFloor = /suite requires Node >= (\d+)\.(\d+)/.exec(note as string);
+  const shippedFloor = /engines floor of (\d+)/.exec(note as string);
+  assert.ok(suiteFloor, 'the "//" note must state the suite\'s own Node floor');
+  assert.ok(shippedFloor, 'the "//" note must state the shipped floor');
+
+  // Field against note. Either one moving without the other fails here.
+  assert.deepEqual(
+    engines,
+    { node: `>=${shippedFloor[1]}` },
+    'engines.node must be the floor the "//" note says the shipped tool needs',
   );
-  assert.deepEqual(stale, [], `JavaScript files remain under src/: ${stale.join(', ')}`);
+
+  // The suite is running, so this asserts the floor the note names is actually
+  // met by the process reading this file -- not that type stripping works,
+  // which loading this .ts file at all is what demonstrates.
+  const [major = '0', minor = '0'] = process.version.replace(/^v/, '').split('.');
+  const running = Number(major) * 1000 + Number(minor);
+  const required = Number(suiteFloor[1]) * 1000 + Number(suiteFloor[2]);
+  assert.ok(
+    running >= required,
+    `suite needs Node >= ${suiteFloor[1]}.${suiteFloor[2]}, running ${process.version}`,
+  );
+
+  // The justification for the lower shipped floor: nothing builds on install.
+  for (const hook of ['preinstall', 'install', 'postinstall', 'prepare']) {
+    assert.ok(
+      !Object.hasOwn((scripts ?? {}) as object, hook),
+      `${hook} runs on install, so the shipped tool would need the suite's floor`,
+    );
+  }
+});
+
+test('no stale .js implementation sits beside its .ts replacement', async () => {
+  const stale = (await collectSourceFiles(REPO_ROOT)).filter((file) =>
+    /\.(js|mjs|cjs|jsx)$/.test(file),
+  );
+  assert.deepEqual(
+    stale,
+    [],
+    `JavaScript files remain in a scanned root: ${stale.join(', ')}`,
+  );
+});
+
+// The row above used to filter `src/` as well, which made it narrower than the
+// invariant it is named for: a compiled leftover under `scripts/` or `web/` was
+// invisible to a guard reading as though it covered the scan. Widening it is
+// only safe while the collector stays inside `SCANNED_ROOTS` -- otherwise the
+// first `dist/` build would fail the row above with the tool's own output. That
+// bound is what this row asserts, from the side the row above cannot: not that
+// the roots are reached (asserted separately), but that nothing outside them is.
+test('the source scan stays inside the roots it declares', async () => {
+  const outside = (await collectSourceFiles(REPO_ROOT)).filter(
+    (file) => !SCANNED_ROOTS.some((root) => file.startsWith(`${root}/`)),
+  );
+  assert.deepEqual(
+    outside,
+    [],
+    `scan reached outside ${SCANNED_ROOTS.join(', ')}: ${outside.join(', ')}`,
+  );
 });
 
 // ---------------------------------------------------------------------------
