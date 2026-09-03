@@ -29,7 +29,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 # - Retrospective appends its action items to action_items; the status view surfaces open ones
 generated: 08-28-2026 20:15
-last_updated: 09-03-2026 12:06
+last_updated: 09-03-2026 12:23
 project: bmad-dash
 project_key: NOKEY
 tracking_system: file-system
@@ -128,7 +128,7 @@ action_items:
     action: "HUMAN: reconcile FR-10 across all five places at once - prd.md:168, epics.md:194,
       epics.md:253, epics.md:325, and AD-9 rule 1 at ARCHITECTURE-SPINE.md:118 (D1)"
     owner: "Jamie"
-    status: open
+    status: done
     ref: "_bmad-output/implementation-artifacts/epic-1-retro-2026-09-03.md"
   - id: "epic-1-retro-item-7-human-reconcile-the-epic-file-with-what"
     epic: 1
@@ -136,7 +136,7 @@ action_items:
       epics.md, and state the family vocabulary's current count of twelve against
       the spine's eight (D2, D5)"
     owner: "Jamie"
-    status: open
+    status: done
     ref: "_bmad-output/implementation-artifacts/epic-1-retro-2026-09-03.md"
   - id: "epic-1-retro-item-8-human-reconcile-ux-dr3-s-font-loading-cl"
     epic: 1
@@ -144,14 +144,14 @@ action_items:
       date the AD-10, AD-19 and AD-1 amendments, and update ARCHITECTURE-SPINE.md's
       frontmatter which still reads updated 2026-08-28 (D7, D8)"
     owner: "Jamie"
-    status: open
+    status: done
     ref: "_bmad-output/implementation-artifacts/epic-1-retro-2026-09-03.md"
   - id: "epic-1-retro-item-9-human-decide-the-ports-ring-build-src-po"
     epic: 1
     action: "HUMAN: decide the ports ring - build src/ports/ or amend the layer table
       and diagram to describe the three-layer shape actually built (A1)"
     owner: "Jamie"
-    status: open
+    status: done
     ref: "_bmad-output/implementation-artifacts/epic-1-retro-2026-09-03.md"
   - id: "epic-1-retro-item-10-process-put-the-story-key-in-each-commit"
     epic: 1

@@ -165,7 +165,7 @@ Deferred groups are additive rather than foundational. C7 presents concurrency b
 **Layout and location (FR-9 to FR-12, FR-51, FR-70 to FR-75).**
 
 - **FR-9** A document is handled equivalently whether it exists as a single file or pre-sharded as a directory with an `index.md`.
-- **FR-10** The tool reads the target project's own configuration (`_bmad/bmm/config.yaml` and user overrides) to locate artifact roots rather than assuming default paths.
+- **FR-10** *(Deferred indefinitely 2026-09-02, by user decision. Recorded here because the requirement stands and only its delivery is deferred — see the epic 1 retrospective, item 6.)* The tool reads the target project's own configuration (`_bmad/bmm/config.yaml` and user overrides) to locate artifact roots rather than assuming default paths. **Until it lands, artifact roots stay at their measured defaults, so a project that puts them elsewhere is read at the wrong paths.**
 - **FR-51** Epic and story locations are resolved from the `story_location` field in `sprint-status.yaml`, which is per-project configuration, rather than from a fixed path.
 - **FR-11** All seven run-folder families are recognized: briefs, PRDs, architecture, UX designs, research, specs, forge.
 - **FR-70** Project resolution looks for `_bmad` and `_bmad-output` in the target path only, and never walks the tree in either direction. Multiple or nested roots are therefore not resolvable states rather than states resolved by rule. A separate bounded scan — the full ancestor chain, and two levels below, skipping dot-directories and `node_modules` — runs only to construct FR-7's suggestions and is never a resolution path.

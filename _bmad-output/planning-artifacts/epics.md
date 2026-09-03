@@ -41,7 +41,7 @@ This document provides the complete epic and story breakdown for bmad-dash, deco
 
 - FR-8: Artifacts identified by a defined four-level precedence, stopping at the first that resolves: config-declared location, frontmatter type, structural signature, filename hint. Filename alone is never sufficient.
 - FR-9: A document is handled equivalently whether single-file or pre-sharded as a directory with `index.md`.
-- FR-10: Artifact roots read from the target project's own configuration, not assumed.
+- FR-10: Artifact roots read from the target project's own configuration, not assumed. **Deferred indefinitely 2026-09-02** — until it lands, roots stay at their measured defaults.
 - FR-11: All seven run-folder families recognized: briefs, PRDs, architecture, UX designs, research, specs, forge.
 - FR-12: Unrecognized artifact shapes listed as present-but-uninterpreted, never hidden or dropped.
 - FR-49: `{slug}` treated as a context-dependent name, never an identity.
@@ -138,7 +138,7 @@ From the architecture spine (19 architecture decisions, hexagonal paradigm, feat
 - AD-7: Typed degradation — never an exception aborting the pass, never a silent omission.
 - AD-8: Signal availability recorded per artifact and per signal as exactly one of present, absent, unreadable, unchecked.
 - AD-9: Project root resolved once in the composition root; exactly one permitted root, never widened (narrowed 2026-09-02; artifact roots from config are deferred with FR-10).
-- AD-10: Content-derived path segments sanitized and confinement-checked on every read.
+- AD-10: Content-derived path segments sanitized and confinement-checked on every read, with **one scoped exception** (added 2026-09-02): the not-a-project suggestion scan enumerates directory *names* outside the permitted root, reads nothing, and is importable only by that scan.
 - AD-11: Currency mismatch surfaced on open with a refresh offer.
 - AD-12: Ephemeral single process; nothing persisted, no outbound network, literal `127.0.0.1`.
 - AD-13: Convention-derived sources validate that extraction produced something and fail visibly.
@@ -157,7 +157,7 @@ From the UX design contract (DESIGN.md + EXPERIENCE.md), both final. 24 colour t
 
 - UX-DR1: Implement the token layer as the single source of visual values — 24 colour, 8 typography, 4 motion, 12 spacing, 5 radius tokens. No component may carry a hex, px or rem literal; every value resolves through a token.
 - UX-DR2: Implement tonal elevation as the only depth mechanism. Three levels of the surface-container ladder govern peer surfaces; a surface nested inside another is relative to its container and takes two ladder steps of separation, because one step is below the ratio at which a tonal boundary reads as an edge. Since nesting exhausts the ladder, hover and other transient states change the outline rather than the surface. No shadow, gradient or blur anywhere in the system. *(Amended 2026-09-01: previously read "three levels ... at rest", which contradicted the core-artifact card's own tokens; DESIGN.md's Elevation & Depth section was rewritten and this followed.)*
-- UX-DR3: Load IBM Plex Sans, Mono and Serif and apply the mono role semantically: any string originating from the filesystem or naming a machine state is monospaced.
+- UX-DR3: Declare IBM Plex Sans, Mono and Serif with system fallback stacks — **no font file is shipped and none is fetched**, because NFR-11 forbids any outbound request *(verb corrected 2026-09-03: the requirement said "Load", which the implementation deliberately does not do)* — and apply the mono role semantically: any string originating from the filesystem or naming a machine state is monospaced.
 - UX-DR4: Enforce two type floors — content text at or above `body-dense`, labels and badges at or above 11px. Density is achieved by compressing spacing, never by shrinking type.
 - UX-DR5: Build the `tile` component: uppercase label in `on-surface-variant`, content below, one kind of information per tile, meaningful when its data is empty, partial or unavailable.
 - UX-DR6: Build `tile-raised`, identical but one ladder step higher, at most one per surface.
@@ -191,7 +191,7 @@ From the UX design contract (DESIGN.md + EXPERIENCE.md), both final. 24 colour t
 - FR-7: Epic 1 — no served page; the refusal hands over the invocation that would have worked
 - FR-8: Epic 1 — four-level identification precedence
 - FR-9: Epic 1 — whole and sharded documents handled alike
-- FR-10: Epic 1 — artifact roots from the project's own config
+- FR-10: **Deferred indefinitely** (2026-09-02) — artifact roots from the project's own config; not delivered in Epic 1
 - FR-11: Epic 1 — seven run-folder families recognized
 - FR-12: Epic 1 — unrecognized shapes present-but-uninterpreted
 - FR-13: Epic 3 — activity feed as the default view
@@ -250,7 +250,7 @@ All 59 active v1 requirements are mapped. Eight retired IDs (FR-28, FR-57 to FR-
 
 Run `npx bmad-dash` at a BMAD project and reach a served page that lists every artifact, correctly identified — unrecognized shapes shown as present-but-uninterpreted, ambiguous cases shown as ambiguous, paths displayed — or, where the target is not a project, be handed the invocation that would have worked rather than a page. Establishes the hexagonal skeleton, the read-only invariant with its enforcing test, the token layer, and the global chrome that every later surface inherits.
 
-**FRs covered:** FR-1, FR-2, FR-3, FR-4, FR-5, FR-6, FR-7, FR-8, FR-9, FR-10, FR-11, FR-12, FR-45, FR-46, FR-49, FR-50, FR-51, FR-69, FR-70, FR-71, FR-72, FR-73, FR-74, FR-75
+**FRs covered:** FR-1, FR-2, FR-3, FR-4, FR-5, FR-6, FR-7, FR-8, FR-9, FR-11, FR-12, FR-45, FR-46, FR-49, FR-50, FR-51, FR-69, FR-70, FR-71, FR-72, FR-73, FR-74, FR-75
 
 ### Epic 2: Read any artifact properly
 
@@ -322,9 +322,9 @@ As a practitioner who runs commands from wherever I happen to be,
 I want the tool to find the project root and its artifact roots itself,
 So that it works from any directory inside the project.
 
-**Satisfies:** FR-70, FR-10 · NFR-12 · AD-9, AD-14
+**Satisfies:** FR-70 · NFR-12 · AD-9, AD-14 *(FR-10 was split out of this story and deferred indefinitely on 2026-09-02)*
 
-**Done when:** the root is the target path itself, recognized by the presence of `_bmad` and `_bmad-output`, with no walk in either direction — so nested or sibling roots are unresolvable rather than resolved by a precedence rule; artifact roots come from the target project's own configuration rather than assumed paths; both resolve once in the composition root and are passed onward, with no other module performing discovery; and paths are canonicalized at the filesystem adapter so identity does not vary by platform, including on case-insensitive filesystems.
+**Done when:** the root is the target path itself, recognized by the presence of `_bmad` and `_bmad-output`, with no walk in either direction — so nested or sibling roots are unresolvable rather than resolved by a precedence rule; artifact roots resolve once in the composition root (from measured defaults, since FR-10 is deferred) and are passed onward, with no other module performing discovery; and paths are canonicalized at the filesystem adapter so identity does not vary by platform, including on case-insensitive filesystems.
 
 Also in this story: symlinks are resolved before confinement is checked and before identity is keyed, so a link inside the tree pointing outside it cannot pass the confinement check and the same file reachable two ways does not appear as two artifacts; the walk detects cycles rather than following them; and a dangling link is reported rather than crashing the listing.
 
@@ -337,6 +337,18 @@ So that a wrong invocation costs me one line rather than a diagnosis.
 **Satisfies:** FR-7
 
 **Done when:** a target with no `_bmad` and `_bmad-output` neither serves nor launches a browser; it exits reporting the path it examined and what it looked for; a bounded scan — the full ancestor chain plus two levels below, skipping dot-directories and `node_modules` — proposes the exact invocations that would work, listing every candidate found; and the scan runs in the CLI, contributing nothing the domain consumes, so it can never become a resolution path. Modelled on `git push` reporting a missing upstream: hand over the command, do not describe the problem. The check that matters: the suggestion scan never resolves a project, only names one.
+
+### Story 1.6a: Walk the artifact tree safely
+
+*(Added to this file 2026-09-03. Split out of Story 1.5 mid-epic on 2026-09-02 at the build workflow's multi-goal check, by user decision, and built as `1-6a-walk-the-artifact-tree-safely`; it was tracked in `sprint-status.yaml` from the start and only ever missing from here.)*
+
+As a practitioner whose project contains whatever a filesystem allows,
+I want the tool's traversal to be safe and bounded,
+So that a link, a cycle or a permission error cannot make it lie or hang.
+
+**Satisfies:** the traversal properties Story 1.5's second paragraph specified · AD-7, AD-10, AD-14
+
+**Done when:** symlinks are resolved before confinement is checked and before identity is keyed, so a link inside the tree pointing outside it cannot pass the check and one file reached two ways does not appear as two artifacts; cycles terminate; a dangling link is reported rather than crashing the listing; an unreadable directory is one entry among otherwise complete results rather than an aborted pass; and the walk is bounded in depth and in total entries, with the budget a required argument. The check that matters: every bound is pinned from **both** sides — a mutation that widens a cap fails, not only one that removes it.
 
 ### Story 1.7: Identify what each artifact is
 

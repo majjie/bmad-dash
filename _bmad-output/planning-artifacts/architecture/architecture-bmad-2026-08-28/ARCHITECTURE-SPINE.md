@@ -3,11 +3,11 @@ name: bmad-dash
 type: architecture-spine
 purpose: build-substrate
 altitude: feature
-paradigm: hexagonal (ports and adapters)
+paradigm: layered — a pure domain with adapters at the edges (see Amendment log, 2026-09-03)
 scope: 'bmad-dash v1 — CLI, local HTTP server, and web dashboard over a BMAD project''s artifacts (capability groups C1–C6)'
-status: final
+status: final (amended five times — see Amendment log)
 created: '2026-08-28'
-updated: '2026-08-28'
+updated: '2026-09-03'
 binds: [C1, C2, C3, C4, C5, C6]
 sources:
   - ../../prds/prd-bmad-2026-08-28/prd.md
@@ -26,9 +26,8 @@ Chosen for enforceability rather than tidiness: NFR-1 requires read-only to be *
 | Layer | Directory | May import |
 | --- | --- | --- |
 | Domain — model, identification, normalization, ordering, sectioning | `src/domain/` | nothing outside `src/domain/` |
-| Ports — interfaces the domain requires | `src/ports/` | `src/domain/` types only |
-| Outbound adapters — filesystem, git | `src/adapters/fs/`, `src/adapters/git/` | ports, domain types, Node built-ins |
-| Inbound adapter — HTTP | `src/adapters/http/` | ports, domain, render |
+| Outbound adapters — filesystem, git, browser | `src/adapters/fs/`, `src/adapters/git/`, `src/adapters/browser/` | domain types, Node built-ins |
+| Inbound adapter — HTTP | `src/adapters/http/` | domain, render |
 | Render — server-side HTML from the domain model | `src/render/` | domain types only |
 | Composition root — CLI entry, wiring | `src/cli/` | everything |
 | Client interaction — built, shipped prebuilt | `web/` → `public/` | nothing from `src/` |
@@ -41,7 +40,6 @@ graph TD
   HTTP["src/adapters/http"]
   RENDER["src/render"]
   DOMAIN["src/domain — pure"]
-  PORTS["src/ports"]
   FS["src/adapters/fs — sole fs importer"]
   GIT["src/adapters/git"]
   WEB["web/ — client interaction"]
@@ -52,9 +50,7 @@ graph TD
   HTTP --> RENDER
   HTTP --> DOMAIN
   RENDER --> DOMAIN
-  FS --> PORTS
-  GIT --> PORTS
-  PORTS --> DOMAIN
+  FS --> DOMAIN
   HTTP -. serves .-> WEB
 ```
 
@@ -115,7 +111,7 @@ Arrows are the permitted direction of dependency. `src/domain/` has no outgoing 
 
 - **Binds:** C1, C2
 - **Prevents:** units rediscovering the project root or artifact roots independently and disagreeing, including the false "no BMAD project" a unit reports when run from inside the artifact tree
-- **Rule:** the project root is the target path itself, recognized by the presence of `_bmad` and `_bmad-output`. Resolution never walks the tree in either direction, so nested or sibling roots are unresolvable rather than resolved by precedence. Artifact roots are read once from the target project's own configuration. Both resolve in the composition root and are passed onward; no other unit performs discovery.
+- **Rule:** the project root is the target path itself, recognized by the presence of `_bmad` and `_bmad-output`. Resolution never walks the tree in either direction, so nested or sibling roots are unresolvable rather than resolved by precedence. Artifact roots resolve once in the composition root from **measured defaults** — FR-10, which would read them from the target project's own configuration, is deferred indefinitely (see rule 3 and the Amendment log). Both resolve in the composition root and are passed onward; no other unit performs discovery.
 - **Rule:** a bounded discovery scan exists solely to construct the CLI's failure message when the target is not a project, and must never become a resolution path. It runs in `src/cli/`, produces suggested invocations, and returns nothing the domain consumes.
 - **Rule (narrowed 2026-09-02, by user decision — this replaces a root *set*):** there is exactly **one** permitted root, the project root, and it is never widened. Any value read from project content that would name a location — `story_location` is the known case, and may be absolute — is resolved and refused unless it lands inside that one root; a location outside it is recorded as out-of-tree and reported, never read and never served. **Why this is narrower than it was:** the previous rule made roots a set with an admission ceremony, in anticipation of FR-10's configurable artifact roots. FR-10 is now deferred indefinitely, so the set had one member and the ceremony guarded nothing, while the *questions* it raised — which root admits a path, what provenance an entry carries, which story widens the reader — were real and recurring. A single root answers all three by construction. The read-side check itself stays: this tool serves files over a local port, so what it may read is what it may disclose. Reinstating a set is a deliberate architecture change, not a story detail.
 
@@ -190,7 +186,7 @@ Arrows are the permitted direction of dependency. `src/domain/` has no outgoing 
 | Timestamps | One internal representation, timezone-aware, produced at the adapter boundary. Any assumed zone is carried beside the value. |
 | Ordering | Every ordered item carries its evidence tier and resolution (AD-6). Unordered is a value, not a fallback position. |
 | Signal states | Exactly four, per AD-8: present, absent, unreadable, unchecked. Collapsing any pair is a defect. |
-| Artifact family | One axis only: the producing BMAD workflow, which is what a run folder names (briefs, PRDs, architecture, UX designs, research, specs, forge, plus sprint tracking). Document *type* within a family is a separate attribute and never called a family. Every filter, coverage table, and per-family record uses this one axis, so they can be joined. |
+| Artifact family | One axis only: the producing BMAD workflow. **Seven of these name run folders** (briefs, PRDs, architecture, UX designs, research, specs, forge) and are the closed set FR-11 constrains. The **artifact family vocabulary is wider**, because FR-11 constrains run folders rather than the artifact universe: it adds review, epics, story, sprint tracking and note, for twelve in total *(corrected 2026-09-03 — this row previously named eight and the code had twelve)*. Document *type* within a family is a separate attribute and never called a family. Every filter, coverage table, and per-family record uses this one axis, so they can be joined. |
 | Errors | Domain returns typed results; it does not throw for expected conditions such as an unparseable artifact. Adapters translate I/O failure into those same typed results. |
 | Logging | Diagnostics go to stderr; stdout carries only the served URL and progress, so the command stays pipeable. |
 | Configuration | Read from the target project only. The tool has no configuration file and no environment-based behaviour beyond CLI flags. |
@@ -274,3 +270,25 @@ The spine does not decide these; they are the code's to choose.
 - The sectioning algorithm's heading-weight thresholds for whole documents, and the documented tiebreak AD-6 requires for equal-resolution ties.
 - Snapshot representation in memory, and whether the scan reads concurrently. Snapshot *identity* is fixed by AD-17.
 - C7 to C9 internals — deferred capabilities, revisited when they enter a release.
+
+## Amendment log
+
+Added 2026-09-03, from the Epic 1 retrospective (item 8). This document was
+amended repeatedly during Epic 1 while its own frontmatter still read
+`updated: '2026-08-28'`, and three of the amendments were undated anywhere —
+recoverable only from downstream restatements or from
+`.memlog.md`. Every future amendment gets a line here, dated, so the trail is
+auditable from this file alone.
+
+| Date | What changed | Recorded where at the time |
+| --- | --- | --- |
+| 2026-09-01 | **Language fixed:** TypeScript, compiled. Stated in Stack. | `.memlog.md` ("LANGUAGE GAP CLOSED (Jamie, during Story 1.1 build)") — undated |
+| 2026-09-01 | **AD-1 amended:** the import assertion reads `.ts` sources rather than compiled output, because the constraint lives in the source a contributor edits. Structural seed gains `dist/`. | `.memlog.md` — undated |
+| 2026-09-01 | **AD-19 gained a second rule:** write-shaped HTTP methods refused with 405 and an `Allow` header, after the `Host` check. Invented in Story 1.1's implementation and promoted to the invariant level so later stories inherit it. | `.memlog.md` — undated |
+| 2026-09-01 | **AD-9 amended:** the project root *is* the target path, recognized by `_bmad` and `_bmad-output`; resolution never walks. | `.memlog.md` — undated |
+| 2026-09-02 | **AD-9 rule 3 narrowed:** exactly one permitted root, never widened — replacing a root *set* with an admission ceremony. Taken because FR-10 was deferred indefinitely, so the set had one member and the ceremony guarded nothing. | Dated in AD-9's own rule text |
+| 2026-09-02 | **AD-10 gained one scoped exception:** the suggestion scan enumerates directory *names* outside the permitted root, reads nothing, recurses not at all, and is importable only by that scan. | Undated in this document; `epics.md` still stated AD-10 unamended until 2026-09-03 |
+| 2026-09-02 | **Stack:** third-party runtime code is bundled, not installed. Takes effect when the first such library lands — which the deferred FR-10 config story owns, so it governs nothing today. | Dated in Stack |
+| 2026-09-03 | **Paradigm and layer table corrected to what was built:** the `src/ports/` ring was declared here and in the dependency diagram and was never created in any commit of Epic 1, so it is removed along with its three edges, and the paradigm line no longer claims ports and adapters. The pure-domain invariant it was meant to protect is unaffected and is mechanically enforced. | This log |
+| 2026-09-03 | **AD-9 rule 1 corrected:** it asserted that artifact roots are read from the project's own configuration, two rules above rule 3's note that FR-10 is deferred indefinitely — the AD contradicted itself. | This log |
+| 2026-09-03 | **Family axis corrected** in Consistency Conventions: it named eight families while the code had twelve. FR-11's seven constrain *run folders*; the artifact vocabulary is wider. | This log |

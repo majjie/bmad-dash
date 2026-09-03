@@ -589,6 +589,29 @@ reasoning. The sixth is the usual unconsumed-export tally.
   evidence: Found while fixing retrospective item 1 on 2026-09-03. The fix deliberately invented no copy: a row naming the cause — the root itself was unreadable, as distinct from a bound being reached or a name being skipped — is a UX decision, and Story 1.12 established that rows are added to the index rather than written in code. The information exists in the model (`Inventory.startEntry` carries the state, the stage and the OS reason); only the sentence is missing.
   triggers: Whoever next edits the string index, or the first report of a reader unable to tell an unreadable project from a slow one.
 
+## Reconciled from: epic 1 retrospective items 6-9 (2026-09-03)
+
+- source_spec: `_bmad-output/implementation-artifacts/epic-1-retro-2026-09-03.md`
+  summary: RESOLVED 2026-09-03 — item 6. FR-10 said five contradictory things at once. It now reads as deferred in all of them: annotated at `prd.md:168` and `epics.md:44`, marked deferred rather than covered at `epics.md:194`, dropped from Epic 1's `FRs covered` list, dropped from Story 1.5's `Satisfies` line with a note saying it was split out, and AD-9 rule 1 in the spine no longer asserts that artifact roots are read from the project's own configuration two rules above rule 3's note that FR-10 is deferred.
+  evidence: User decision, epic 1 retrospective walkthrough. The requirement stands and only its delivery is deferred, so it is annotated rather than withdrawn. The cost is restated wherever it is now marked: until FR-10 lands, artifact roots stay at their measured defaults and a project that puts them elsewhere is read at the wrong paths.
+  triggers: none — closed. If FR-10 is ever un-deferred, the same five places are what has to change back.
+
+- source_spec: `_bmad-output/implementation-artifacts/epic-1-retro-2026-09-03.md`
+  summary: RESOLVED 2026-09-03 — item 7. `epics.md` now names Story 1.6a, which was split out of 1.5 mid-epic on 2026-09-02, built, and tracked in `sprint-status.yaml` from the start while never appearing in the epic file. And the spine's family axis now distinguishes FR-11's seven run-folder families from the twelve-value artifact vocabulary; it named eight while the code had twelve.
+  evidence: User decision. The code's reading was the correct one — FR-11 constrains run folders rather than the artifact universe — so both documents were amended to the code rather than the reverse.
+  triggers: none — closed.
+
+- source_spec: `_bmad-output/implementation-artifacts/epic-1-retro-2026-09-03.md`
+  summary: RESOLVED 2026-09-03 — item 8, all three parts. UX-DR3's verb was "Load IBM Plex Sans, Mono and Serif", which the implementation deliberately does not do because NFR-11 forbids any outbound request; it now says declare, with the fallback stacks and the reason. The spine gained an **Amendment log** dating all ten amendments, three of which were undated anywhere and recoverable only from `.memlog.md` or downstream restatements. And its frontmatter no longer reads `updated: '2026-08-28'` on a document amended through 2026-09-03.
+  evidence: User decision. UX-DR3 was the one criteria divergence in the whole epic with no deferred-work entry, and it survived because a *test* asserts the opposite of the requirement — `test/render/page.test.ts` asserts nothing is fetched — and nobody noticed the conflict.
+  triggers: none — closed. Every future spine amendment gets a dated row in the log.
+
+- source_spec: `_bmad-output/implementation-artifacts/epic-1-retro-2026-09-03.md`
+  summary: RESOLVED 2026-09-03 — item 9. The `src/ports/` ring is removed from the spine's layer table and dependency diagram, along with its three edges, and the paradigm line no longer claims hexagonal ports-and-adapters. It was declared in both projections and named in the document's own frontmatter, and `git log --diff-filter=A` over all 25 commits of Epic 1 shows no file was ever added there.
+  evidence: User decision, choosing to describe the three layers actually built rather than to build the ring. The invariant the ring was meant to protect is unaffected and is the most heavily enforced rule in the repository: `src/domain/` has zero outgoing imports, asserted with all three evasion forms planted. The diagram gained `FS --> DOMAIN`, which the code has had since Story 1.9 (`src/adapters/fs/read.ts` imports `src/domain/signal.ts`) and which the ports hop was supposed to mediate.
+  correction: This closes the retrospective's finding A1 but not A2 — `src/adapters/http/server.ts` importing `src/adapters/fs/paths.ts` is still an edge the amended table does not grant, and it is still unenforced. It is action item 4, owned by the dev loop.
+  triggers: none — closed.
+
 ## Resolved and closed
 
 Kept verbatim rather than deleted — this file exists so nothing is lost, and a
