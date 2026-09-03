@@ -166,6 +166,9 @@ test('the markup carries no colour or size literal, and no inline style', () => 
     'artifact-state',
     'artifact-stage',
     'artifact-note',
+    // Story 2.1a: an openable row is an anchor around the whole row, so the
+    // link's accessible name carries the row's state rather than a bare path.
+    'artifact-link',
   ];
   const used = [...markup.matchAll(/\sclass="([^"]+)"/g)].flatMap((m) => (m[1] ?? '').split(/\s+/));
   assert.ok(used.length > 0, 'the markup must carry the classes its rules style');

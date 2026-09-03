@@ -74,6 +74,8 @@ import { OUTPUT_DIRECTORY, takeInventory } from '../../src/cli/inventory.ts';
 import { projectInventory, snapshotIdOf } from '../../src/cli/index.ts';
 import { ConfinedReader } from '../../src/adapters/fs/read.ts';
 import { canonical, toPlatform, type CanonicalPath } from '../../src/adapters/fs/paths.ts';
+import { artifactUrl, parseArtifactUrl } from '../../src/domain/url.ts';
+import { findArtifact } from '../../src/render/artifact.ts';
 import { EMPTY_INVENTORY, observeRun } from '../support/cli.ts';
 import {
   deniableDirectories,
@@ -1551,7 +1553,12 @@ test('a tile label is the tile only heading, and rows are list items', () => {
   assert.doesNotMatch(html, /<h[13-6][ >]/, 'the surface uses one heading level inside the grid');
   assert.match(html, /<ul class="artifact-list">/);
   assert.match(html, /<li class="artifact-row">/);
-  // The path leads the row, because that is what the reader scans by.
+  // The path leads the row, because that is what the reader scans by — inside
+  // the anchor where the row is openable, and directly where it is not.
+  assert.match(
+    html,
+    /<li class="artifact-row"><a class="artifact-link" href="[^"]+"><code class="artifact-path">/,
+  );
   assert.match(html, /<li class="artifact-row"><code class="artifact-path">/);
 });
 
@@ -1559,9 +1566,11 @@ test('the surface serves no script, and creates no element it did not write', ()
   const html = render(FULL_INVENTORY_VIEW);
   assert.doesNotMatch(html, /<script\b/i, 'the keyboard story is document order alone');
   assert.doesNotMatch(html, /https?:\/\//i);
-  // `role=` and `tabindex` are banned: nothing here is interactive, so an added
-  // role would describe structure the elements already carry, and a tabindex
-  // would put a non-interactive element in the tab order.
+  // `role=` and `tabindex` are banned. From Story 2.1a the surface *is*
+  // interactive, and that changes nothing here: a link is interactive by being
+  // a link, so a `role` would describe structure the anchor already carries and
+  // a `tabindex` would either duplicate the tab stop an anchor already has or
+  // put a non-interactive element in the tab order beside it.
   //
   // **`aria-` is deliberately not banned**, which the first version of this
   // assertion got wrong: it locked out `aria-label` and `aria-labelledby`
@@ -1573,7 +1582,7 @@ test('the surface serves no script, and creates no element it did not write', ()
   // Every tag in the output is one this surface writes. Stronger than a list
   // of forbidden elements: a crafted filename cannot introduce *any* element,
   // named in advance or not — and the fixture contains one that tries.
-  const written = new Set(['div', 'section', 'h2', 'ul', 'li', 'code', 'span', 'p']);
+  const written = new Set(['div', 'section', 'h2', 'ul', 'li', 'code', 'span', 'p', 'a']);
   const tags = [...html.matchAll(/<\/?([a-zA-Z][a-zA-Z0-9-]*)/g)].map((match) => match[1] ?? '');
   assert.ok(tags.length > 0, 'the surface must emit markup');
   assert.deepEqual(
@@ -1601,4 +1610,148 @@ test('a location state with no path to name falls to the unavailable branch', ()
   assert.ok(html.includes(SPRINT_UNAVAILABLE));
   assert.ok(!html.includes('<path>') && !html.includes('&lt;path&gt;'), 'no placeholder ships');
   assert.ok(!html.includes('Stories are at .'), 'and no empty substitution');
+});
+
+// ---------------------------------------------------------------------------
+// Story 2.1a: the rows are addressable
+// ---------------------------------------------------------------------------
+
+/** Every `href` the surface emits, in document order. */
+function hrefs(html: string): readonly string[] {
+  return [...html.matchAll(/<a\b[^>]*\shref="([^"]*)"/g)].map((match) => match[1] ?? '');
+}
+
+/** Every `<li class="artifact-row">…</li>`, in document order. */
+function rowMarkup(html: string): readonly string[] {
+  return [...html.matchAll(/<li class="artifact-row">([\s\S]*?)<\/li>/g)].map((m) => m[1] ?? '');
+}
+
+test('a row that names something openable is a link to the URL the grammar builds', () => {
+  const html = render(FULL_INVENTORY_VIEW);
+  assert.ok(
+    html.includes(`href="${artifactUrl(CERTAIN_ROW.path)}"`),
+    'the link is built by src/domain/url.ts, not spelled here',
+  );
+  // The grammar, not a second copy of it: this fails if the surface starts
+  // concatenating its own prefix, even one that happens to look the same today.
+  for (const row of [CERTAIN_ROW, UNINTERPRETED_ROW, AMBIGUOUS_BOTH_ROW]) {
+    assert.ok(html.includes(`href="${artifactUrl(row.path)}"`), row.path);
+  }
+});
+
+test('following a link the page emits resolves to the row that emitted it', () => {
+  // The acceptance criterion, end to end over the pair of functions: the
+  // surface builds a URL, the grammar parses it back, and the lookup finds the
+  // same row — including for the fixture path that needs encoding, which is the
+  // case this repository has none of and which is why the fixture carries one.
+  const html = render(FULL_INVENTORY_VIEW);
+  const linked = hrefs(html);
+  assert.ok(linked.length > 0, 'the surface must emit links');
+  for (const href of linked) {
+    const target = parseArtifactUrl(href);
+    assert.ok(target !== undefined, `${href} does not parse as an artifact URL`);
+    const found = findArtifact(FULL_INVENTORY_VIEW, target?.path ?? '');
+    assert.ok(found !== undefined, `${href} parsed to ${String(target?.path)}, which is no row`);
+    assert.ok(html.includes(`>${escapedPath(found?.row.path ?? '')}</code>`), 'and to the row shown');
+  }
+  // Named specifically, so this cannot pass over a fixture that lost its
+  // hostile row: the one path here that needs encoding is the one that would
+  // break a naive link.
+  assert.ok(linked.includes(artifactUrl(HOSTILE_PATH)), 'the encoded path is among them');
+  assert.ok(!linked.some((href) => href.includes(' ')), 'no link carries a raw space');
+  assert.ok(!linked.some((href) => href.includes('<')), 'and none carries a raw angle bracket');
+});
+
+/** A path as the surface writes it inside `<code>`: HTML-escaped, nothing else. */
+function escapedPath(path: string): string {
+  return path
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#39;');
+}
+
+test('an unidentified row occupies a row, carries no link, and is never hidden', () => {
+  // `EXPERIENCE.md:183`, in three clauses, each of which is a separate way to
+  // get this wrong: dropping the row, linking it anyway, or linking the row
+  // *around* it.
+  const html = render(FULL_INVENTORY_VIEW);
+  assert.ok(html.includes(UNIDENTIFIED_ROW.path), 'the row is on the page');
+  assert.ok(!html.includes(`href="${artifactUrl(UNIDENTIFIED_ROW.path)}"`));
+  const unlinked = rowMarkup(html).filter((row) => row.includes(UNIDENTIFIED_ROW.path));
+  assert.equal(unlinked.length, 1, 'exactly one row names it');
+  assert.ok(!(unlinked[0] ?? '').includes('<a '), 'and that row contains no anchor at all');
+});
+
+test('every linked row takes focus in document order and opens with Enter', () => {
+  // The project's first keyboard assertion, and it is deliberately an assertion
+  // about *markup* rather than a simulated key press. `EXPERIENCE.md:198` fixes
+  // `Tab` to "move through interactive elements in one document order" and
+  // `Enter` to "open the focused row"; a real anchor with a real `href` gives
+  // both natively, and the only ways to lose them are the ones checked here.
+  const html = render(FULL_INVENTORY_VIEW);
+  const linked = rowMarkup(html).filter((row) => row.includes('<a '));
+  assert.ok(linked.length > 1, 'more than one row must be linked for order to mean anything');
+
+  // 1. Every link is an anchor with a non-empty `href`. An anchor without one
+  //    is not focusable and does not activate; a `div` with a click handler
+  //    would be neither, and there is no script here to give it either.
+  for (const href of hrefs(html)) {
+    assert.notEqual(href, '', 'an anchor with no href is not in the tab order at all');
+    assert.ok(href.startsWith('/artifact/'), href);
+  }
+
+  // 2. Nothing re-orders the tab sequence or fakes a control. A positive
+  //    `tabindex` would pull an element ahead of document order, and `role`
+  //    would describe an anchor as something it is not.
+  assert.doesNotMatch(html, /tabindex=|role=|onclick=|javascript:/i);
+  assert.doesNotMatch(html, /<script\b/i, 'no script may own activation');
+
+  // 3. Focus order is document order, so the anchors appear in the same order
+  //    as the rows that hold them. Asserted by construction: the nth anchor is
+  //    inside the nth linked row.
+  const anchorOrder = hrefs(html);
+  const rowOrder = linked.map((row) => /href="([^"]*)"/.exec(row)?.[1] ?? '');
+  assert.deepEqual(anchorOrder, rowOrder, 'an anchor exists that is not inside a row');
+
+  // 4. The accessible name carries the row's honest state, which is what
+  //    wrapping the whole row buys: an anchor's name is its text content, so a
+  //    screen-reader user hears the path *and* what the tool knows about it.
+  //    `EXPERIENCE.md:226` requires exactly that.
+  const named = linked.find((row) => row.includes(UNINTERPRETED_ROW.path));
+  assert.ok(named !== undefined);
+  const text = (named ?? '').replace(/<[^>]*>/g, ' ');
+  assert.ok(text.includes(UNINTERPRETED_ROW.path), 'the name includes the path');
+  assert.ok(text.includes(UNINTERPRETED), 'and the state the row reports');
+});
+
+test('over this repository, every linked row resolves and the unidentified ones are not links', async (t) => {
+  // The end-to-end half, over the real pass rather than a fixture — the same
+  // contract the "nothing disappears from the view" test holds this surface to,
+  // extended to the links. Measured on this repository: two rows the authority
+  // cannot identify, which must have rows and must not have links.
+  const view = projectInventory(takeInventory(new ConfinedReader(canonical(REPO_ROOT))));
+  const html = render(view);
+
+  const linked = hrefs(html);
+  assert.ok(linked.length > 10, `only ${String(linked.length)} rows link anywhere`);
+  for (const href of linked) {
+    const target = parseArtifactUrl(href);
+    assert.ok(target !== undefined, `${href} does not parse`);
+    assert.ok(
+      findArtifact(view, target?.path ?? '') !== undefined,
+      `${href} parsed to ${String(target?.path)}, which this snapshot has no row for`,
+    );
+  }
+
+  const unidentified = view.groups
+    .flatMap((group) => group.rows)
+    .filter((row) => row.identity.outcome === 'unidentified');
+  assert.ok(unidentified.length > 0, 'this repository has rows the authority cannot identify');
+  for (const row of unidentified) {
+    assert.ok(html.includes(row.path), `${row.path} must still have a row`);
+    assert.ok(!linked.includes(artifactUrl(row.path)), `${row.path} must not be a link`);
+  }
+  t.diagnostic(`${String(linked.length)} linked rows, ${String(unidentified.length)} unidentified`);
 });

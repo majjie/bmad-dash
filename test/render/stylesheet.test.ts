@@ -690,15 +690,22 @@ test('every class rule is exercised by some render path, and vice versa', async 
   // the Dashboard has only one tile to show and nothing to raise. Rendering
   // each component closes the loop without pretending the page uses everything.
   const { renderPage } = await import('../../src/render/page.ts');
+  const { findArtifact, renderArtifact } = await import('../../src/render/artifact.ts');
   const { tile, tileGrid } = await import('../../src/render/components.ts');
   const { markup } = await import('../../src/render/html.ts');
-  const { FULL_INVENTORY_VIEW } = await import('../support/inventory.ts');
+  const { CERTAIN_ROW, FULL_INVENTORY_VIEW } = await import('../support/inventory.ts');
+  const opened = findArtifact(FULL_INVENTORY_VIEW, CERTAIN_ROW.path);
+  assert.ok(opened !== undefined, 'the fixture must hold the row the artifact view is rendered for');
   const rendered = [
     // The full view rather than an empty one: from Story 1.12 the inventory's
     // own classes are only emitted when there is something to list, and a
     // surface rendered empty would let a rule for an unrendered class pass this
     // check in the direction it was written to catch.
     renderPage('/tmp/bmad-dash-test-project', FULL_INVENTORY_VIEW),
+    // Story 2.1a's second surface. Without it a class the artifact view emits
+    // and nothing styles would pass, which is the direction this loop is weakest
+    // in — it can only see markup it is handed.
+    renderArtifact('/tmp/bmad-dash-test-project', opened),
     tileGrid([
       { label: 'A', content: { html: markup`<p>x</p>` }, raised: true },
       { label: 'B', content: { empty: 'Nothing yet.' } },

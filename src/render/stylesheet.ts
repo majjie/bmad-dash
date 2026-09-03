@@ -484,6 +484,33 @@ function componentRules(): readonly string[] {
       declaration('gap', 'var(--space-2)'),
       declaration('padding', 'var(--space-row-padding-y) 0'),
     ]),
+    // Story 2.1a: an openable row is an anchor wrapping the whole row, so the
+    // link's accessible name carries the row's state rather than a bare path.
+    // The anchor therefore has to *be* the flex line — a plain inline anchor
+    // would collapse the row's cells into one flex item and lose the wrapping
+    // gap — so it repeats `.artifact-row`'s layout and grows to fill it.
+    //
+    // `text-decoration-line: none` here with `underline` on the path one rule
+    // down, rather than the document's link rule underlining all nine cells:
+    // the affordance belongs on the thing the reader scans by. It is still a
+    // non-colour channel, which is what WCAG 1.4.1 asks for and why the base
+    // `a` rule carries an underline at all — `primary` against `on-surface` is
+    // 1.46:1, so colour alone could never carry it.
+    rule('.artifact-link', [
+      declaration('display', 'flex'),
+      declaration('flex-wrap', 'wrap'),
+      declaration('align-items', 'baseline'),
+      declaration('gap', 'var(--space-2)'),
+      declaration('flex', '1 1 auto'),
+      declaration('min-width', '0'),
+      declaration('color', 'inherit'),
+      declaration('text-decoration-line', 'none'),
+    ]),
+    rule('.artifact-link .artifact-path', [
+      declaration('color', 'var(--color-primary)'),
+      declaration('text-decoration-line', 'underline'),
+      declaration('text-decoration-thickness', 'from-font'),
+    ]),
     // A project-relative path is unbreakable text of unbounded length, shown in
     // full because a shortened path is one the reader cannot check — the same
     // pair of declarations, for the same reason, as `.project-path`.

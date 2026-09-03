@@ -2,7 +2,8 @@
 title: 'Open an artifact at its own URL'
 type: 'feature'
 created: '2026-09-03'
-status: 'ready-for-dev'
+status: 'in-progress'
+baseline_commit: '6c8922cf4e28c45b58a8a94a27723313c5be3bd6'
 review_loop_iteration: 0
 context: []
 ---
@@ -63,20 +64,20 @@ context: []
 - `src/adapters/fs/segments.ts` — NFR-17's filesystem half, and the thing not to copy: it refuses rather than repairs, `%2e%2e` and `%2f` pass all twelve of its rules untouched, and its importer set is asserted as exactly `['src/adapters/fs/read.ts']`.
 - `src/render/html.ts` — `markup` :146 escapes every interpolated value (:40). **It has no URL context**: an `href` built this way is safe as HTML and still wrong as a URL. That is the one real hazard in linking a row.
 - `test/architecture.test.ts` — `src/domain/` has zero outgoing imports :98 (globals are invisible to the scan, so `encodeURIComponent` is fine); every domain module carries an exact importer set, and :1061's comment says a new one is expected to; the HTTP adapter's escape list is an exact one-entry array :990; `web/` must stay the only empty scanned root :701.
-- Measured on this repository: 58 rows, **2 unidentified** (`_bmad-output/implementation-artifacts`, `_bmad-output/planning-artifacts`) which must not be links, row paths unique across the whole view, and none currently needing encoding — so a fixture must supply that case.
+- Measured on this repository: **59 rows, 2 unidentified** (`_bmad-output/implementation-artifacts`, `_bmad-output/planning-artifacts`) which must not be links, so **57 linked**; row paths unique across the whole view; and none currently needing encoding — so a fixture must supply that case. *(Corrected at the end of implementation: the Code Map said 58 when this spec was written and the count moved to 59 during the story, because this spec file is itself an artifact under a scanned root. That is the stale-measured-figure pattern this project has recorded twice before, in miniature and inside a single story — which is the argument for the recomputing test the standing entry asks for rather than for a number in a comment.)*
 
 ## Tasks & Acceptance
 
 **Execution:**
-- [ ] `src/domain/url.ts` -- new pure module, zero imports: the artifact and section URL grammar. Build a URL from a project-relative path, and parse one back to `{ path, section? }`. Percent-encode per segment; decode, then normalize dot segments per RFC 3986 §5.2.4, in that order. State in the header that this is an **encoder** and why a refusing sanitizer would be wrong here.
-- [ ] `test/domain/url.test.ts` -- new: round-trip for a path holding a space, `#`, `?`, `%` and a non-ASCII character; `..` and `%2e%2e` both normalized; the section shape parsed; a trailing slash equal to none; and a pinned example URL so the grammar cannot move silently.
-- [ ] `src/adapters/http/server.ts` -- route `/artifact/...`: parse the URL, look the path up in the view's rows, serve the shell on a hit and the existing 404 on a miss. Keep `Host` and method before routing, and carry `bmad-snapshot-id` on the 200 exactly as `/` does.
-- [ ] `src/render/artifact.ts` -- new: the artifact-view shell. The global project header (`EXPERIENCE.md:59` requires it on every surface), the artifact's path, and what the inventory row already says about it. No content -- that is 2.1b.
-- [ ] `src/render/inventory.ts` -- a row that names something openable becomes a link to its URL; a row the authority could not identify stays unlinked, per `EXPERIENCE.md:183`. The accessible name must still carry the row's honest state.
-- [ ] `test/render/artifact.test.ts` -- new: the shell renders, carries the project header, and states an unidentified artifact honestly.
-- [ ] `test/render/inventory.test.ts` -- linked rows point at the URL the grammar builds; unidentified rows have no anchor; **the project's first keyboard assertion** -- every linked row is reachable by `Tab` in document order and activatable by `Enter`, which a real anchor gives natively.
-- [ ] `test/server.test.ts` -- the matrix: a hit, a miss, encoded and dot-segment paths, a directory row, the section shape, a trailing slash, `/` unchanged, and the refusals still refused before any lookup.
-- [ ] `test/architecture.test.ts` -- an exact importer set for `src/domain/url.ts`, matching the convention every other domain module follows.
+- [x] `src/domain/url.ts` -- new pure module, zero imports: the artifact and section URL grammar. Build a URL from a project-relative path, and parse one back to `{ path, section? }`. Percent-encode per segment; decode, then normalize dot segments per RFC 3986 §5.2.4, in that order. State in the header that this is an **encoder** and why a refusing sanitizer would be wrong here.
+- [x] `test/domain/url.test.ts` -- new: round-trip for a path holding a space, `#`, `?`, `%` and a non-ASCII character; `..` and `%2e%2e` both normalized; the section shape parsed; a trailing slash equal to none; and a pinned example URL so the grammar cannot move silently.
+- [x] `src/adapters/http/server.ts` -- route `/artifact/...`: parse the URL, look the path up in the view's rows, serve the shell on a hit and the existing 404 on a miss. Keep `Host` and method before routing, and carry `bmad-snapshot-id` on the 200 exactly as `/` does.
+- [x] `src/render/artifact.ts` -- new: the artifact-view shell. The global project header (`EXPERIENCE.md:59` requires it on every surface), the artifact's path, and what the inventory row already says about it. No content -- that is 2.1b.
+- [x] `src/render/inventory.ts` -- a row that names something openable becomes a link to its URL; a row the authority could not identify stays unlinked, per `EXPERIENCE.md:183`. The accessible name must still carry the row's honest state.
+- [x] `test/render/artifact.test.ts` -- new: the shell renders, carries the project header, and states an unidentified artifact honestly.
+- [x] `test/render/inventory.test.ts` -- linked rows point at the URL the grammar builds; unidentified rows have no anchor; **the project's first keyboard assertion** -- every linked row is reachable by `Tab` in document order and activatable by `Enter`, which a real anchor gives natively.
+- [x] `test/server.test.ts` -- the matrix: a hit, a miss, encoded and dot-segment paths, a directory row, the section shape, a trailing slash, `/` unchanged, and the refusals still refused before any lookup.
+- [x] `test/architecture.test.ts` -- an exact importer set for `src/domain/url.ts`, matching the convention every other domain module follows.
 
 **Acceptance Criteria:**
 - Given an artifact in the snapshot, when its URL is requested, then the shell is served with the snapshot identity header.

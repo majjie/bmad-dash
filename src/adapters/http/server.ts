@@ -28,6 +28,16 @@
  * places already claimed it meant. The snapshot is still immutable and still
  * built in one place: this adapter neither mutates one nor knows how one is
  * made.
+ *
+ * **Story 2.1a gives it a second route and no second job.** `/artifact/…`
+ * resolves through `src/domain/url.ts` — AD-18's grammar, owned by the server
+ * and shared with the render layer that builds the links — and the resulting
+ * path is looked up in the snapshot's own rows. The adapter still composes
+ * nothing: it asks `src/render/artifact.ts` whether the snapshot holds that row
+ * and, if it does, for the document. What it decides is what it has always
+ * decided, the status and the headers. Every route inherits the `Host` check
+ * and the 405-with-`Allow` gate, because both happen before any path is looked
+ * at.
  */
 
 import {
@@ -39,9 +49,11 @@ import {
 import type { AddressInfo } from 'node:net';
 
 import { renderPage } from '../../render/page.ts';
+import { findArtifact, renderArtifact } from '../../render/artifact.ts';
 import { assertProjectRoot } from '../../render/chrome.ts';
 import type { InventoryView } from '../../render/inventory.ts';
 import { errorCode } from '../../domain/thrown.ts';
+import { parseArtifactUrl } from '../../domain/url.ts';
 import { toPlatform, type CanonicalPath } from '../fs/paths.ts';
 
 /**
@@ -96,6 +108,16 @@ export const SNAPSHOT_ID_HEADER = 'bmad-snapshot-id';
  * treated as a default: nothing in this process terminates TLS.
  */
 const SCHEME_DEFAULT_PORT = 80;
+
+/**
+ * The body every miss answers with, stated once.
+ *
+ * Two routes can miss from Story 2.1a — a path that is no route at all, and an
+ * artifact URL naming no row — and they are the same answer: the tool has
+ * nothing at that address. One constant so the two cannot drift into two
+ * sentences that imply a distinction the reader cannot act on.
+ */
+const NOT_FOUND_BODY = 'Not found.\n';
 
 /** Bind failures worth retrying on an OS-assigned port instead of giving up. */
 const RETRYABLE_BIND_CODES = new Set(['EADDRINUSE', 'EACCES', 'EADDRNOTAVAIL']);
@@ -436,6 +458,11 @@ function handleRequest(
     return;
   }
 
+  // The query is stripped and the path is otherwise untouched here: decoding,
+  // dot-segment normalization and the artifact grammar all belong to
+  // `src/domain/url.ts`, which owns them for the render layer too. `/` is an
+  // equality against the raw path for the same reason it always was — it takes
+  // no argument, so there is nothing to parse.
   const path = request.url?.split('?')[0] ?? '/';
   if (path === '/') {
     // Building the snapshot and rendering it, inside one `try`, and that is
@@ -486,7 +513,59 @@ function handleRequest(
     return;
   }
 
-  respondText(response, 404, 'Not found.\n');
+  const target = parseArtifactUrl(path);
+  if (target !== undefined) {
+    // **The lookup is a set-membership test against this snapshot's own rows,
+    // and that is the whole of the confinement.** Nothing on this path resolves,
+    // stats or reads anything: `findArtifact` lives in the render layer, which
+    // has no filesystem adapter to reach, so a URL naming a file that is not a
+    // row cannot open it however it is spelled. `/artifact/../../etc/passwd`
+    // normalizes to the key `etc/passwd`, which is not a row, which is the 404
+    // below — not because a check refused it, but because there is no code path
+    // from a request to a read.
+    //
+    // The snapshot is built first and the miss decided from it, so a 404 costs
+    // a scan. That is the honest order: "is this a row" is a question only a
+    // snapshot can answer, and answering it from the filesystem instead is
+    // exactly the mutation this story's mechanism check plants.
+    //
+    // `target.section` is parsed and deliberately unused. AD-18 fixes the
+    // grammar for artifacts **and** sections and the spine lists it as not
+    // deferred, so the shape resolves today; deriving a section id from a
+    // document is Story 2.9's, and a page that claimed to have selected a
+    // section it cannot name would be worse than one that opens the artifact.
+    //
+    // One `try`, and `writeHead` inside it, for the reasons the `/` branch
+    // states at length: to a reader a snapshot failure and a render failure are
+    // one failure, and `writeHead` validates the header values it is given.
+    let document: string;
+    try {
+      const view = inventory();
+      const found = findArtifact(view, target.path);
+      if (found === undefined) {
+        // No identity header. The response carries no project content — it
+        // carries the fact that there is none — so naming a snapshot on it
+        // would be a claim about content this response does not have, which is
+        // the rule the 403, 405 and 500 paths already follow.
+        respondText(response, 404, NOT_FOUND_BODY);
+        return;
+      }
+      document = renderArtifact(toPlatform(projectRoot), found);
+      response.writeHead(200, {
+        'content-type': 'text/html; charset=utf-8',
+        'cache-control': 'no-store',
+        [SNAPSHOT_ID_HEADER]: view.snapshotId,
+      });
+    } catch (error: unknown) {
+      onError?.(error instanceof Error ? error : new Error(String(error)));
+      respondText(response, 500, 'The page could not be rendered.\n');
+      return;
+    }
+    response.end(document);
+    return;
+  }
+
+  respondText(response, 404, NOT_FOUND_BODY);
 }
 
 function respondText(response: ServerResponse, status: number, body: string): void {

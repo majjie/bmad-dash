@@ -32,6 +32,12 @@
  * levels, the per-family tile and the three label tables it reads are this
  * story's inventions. Each is recorded in `deferred-work.md`.
  *
+ * **Story 2.1a makes the rows addressable.** A row that names something
+ * openable carries a link to that artifact's own URL, built by
+ * `src/domain/url.ts` — the grammar AD-18 requires, stated once and shared with
+ * the HTTP adapter that parses it back. What the row *says* is unchanged; what
+ * it gains is a way to be reached.
+ *
  * **No colour carries meaning here, and that is not an accident of the
  * palette.** `DESIGN.md:221` records that `present`, `absent` and `unchecked`
  * converge under simulated protanopia, so the state word is load-bearing; the
@@ -56,6 +62,7 @@ import type { DateSignal, Reuse } from '../domain/runs.ts';
 import { SIGNAL_LABELS, type ReadStage, type SignalState } from '../domain/signal.ts';
 import type { SnapshotId } from '../domain/snapshot.ts';
 import { outOfTreeReport, type LocationState } from '../domain/sprint.ts';
+import { artifactUrl } from '../domain/url.ts';
 import type { TileContent, TileOptions } from './components.ts';
 import { fillIndexString, markup, type Markup } from './html.ts';
 
@@ -590,11 +597,52 @@ function runFactNotes(facts: readonly RowRunFacts[]): readonly Markup[] {
  * looking at the styled page: the flex `gap` that separates them visually is
  * not text, and text extraction, copy-paste and an unstyled render all got
  * `prdsFamily directoryNot checked`.
+ *
+ * **From Story 2.1a a row that names something openable is a link**, and one
+ * the authority could not identify is not — see `isOpenable`. A real anchor
+ * with a real `href`, and nothing else: it takes focus in document order and
+ * opens on `Enter` because that is what an anchor does, so the keyboard model
+ * `EXPERIENCE.md:198` fixes costs this surface no script and no `tabindex`.
  */
 function artifactRow(row: ArtifactRow): Markup {
-  const stage = row.readability.stage;
   const cells: Markup[] = [
     markup`<code class="artifact-path">${row.path}</code>`,
+    ...artifactFacts(row),
+  ];
+  if (!isOpenable(row)) return markup`<li class="artifact-row">${cells}</li>`;
+  // **The whole row is the link, not just the path**, and that is what makes
+  // the accessible name honest without an `aria-label` restating it. An
+  // anchor's accessible name is its own text content, so wrapping the cells
+  // gives a screen-reader user `<path> Document Content: Present` — the row's
+  // state travelling with the row, which is `EXPERIENCE.md:226`'s requirement —
+  // while a link around the path alone would announce a bare path and leave
+  // every state word outside the thing being activated. It is also what
+  // `EXPERIENCE.md:131` describes: the row is what opens.
+  //
+  // **The `href` is built by the encoder and then escaped as HTML, and both
+  // steps are needed.** `markup` escapes for *markup*; it has no URL context,
+  // so an interpolated raw path would be safe as an attribute value and still
+  // wrong as a URL — a `#` or a `?` in a filename would truncate the target and
+  // a space would break the attribute's meaning. `artifactUrl` percent-encodes
+  // every segment first, which leaves only characters legal in a path, and the
+  // escaping on top of that is what keeps a `&` or a quote from ending the
+  // attribute. There is no scheme to inject: the value always begins
+  // `/artifact/`.
+  return markup`<li class="artifact-row"><a class="artifact-link" href="${artifactUrl(row.path)}">${cells}</a></li>`;
+}
+
+/**
+ * Everything a row says about an artifact except which artifact it is.
+ *
+ * Exported so `./artifact.ts` can state exactly what the inventory row states,
+ * from the same code, rather than a second rendering of the same nine facts
+ * that is free to drift. The path is not among them: on the artifact view the
+ * path is the heading of the page, and repeating it inside the facts would say
+ * it twice.
+ */
+export function artifactFacts(row: ArtifactRow): readonly Markup[] {
+  const stage = row.readability.stage;
+  return [
     ...typeCells(row.identity),
     stateWord(row.readability.state),
     ...(stage === undefined ? [] : [stageValue(stage)]),
@@ -602,7 +650,27 @@ function artifactRow(row: ArtifactRow): Markup {
     ...interpretationNote(row.interpretation),
     ...runFactNotes(row.runFacts),
   ];
-  return markup`<li class="artifact-row">${cells}</li>`;
+}
+
+/**
+ * True for a row that names something a reader can open.
+ *
+ * The one exception is `EXPERIENCE.md:183`'s, stated there in as many words: an
+ * unidentified artifact "occupies a row, is not a link, and is never hidden".
+ * An `ambiguous` verdict **is** openable — the tool has resolved *what* the
+ * artifact is well enough to address it, and declines only to rank the
+ * readings, which is a fact the artifact view states rather than a reason to
+ * withhold the page.
+ *
+ * Not a property of the URL: `artifactUrl` will build one for any row path, and
+ * the HTTP adapter will serve any row it is asked for, including an
+ * unidentified one — the matrix says so ("Resolves and shows the shell saying
+ * so"). This is a decision about what the *inventory* offers, so that a reader
+ * tabbing the page is not offered a page about an artifact the tool could not
+ * identify.
+ */
+export function isOpenable(row: ArtifactRow): boolean {
+  return row.identity.outcome !== 'unidentified';
 }
 
 /**

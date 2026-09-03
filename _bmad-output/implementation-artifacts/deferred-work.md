@@ -2,7 +2,24 @@
 
 One entry per finding. What is still open comes first — the block below, then
 each `## Deferred from:` heading in the order the rounds happened — and the two
-terminal sections are last: `## Standing decisions and accepted limits`, then
+terminal sections are last: `## Deferred from: implementation of spec-2-1a-open-an-artifact-at-its-own-url (2026-09-03)
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-2-1a-open-an-artifact-at-its-own-url.md`
+  summary: (low) The artifact view's **layout** is this story's invention: no document designs it. `EXPERIENCE.md:49` names the surface and says only "one artifact in the viewer for its type"; the surface-states matrix gives it four states, all of which need content or a snapshot comparison that does not exist yet.
+  evidence: Recorded 2026-09-03 rather than presented as the designed shape, on `src/render/inventory.ts`'s own precedent — that module's header records the grouping, the row shape and the heading levels as Story 1.12's inventions for the same reason. What was invented here, and what was deliberately *not*: the `h1` is `Artifact view`, read out of `EXPERIENCE.md`'s surface table rather than written down twice (`test/render/artifact.test.ts` parses the table); the path sits under it as a `<code class="artifact-path">`, which is DESIGN.md's own semantic rule for a string off a filesystem; and the one tile is labelled by the **family the row was placed under**, or `No family resolved`, so no new page copy was invented at all — on the Dashboard the family is said by which tile the row is in, and this carries that through. No signal pill, no action row, no `Copy path` or `Open in editor` control: `EXPERIENCE.md:210`'s read-only affordances are a real requirement with no story yet, and inventing them here would put three controls on a surface that cannot yet show what they act on.
+  triggers: Story 2.1b, which is the first story with content to lay out and therefore the first with a reason to decide the surface's real shape. If it keeps this layout, that is a decision; if it replaces it, nothing here was load-bearing.
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-2-1a-open-an-artifact-at-its-own-url.md`
+  summary: (low) `parseArtifactUrl` returns a `section` field that the HTTP adapter parses and **deliberately discards**, so `/artifact/<path>/section/<id>` serves byte-identical bytes to `/artifact/<path>`.
+  evidence: Recorded 2026-09-03 by decision, and it is a deliberate shape rather than an oversight. The spine lists the artifact *and section* URL grammar as explicitly not deferred (`ARCHITECTURE-SPINE.md:269`), so the shape is fixed here; deriving a section id from a document is Story 2.9's and no document has sections until then. The two alternatives were both worse: not parsing the shape would have left the grammar half-stated and a later story free to pick a different one, and rendering a claim about the section — `EXPERIENCE.md:189`'s `That section no longer exists in this document.` — would be a sentence about a feature that does not exist, asserting an absence the tool has not checked. So the field is live, pinned by `test/domain/url.test.ts`, and unread by its only consumer. `test/server.test.ts` asserts the identical-body behaviour, so a story that starts selecting a section fails there and has to say so.
+  triggers: Story 2.9, which derives section ids. It is the first consumer of the field.
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-2-1a-open-an-artifact-at-its-own-url.md`
+  summary: AD-18 is **founded, not satisfied**. Its second clause — a section resolves to the same URL whether the document arrived whole or already sharded — cannot be tested until sharding exists, and this story asserts nothing about it.
+  evidence: Stated in the spec's own Never list on 2026-09-03 and recorded here so the claim does not drift into "AD-18 is done". What holds today: the grammar is defined once, in `src/domain/url.ts`, owned by the server and read by both ends (an exact importer set in `test/architecture.test.ts` is what keeps it one grammar), and a URL is stable across refreshes because it is derived from the artifact's project-relative path and from nothing about a scan. What does not hold yet: division-independence, because nothing divides a document. Story 2.11 is where the epic assigns that half.
+  triggers: Story 2.11.
+
+## Standing decisions and accepted limits`, then
 `## Resolved and closed`. An entry in either is done being read as work. Every
 entry carries `source_spec` and `summary`; everything carried over from a review
 also carries `evidence`. The rest are optional annotations, and every one of
@@ -694,6 +711,13 @@ not.
   summary: CORRECTION to the epic file, made while splitting — the original Story 2.1 claimed to satisfy **FR-18**, and could not have. FR-18 requires each artifact type to be rendered "by a viewer designed for its shape, **not by a generic markdown renderer**", which is precisely what the content story ships.
   evidence: Measured 2026-09-03 against `prd.md:218` while assigning requirements across the three split stories. FR-19 to FR-23 are the per-type viewers and are claimed by Stories 2.4 to 2.8 respectively; FR-18 is the umbrella principle and was claimed only by Story 2.1, inherited unexamined into 2.1a when it was split. A generic renderer is the right *fallback* for a type whose viewer does not exist yet, so the correction is not to change what gets built: Story 2.1b now records that it **founds** FR-18 without satisfying it, and that FR-18 is satisfied progressively as 2.4 to 2.8 replace the fallback per type. Recorded because a story claiming a requirement it structurally cannot meet is the unenforceable-claim defect the Epic 1 retrospective found seven times, and this one was already in the epic file before the split.
   triggers: none — corrected in `epics.md` at the point of the split. Worth re-checking when 2.4 lands, since that is the first story to actually replace the fallback and therefore the first evidence that the progressive reading holds.
+
+## Deferred from: implementation of spec-2-1a-open-an-artifact-at-its-own-url (2026-09-03)
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-2-1a-open-an-artifact-at-its-own-url.md`
+  summary: (low) `test/render/contrast.test.ts` has no pairing row for the `primary` token used as **text**, which is what a link is. The artifact link measures 9.57:1 on the tile ground and is comfortably clear, but that figure is measured rather than asserted, so nothing fails if the token or the ground moves.
+  evidence: Surfaced 2026-09-03 while implementing Story 2.1a and **pre-existing rather than introduced** — the header's refresh control has been a `primary`-coloured link since Story 1.3, so this story put a second link on a second surface against a pairing the contrast suite never enumerated. It is the exact gap the Epic 1 retrospective recorded as still open: the contrast tests recompute the ratios `DESIGN.md` states and the pairings the system uses today, and nothing enumerates the *unused or unstated* pairings, so a future combination gets no warning until someone audits by hand. Not widened by this story and not closed by it.
+  triggers: The existing open entry about unenumerated contrast pairings — this is a second instance of it rather than a new finding, and whoever closes that one should add `primary`-as-text to the pairing table. Sooner if a story changes the `primary` token or introduces a link on a ground other than a tile.
 
 ## Standing decisions and accepted limits
 

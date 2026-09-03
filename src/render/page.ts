@@ -104,6 +104,29 @@ function dashboard(inventory: InventoryView): string {
  * messages, which is why the definition is now shared rather than repeated.
  */
 export function renderPage(projectRoot: string, inventory: InventoryView): string {
+  return documentShell(projectRoot, dashboard(inventory));
+}
+
+/**
+ * Everything a served document has that is not its surface: the head, the
+ * inlined stylesheet, and the global chrome.
+ *
+ * Extracted in Story 2.1a, when the artifact view became the second surface
+ * this tool serves. `EXPERIENCE.md:59` puts the project header on **every**
+ * surface — "it is present on every surface, and it is where snapshot currency,
+ * refresh progress, and refresh failure are reported" — and a second surface
+ * assembling its own `<!doctype>`, its own `<style>` and its own call to
+ * `projectHeader` is how the two drift into disagreeing about what a served
+ * page is. One shell, so the chrome cannot be *forgotten* on a later surface
+ * rather than deliberately omitted.
+ *
+ * `main` is markup the caller already composed. It is emitted verbatim, which
+ * is the one thing this function trusts: every caller is inside `src/render/`,
+ * and each builds its surface through `markup` or through `./components.ts`,
+ * both of which escape project-derived text. Nothing outside this layer can
+ * reach it — the HTTP adapter takes a rendered document and never supplies one.
+ */
+export function documentShell(projectRoot: string, main: string): string {
   return `<!doctype html>
 <html lang="en">
 <head>
@@ -115,7 +138,7 @@ ${inlinable(STYLESHEET)}</style>
 </head>
 <body>
 ${projectHeader(projectRoot)}
-${dashboard(inventory)}
+${main}
 </body>
 </html>
 `;

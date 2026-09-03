@@ -37,6 +37,15 @@ import { canonical, toPlatform } from '../src/adapters/fs/paths.ts';
 import { ConfinedReader } from '../src/adapters/fs/read.ts';
 import { EMPTY_INVENTORY, emptyInventory } from './support/cli.ts';
 import type { InventoryView } from '../src/render/inventory.ts';
+import { artifactUrl, sectionUrl } from '../src/domain/url.ts';
+import { ARTIFACT_SURFACE_TITLE } from '../src/render/artifact.ts';
+import {
+  CERTAIN_ROW,
+  DELIBERATE_RUN_ROW,
+  FULL_INVENTORY_VIEW,
+  HOSTILE_PATH,
+  UNIDENTIFIED_ROW,
+} from './support/inventory.ts';
 
 /**
  * A synthetic absolute root. Fixed rather than `process.cwd()` so a test's
@@ -1358,4 +1367,310 @@ test('a requested port is the port actually bound, end to end', async (t) => {
   assert.equal(cli.port, wanted, `asked for ${String(wanted)}, bound ${String(cli.port)}`);
   const response = await get({ port: wanted });
   assert.equal(response.status, 200, 'the requested port serves the page');
+});
+
+
+// ---------------------------------------------------------------------------
+// Story 2.1a: an artifact at its own URL
+// ---------------------------------------------------------------------------
+
+/**
+ * One request written straight onto the socket, byte for byte.
+ *
+ * Node's HTTP client refuses a request target containing an unescaped `<`,
+ * space or quote (`ERR_UNESCAPED_CHARACTERS`) — which is exactly the target a
+ * hostile filename produces if a page links it without encoding, and therefore
+ * exactly the target this server must answer sensibly. A raw socket is the only
+ * way to ask.
+ */
+function getRawTarget(port: number, target: string): Promise<Response> {
+  return new Promise<Response>((resolve, reject) => {
+    const socket = connect({ host: LOOPBACK_ADDRESS, port });
+    let raw = '';
+    socket.setEncoding('utf8');
+    socket.on('data', (chunk: string) => {
+      raw += chunk;
+    });
+    socket.on('error', reject);
+    socket.on('close', () => {
+      const [head = '', ...rest] = raw.split('\r\n\r\n');
+      const [statusLine = '', ...headerLines] = head.split('\r\n');
+      const headers: Record<string, string | undefined> = {};
+      for (const line of headerLines) {
+        const at = line.indexOf(':');
+        if (at > 0) headers[line.slice(0, at).toLowerCase()] = line.slice(at + 1).trim();
+      }
+      resolve({
+        status: Number(/^HTTP\/1\.\d (\d{3})/.exec(statusLine)?.[1] ?? 0),
+        body: rest.join('\r\n\r\n'),
+        headers,
+      });
+    });
+    socket.on('connect', () => {
+      socket.write(
+        `GET ${target} HTTP/1.1\r\nHost: ${LOOPBACK_ADDRESS}:${String(port)}\r\nConnection: close\r\n\r\n`,
+      );
+    });
+  });
+}
+
+/** A server serving one fixed view, and a count of how often it was asked. */
+async function servingFixture(
+  t: { after: (fn: () => unknown) => void },
+  view: InventoryView = FULL_INVENTORY_VIEW,
+): Promise<{ readonly port: number; readonly scans: () => number }> {
+  let scans = 0;
+  const server = await startServer({
+    projectRoot: PROJECT_ROOT,
+    inventory: () => {
+      scans += 1;
+      return view;
+    },
+  });
+  t.after(() => server.close());
+  return { port: server.port, scans: () => scans };
+}
+
+test('an artifact URL naming a row serves the shell, with the snapshot identity', async (t) => {
+  const { port } = await servingFixture(t);
+
+  const response = await get({ port, path: artifactUrl(CERTAIN_ROW.path) });
+  assert.equal(response.status, 200);
+  assert.equal(response.headers['content-type'], 'text/html; charset=utf-8');
+  assert.equal(response.headers['cache-control'], 'no-store');
+  // AD-17: the response records which scan it was built from, exactly as `/`
+  // does — one scan serving many representations, which is why this is a
+  // snapshot header and not an `ETag`.
+  assert.equal(response.headers[SNAPSHOT_ID_HEADER], FULL_INVENTORY_VIEW.snapshotId);
+  assert.ok(response.body.includes(`<h1>${ARTIFACT_SURFACE_TITLE}</h1>`));
+  assert.ok(response.body.includes(CERTAIN_ROW.path), 'the page names the artifact opened');
+
+  // And `/` still carries the same identity for the same scan.
+  const dashboard = await get({ port, path: '/' });
+  assert.equal(dashboard.headers[SNAPSHOT_ID_HEADER], FULL_INVENTORY_VIEW.snapshotId);
+});
+
+test('HEAD on an artifact URL answers with the headers and no body', async (t) => {
+  const { port } = await servingFixture(t);
+  const response = await get({ port, path: artifactUrl(CERTAIN_ROW.path), method: 'HEAD' });
+  assert.equal(response.status, 200);
+  assert.equal(response.headers[SNAPSHOT_ID_HEADER], FULL_INVENTORY_VIEW.snapshotId);
+  assert.equal(response.body, '');
+});
+
+test('an artifact URL naming no row is the same 404 as any unknown path', async (t) => {
+  const { port } = await servingFixture(t);
+  for (const path of ['/artifact/nope.md', '/artifact/docs/nope', '/artifact/_bmad-output']) {
+    const response = await get({ port, path });
+    assert.equal(response.status, 404, path);
+    assert.equal(response.body, 'Not found.\n', 'the existing plain-text body, not a new one');
+    assert.equal(response.headers['content-type'], 'text/plain; charset=utf-8');
+    // No identity: the response carries no project content, so naming a
+    // snapshot on it would be a claim about content it does not have.
+    assert.equal(response.headers[SNAPSHOT_ID_HEADER], undefined, path);
+  }
+  // And a shape the grammar does not have is the same answer, not a guess at an
+  // adjacent one.
+  assert.equal((await get({ port, path: '/artifact' })).status, 404);
+  assert.equal((await get({ port, path: '/artifact/' })).status, 404);
+  assert.equal((await get({ port, path: '/artifacts/x' })).status, 404);
+  assert.equal((await get({ port, path: `${artifactUrl(CERTAIN_ROW.path)}/section` })).status, 404);
+});
+
+test('a path needing encoding is served at the URL the page links', async (t) => {
+  // The fixture carries the case this repository does not have: a filename made
+  // of markup characters, which needs percent-encoding to be addressable at all.
+  const { port } = await servingFixture(t);
+  const response = await get({ port, path: artifactUrl(HOSTILE_PATH) });
+  assert.equal(response.status, 200, artifactUrl(HOSTILE_PATH));
+  assert.ok(response.body.includes('&lt;img src=x onerror=alert(1)&gt;.md'), 'and it is the right row');
+  assert.ok(!response.body.includes('<img'), 'no element is created by the filename');
+  // **The unencoded spelling is not a request at all**, which is the concrete
+  // reason the link has to be encoded rather than merely escaped as HTML. Node's
+  // own HTTP client refuses to send it (`ERR_UNESCAPED_CHARACTERS`), so it goes
+  // out on a raw socket — and the space inside the filename ends the request
+  // target, leaving a malformed request line that never reaches routing.
+  const unencoded = await getRawTarget(port, `/artifact/${HOSTILE_PATH}`);
+  assert.equal(unencoded.status, 400, 'a raw filename in a target is a broken request line');
+  // The encoded target goes over the identical raw socket and is served, so the
+  // difference above is the encoding and not the transport.
+  assert.equal((await getRawTarget(port, artifactUrl(HOSTILE_PATH))).status, 200);
+});
+
+test('dot segments and their encodings normalize before the lookup, and escape nothing', async (t) => {
+  const { port } = await servingFixture(t);
+  const target = artifactUrl(CERTAIN_ROW.path);
+
+  // A URL that climbs and comes back names the same row.
+  assert.equal((await get({ port, path: `/artifact/somewhere/..${target.slice(9)}` })).status, 200);
+  assert.equal((await get({ port, path: target.replace('/prds/', '/prds/./') })).status, 200);
+  assert.equal((await get({ port, path: target.replace('/prds/', '/prds/x/../') })).status, 200);
+
+  // A URL that climbs *out* names nothing, in every encoding. Each of these is
+  // a real file on the machine running this suite, and none of them is a row.
+  for (const path of [
+    '/artifact/../../etc/passwd',
+    '/artifact/%2e%2e/%2e%2e/etc/passwd',
+    '/artifact/..%2f..%2fetc%2fpasswd',
+    '/artifact/%2e%2e%2f%2e%2e%2fetc%2fpasswd',
+    '/artifact/%2fetc%2fpasswd',
+    '/artifact/....//....//etc/passwd',
+  ]) {
+    const response = await get({ port, path });
+    assert.equal(response.status, 404, path);
+    assert.equal(response.headers[SNAPSHOT_ID_HEADER], undefined, path);
+  }
+});
+
+test('a directory row has a URL like any other row', async (t) => {
+  // `WalkEntry.kind` includes `directory`, so a run folder and a sharded
+  // document are first-class rows — and a resolver that tested for a *file*
+  // would have quietly excluded them.
+  const { port } = await servingFixture(t);
+  const response = await get({ port, path: artifactUrl(DELIBERATE_RUN_ROW.path) });
+  assert.equal(response.status, 200);
+  assert.ok(response.body.includes(DELIBERATE_RUN_ROW.path));
+});
+
+test('an unidentified row has no link on the Dashboard and still resolves at its URL', async (t) => {
+  // The two halves of the matrix row, which are deliberately different answers:
+  // `EXPERIENCE.md:183` keeps the *row* from being a link; the URL still works,
+  // because a 404 for a row the reader can see would be the tool hiding it.
+  const { port } = await servingFixture(t);
+  const dashboard = await get({ port, path: '/' });
+  assert.ok(dashboard.body.includes(UNIDENTIFIED_ROW.path), 'the row is on the page');
+  assert.ok(!dashboard.body.includes(`href="${artifactUrl(UNIDENTIFIED_ROW.path)}"`));
+
+  const response = await get({ port, path: artifactUrl(UNIDENTIFIED_ROW.path) });
+  assert.equal(response.status, 200);
+  assert.ok(response.body.includes('Not identified. Tried:'), 'and the page says so honestly');
+});
+
+test('the section shape parses and resolves to the artifact', async (t) => {
+  // AD-18 fixes the grammar for artifacts *and* sections, and the spine lists it
+  // as not deferred — so the shape resolves today. Nothing selects a section:
+  // deriving an id from a document is Story 2.9's, and the page that claimed to
+  // have selected one it cannot name would be worse than one that opens the
+  // artifact.
+  const { port } = await servingFixture(t);
+  const whole = await get({ port, path: artifactUrl(CERTAIN_ROW.path) });
+  for (const id of ['goals', 'a section', '1']) {
+    const response = await get({ port, path: sectionUrl(CERTAIN_ROW.path, id) });
+    assert.equal(response.status, 200, id);
+    assert.equal(response.body, whole.body, 'the artifact, with nothing claimed about the section');
+  }
+  // A section on an artifact that is not a row fails the artifact lookup first.
+  assert.equal((await get({ port, path: sectionUrl('nope.md', 'goals') })).status, 404);
+});
+
+test('a trailing slash is the same resource as none', async (t) => {
+  const { port } = await servingFixture(t);
+  const bare = await get({ port, path: artifactUrl(CERTAIN_ROW.path) });
+  const slashed = await get({ port, path: `${artifactUrl(CERTAIN_ROW.path)}/` });
+  assert.equal(slashed.status, 200);
+  assert.equal(slashed.body, bare.body);
+  assert.equal(slashed.headers[SNAPSHOT_ID_HEADER], bare.headers[SNAPSHOT_ID_HEADER]);
+  // And with a query on top, since the adapter strips that before the grammar.
+  assert.equal((await get({ port, path: `${artifactUrl(CERTAIN_ROW.path)}/?x=1` })).status, 200);
+});
+
+test('the root still serves the Dashboard, unchanged', async (t) => {
+  const { port } = await servingFixture(t);
+  const response = await get({ port, path: '/' });
+  assert.equal(response.status, 200);
+  assert.ok(response.body.includes('<h1>Dashboard</h1>'), 'the landing surface is untouched');
+  assert.ok(!response.body.includes(`<h1>${ARTIFACT_SURFACE_TITLE}</h1>`));
+});
+
+test('Host and method are refused before any artifact lookup happens', async (t) => {
+  // Both refusals happen before a path is looked at, so no target state can
+  // reach them — which is why the matrix needs one row for every URL kind
+  // rather than one per kind per state. Asserted by counting scans: a refusal
+  // that had reached routing would have built a snapshot to answer from.
+  const fixture = await servingFixture(t);
+  const target = artifactUrl(CERTAIN_ROW.path);
+
+  const forbidden = await get({ port: fixture.port, path: target, host: 'evil.example' });
+  assert.equal(forbidden.status, 403);
+  assert.equal(forbidden.headers[SNAPSHOT_ID_HEADER], undefined);
+
+  const refused = await get({ port: fixture.port, path: target, method: 'POST' });
+  assert.equal(refused.status, 405);
+  assert.equal(refused.headers['allow'], 'GET, HEAD');
+  assert.equal(refused.headers[SNAPSHOT_ID_HEADER], undefined);
+
+  for (const method of ['PUT', 'DELETE', 'PATCH']) {
+    assert.equal((await get({ port: fixture.port, path: target, method })).status, 405, method);
+  }
+  assert.equal(fixture.scans(), 0, 'a refused request must not build a snapshot');
+
+  // And the same request, allowed, does.
+  assert.equal((await get({ port: fixture.port, path: target })).status, 200);
+  assert.equal(fixture.scans(), 1);
+});
+
+test('a snapshot that fails at request time is a 500 on the artifact route too', async (t) => {
+  const errors: Error[] = [];
+  const server = await startServer({
+    projectRoot: PROJECT_ROOT,
+    inventory: () => {
+      throw new Error('the project went away');
+    },
+    onError: (error) => errors.push(error),
+  });
+  t.after(() => server.close());
+
+  const response = await get({ port: server.port, path: artifactUrl(CERTAIN_ROW.path) });
+  assert.equal(response.status, 500);
+  assert.equal(response.headers['content-type'], 'text/plain; charset=utf-8');
+  assert.equal(response.headers[SNAPSHOT_ID_HEADER], undefined);
+  assert.equal(errors.length, 1, 'and the failure is reported rather than swallowed');
+});
+
+test('resolution is the row set and not the filesystem, in both directions', async (t) => {
+  // **The mechanism check, as a test.** Point the server at a real directory
+  // holding a real file, and hand it a view that does not list that file but
+  // does list one that is not there. A resolver that consulted the filesystem
+  // gets both of these backwards; the set-membership one gets both right.
+  //
+  // This is what makes traversal structurally impossible rather than defended
+  // against: there is no code path from a request to a read, so no spelling of
+  // any URL can reach a byte on disk.
+  const root = await makeProjectDir(t);
+  await mkdir(join(root, 'real'), { recursive: true });
+  await writeFile(join(root, 'real', 'onDisk.md'), '# on disk\n', 'utf8');
+
+  const ghost = 'imagined/notOnDisk.md';
+  const view: InventoryView = {
+    ...FULL_INVENTORY_VIEW,
+    groups: [
+      {
+        family: 'prd',
+        rows: [{ ...CERTAIN_ROW, path: ghost }],
+        notes: [],
+      },
+    ],
+  };
+  const server = await startServer({
+    projectRoot: canonical(root),
+    inventory: () => view,
+  });
+  t.after(() => server.close());
+
+  // On disk, not a row: 404. A filesystem resolver would have served it.
+  assert.equal((await get({ port: server.port, path: '/artifact/real/onDisk.md' })).status, 404);
+  assert.equal((await get({ port: server.port, path: '/artifact/real' })).status, 404);
+  // A row, not on disk: 200. A filesystem resolver would have 404'd it.
+  const served = await get({ port: server.port, path: artifactUrl(ghost) });
+  assert.equal(served.status, 200);
+  assert.ok(served.body.includes(ghost));
+  // And nothing outside the root is reachable however it is spelled, including
+  // through a path that exists and is absolute.
+  for (const path of [
+    '/artifact/../../etc/passwd',
+    `/artifact${root}/real/onDisk.md`,
+    `/artifact/${encodeURIComponent(join(root, 'real', 'onDisk.md'))}`,
+  ]) {
+    assert.equal((await get({ port: server.port, path })).status, 404, path);
+  }
 });

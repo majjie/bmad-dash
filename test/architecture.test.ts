@@ -1092,6 +1092,50 @@ test('the snapshot identity has a stated importer set, like every other domain m
   );
 });
 
+test('the URL grammar has a stated importer set, like every other domain module', async () => {
+  // Story 2.1a's new pure module, held to the convention the row above states
+  // for the snapshot identity: every module in this layer carries an exact
+  // importer set, and a new one arriving without makes the table silently
+  // non-exhaustive — the reader cannot tell "deliberately unconstrained" from
+  // "nobody added it".
+  //
+  // Two importers, and the pair *is* AD-18. The spine says the URL grammar "is
+  // defined once and owned by the server"; the two ends of that one grammar are
+  // the surface that builds a link and the adapter that parses the request the
+  // link produces. A third importer would mean something else had started
+  // deriving a URL of its own, which is the disagreement AD-18 exists to
+  // prevent — four units on one contract, each with its own shape.
+  assert.deepEqual(
+    await importersOf(REPO_ROOT, 'src/domain/url.ts'),
+    ['src/adapters/http/server.ts', 'src/render/inventory.ts'],
+    'the surface builds the link and the adapter parses it; a third importer is a second grammar',
+  );
+
+  // And each end takes only its own half, so neither can quietly grow into the
+  // other's job.
+  assert.deepEqual(
+    await namedImportsIn(REPO_ROOT, 'src/render/inventory.ts', '../domain/url.ts'),
+    ['artifactUrl'],
+    'the surface builds URLs and does not parse them',
+  );
+  assert.deepEqual(
+    await namedImportsIn(REPO_ROOT, 'src/adapters/http/server.ts', '../../domain/url.ts'),
+    ['parseArtifactUrl'],
+    'the adapter parses URLs and does not build them',
+  );
+
+  // The purity gate reads imports, and this module uses two *globals* —
+  // `encodeURIComponent` and `decodeURIComponent` — which are invisible to it.
+  // So the property the gate cannot see is asserted directly: the module names
+  // nothing from `node:`, and nothing that resolves, reads or stats. A resolver
+  // that reached for `node:path` would satisfy every import rule in this file
+  // and destroy the confinement Story 2.1a rests on.
+  const source = await readFile(join(REPO_ROOT, 'src', 'domain', 'url.ts'), 'utf8');
+  const code = scanSource(source).code;
+  assert.doesNotMatch(code, /\bnode:/, 'the URL grammar reaches no Node built-in, not even through a global');
+  assert.doesNotMatch(code, /\b(?:resolve|realpath|normalize|readFile|statSync|existsSync)\s*\(/);
+});
+
 test('the two most-coupled adapter modules have stated importer sets', async () => {
   // Added 2026-09-03, from the epic 1 retrospective: enforcement coverage was
   // inverse to actual coupling. `list.ts`, `walk.ts` and `segments.ts` each had
@@ -1249,6 +1293,13 @@ test('identity is derived in one place, and that place is the pure layer', async
   // the family, shape, confidence and level labels in the render layer, which
   // is the drift this project already corrects at four other sites and the
   // thing an exact importer set is a poor trade against.
+  //
+  // **Story 2.1a adds a second render importer on the identical basis.**
+  // `src/render/artifact.ts` takes `FAMILY_LABELS` and the `Family` type, so the
+  // artifact view can label its one tile with the family whose tile the row sat
+  // in on the Dashboard — a label lookup, not a question. The alternative was a
+  // second copy of the family labels, or inventing a tile label no document
+  // carries; both are worse than one more name on an asserted list.
   assert.deepEqual(
     await importersOf(REPO_ROOT, 'src/domain/identity.ts'),
     [
@@ -1256,9 +1307,10 @@ test('identity is derived in one place, and that place is the pure layer', async
       'src/domain/document.ts',
       'src/domain/interpretation.ts',
       'src/domain/runs.ts',
+      'src/render/artifact.ts',
       'src/render/inventory.ts',
     ],
-    'the pass, the document model, the interpretation rule, the run facts and the inventory surface — which reads labels only',
+    'the pass, the document model, the interpretation rule, the run facts and the two render surfaces — which read labels only',
   );
 
   // The narrow basis, made mechanical, and asserted as an **exact list** rather
@@ -1282,6 +1334,11 @@ test('identity is derived in one place, and that place is the pure layer', async
       'Shape',
     ],
     'the render layer may read the identity vocabulary and nothing that derives one',
+  );
+  assert.deepEqual(
+    await namedImportsIn(REPO_ROOT, 'src/render/artifact.ts', '../domain/identity.ts'),
+    ['FAMILY_LABELS', 'Family'],
+    'the artifact view may name a family and must not resolve one',
   );
   // Story 1.11's deliberate edit, and the reason it is deliberate rather than a
   // quiet import: this set exists to stop the frontmatter reader becoming
