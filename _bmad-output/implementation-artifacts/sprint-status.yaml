@@ -29,7 +29,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 # - Retrospective appends its action items to action_items; the status view surfaces open ones
 generated: 08-28-2026 20:15
-last_updated: 09-03-2026 13:57
+last_updated: 09-03-2026 14:05
 project: bmad-dash
 project_key: NOKEY
 tracking_system: file-system
@@ -97,7 +97,7 @@ action_items:
       both overflow counters against non-zero fixtures, and the case-insensitive output-folder
       exclusion (E2-E6)"
     owner: "dev loop"
-    status: open
+    status: done
     ref: "_bmad-output/implementation-artifacts/epic-1-retro-2026-09-03.md"
   - id: "epic-1-retro-item-3-fix-src-cli-suggest-ts-s-private-fill-wh"
     epic: 1

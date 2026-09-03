@@ -361,6 +361,123 @@ test('a real project: every artifact the pass found appears, grouped by family',
   }
 });
 
+test('the projection reports each story-location state the tree does not produce', () => {
+  // E4, from the epic 1 retrospective: the `absent` and `out-of-tree` branches
+  // were each deletable with the suite green, because this repository resolves
+  // `in-tree` and no test reached the others through the projection. With
+  // `absent` gone, every project without a `sprint-status.yaml` -- the shape
+  // FR-75 calls **normal** -- renders `Sprint view unavailable. absent` instead
+  // of saying there is no sprint tracking. `storyLocationReport`'s own docstring
+  // records this defect class having been found once already for `in-tree`; the
+  // branches added to fix it were themselves unpinned.
+  //
+  // Driven by substituting the state on a real inventory rather than by
+  // building a project per branch: the projection is a pure function of
+  // `Inventory`, so its contract is over that value, and the states here are
+  // ones a real tree cannot be made to produce cheaply.
+  const inventory = takeInventory(new ConfinedReader(canonical(REPO_ROOT)));
+  assert.equal(inventory.storyLocation.state, 'in-tree', 'the baseline this varies from');
+
+  // Found by note kind across every group rather than by naming the family:
+  // *which* family carries the note is pinned by its own row below, and this
+  // test is about the four states, not the placement.
+  const noteOf = (view: InventoryView): StoryLocationReport | undefined =>
+    view.groups
+      .flatMap((group) => group.notes)
+      .find((note) => note.kind === 'story-location')?.report;
+
+  const absent = projectInventory({
+    ...inventory,
+    storyLocation: { ...inventory.storyLocation, state: 'absent', path: undefined },
+  });
+  assert.deepEqual(noteOf(absent), { kind: 'none' }, 'no tracking is its own answer, not a failure');
+
+  const outside = projectInventory({
+    ...inventory,
+    storyLocation: { ...inventory.storyLocation, state: 'out-of-tree', path: '/elsewhere/stories' },
+  });
+  assert.deepEqual(
+    noteOf(outside),
+    { kind: 'outside', path: '/elsewhere/stories' },
+    'an out-of-tree location is named, and not made project-relative',
+  );
+
+  // The negative side: a state with nothing to read still says which state.
+  const unreadable = projectInventory({
+    ...inventory,
+    storyLocation: { ...inventory.storyLocation, state: 'unreadable', path: undefined },
+  });
+  assert.deepEqual(noteOf(unreadable), { kind: 'unavailable', state: 'unreadable' });
+});
+
+test('either overflow counter alone makes the scan incomplete', () => {
+  // E5: both counters were mirror-asserted on a tree where both are zero, so
+  // dropping `suppressedNotRecorded === 0` from `complete`, and dropping
+  // `+ skippedNotRecorded` from `namesLeftOut`, each left the suite green. The
+  // producing end is covered in `test/cli/inventory.test.ts`; neither of those
+  // tests calls `projectInventory`, which is where the term either crosses or
+  // does not. A mirror assertion over a fixture where the term is zero is a
+  // tautology.
+  const inventory = takeInventory(new ConfinedReader(canonical(REPO_ROOT)));
+  assert.equal(inventory.skippedNotRecorded, 0, 'the baseline both counters vary from');
+  assert.equal(inventory.suppressedNotRecorded, 0);
+  assert.equal(projectInventory(inventory).complete, true);
+
+  assert.equal(
+    projectInventory({ ...inventory, suppressedNotRecorded: 1 }).complete,
+    false,
+    'a name withheld past the record cap is something no row can report',
+  );
+  assert.equal(
+    projectInventory({ ...inventory, truncations: [] , skippedNotRecorded: 1 }).complete,
+    false,
+    'a skip past the record cap is equally unnameable',
+  );
+
+  // And the count itself carries the overflow, not just the recorded names.
+  const base = projectInventory(inventory).namesLeftOut;
+  assert.equal(base, inventory.skipped.length, 'with no overflow the two agree');
+  assert.equal(
+    projectInventory({ ...inventory, skippedNotRecorded: 3 }).namesLeftOut,
+    base + 3,
+    'the reader asked how many names were not examined; both halves answer it',
+  );
+});
+
+test('the output folder is excluded however the filesystem spells it', () => {
+  // E6: the exclusion lowercases **both** sides, and its comment argues that
+  // lowering one "happened to work and would stop working the moment it was
+  // not". Replacing it with a case-sensitive compare left the suite green --
+  // a comment explaining why a subtlety matters, with nothing behind it.
+  // Reachable for real: the pass recognizes the directory case-insensitively,
+  // so on a case-insensitive volume the folder BMAD created as `_bmad-output`
+  // can come back spelled otherwise, and the projection would then list it.
+  const inventory = takeInventory(new ConfinedReader(canonical(REPO_ROOT)));
+  const original = inventory.entries.find(
+    (entry) => entry.entry.relative === OUTPUT_DIRECTORY,
+  );
+  assert.ok(original !== undefined, 'the output folder must be in entries for this to mean anything');
+
+  const respelled = OUTPUT_DIRECTORY.toUpperCase();
+  assert.notEqual(respelled, OUTPUT_DIRECTORY, 'the constant must have letters to re-case');
+  const view = projectInventory({
+    ...inventory,
+    entries: inventory.entries.map((entry) =>
+      entry === original
+        ? { ...entry, entry: { ...entry.entry, relative: respelled } }
+        : entry,
+    ),
+  });
+
+  const paths = view.groups.flatMap((group) => group.rows.map((row) => row.path));
+  assert.ok(!paths.includes(respelled), `${respelled} was listed as an artifact`);
+  assert.equal(
+    view.artifactCount,
+    projectInventory(inventory).artifactCount,
+    'a differently-cased output folder changes nothing the reader sees',
+  );
+});
+
 test('the projected view itself carries what the pass recorded', () => {
   // Assertions over the `InventoryView` rather than over rendered substrings.
   // Rendering is a lossy check on a projection: a field dropped or inverted
@@ -418,8 +535,70 @@ test('the projected view itself carries what the pass recorded', () => {
       );
       assert.ok(row.identity.attempted.length > 0, 'FR-69 needs the levels');
     }
+    // E3, from the epic 1 retrospective: an `identified` verdict's own three
+    // values never crossed this seam. `shape: 'unknown'`, `confidence:
+    // 'certain'` and `resolvedAt: 'filename'` were each a one-line mutation
+    // that left the whole suite green, and the second removes FR-69's
+    // below-certain caveat from the page entirely. Asserted against the
+    // entry rather than against literals, so the row cannot hold a value the
+    // pass never recorded.
+    if (row?.identity.outcome === 'identified' && entry.identity.outcome === 'identified') {
+      assert.equal(row.identity.shape, entry.identity.shape);
+      assert.equal(row.identity.confidence, entry.identity.confidence);
+      assert.equal(row.identity.resolvedAt, entry.identity.resolvedAt);
+    }
+
+    // E2: only the array *length* used to cross, which is the classic shape of
+    // an assertion that cannot fail. `reuse` and `dateSignal` are the values a
+    // reader actually sees a sentence about -- flipping `reuse` tells them a
+    // same-day rerun was a deliberate resume when it was an accident of the
+    // naming.
     assert.equal(row?.runFacts.length, entry.runFacts.length);
+    entry.runFacts.forEach((facts, index) => {
+      const projected = row?.runFacts[index];
+      assert.ok(projected !== undefined, `${entry.entry.relative} lost run fact ${index}`);
+      if (facts.outcome === 'measured') {
+        assert.equal(projected.measured, true);
+        assert.equal(projected.measured ? projected.reuse : undefined, facts.reuse);
+        assert.equal(projected.measured ? projected.dateSignal : undefined, facts.dateSignal);
+      } else {
+        assert.equal(projected.measured, false);
+      }
+    });
   }
+
+  // The loop above is only worth what the tree exercises, so what it exercises
+  // is asserted. Measured on this repository 2026-09-03: 4 run-fact readings,
+  // all `measured`, carrying **both** `reuse` values and **both** `dateSignal`
+  // values; 54 identified verdicts spanning both confidences and both resolved
+  // levels, one of them below `certain`. Every E2/E3 mutation the retrospective
+  // ran therefore changes an observed value here. If a future tree stops
+  // covering one of them these rows say so instead of going quiet.
+  const measured = inventory.entries
+    .flatMap((entry) => entry.runFacts)
+    .filter((facts) => facts.outcome === 'measured');
+  assert.ok(measured.length > 0, 'no measured run facts: the E2 assertions are vacuous');
+  assert.equal(new Set(measured.map((facts) => facts.reuse)).size, 2, 'both reuse values needed');
+  assert.equal(
+    new Set(measured.map((facts) => facts.dateSignal)).size,
+    2,
+    'both date signals needed',
+  );
+  const identified = inventory.entries.filter((entry) => entry.identity.outcome === 'identified');
+  assert.ok(identified.length > 0, 'no identified verdicts: the E3 assertions are vacuous');
+  assert.ok(
+    identified.some((entry) => entry.identity.outcome === 'identified' && entry.identity.confidence !== 'certain'),
+    'a below-certain verdict is what makes the confidence assertion bite',
+  );
+  assert.equal(
+    new Set(
+      identified.flatMap((entry) =>
+        entry.identity.outcome === 'identified' ? [entry.identity.resolvedAt] : [],
+      ),
+    ).size,
+    2,
+    'two resolved levels are what make the resolvedAt assertion bite',
+  );
 
   // A single-family ambiguity is placed under that family; two families are
   // placed under none. Asserted from the verdicts, so inverting `familyOf`'s
