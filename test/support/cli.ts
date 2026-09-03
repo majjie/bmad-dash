@@ -17,6 +17,7 @@ import { run } from '../../src/cli/index.ts';
 import { suggestInvocations } from '../../src/cli/suggest.ts';
 import { canonical } from '../../src/adapters/fs/paths.ts';
 import type { ServerHandle } from '../../src/adapters/http/server.ts';
+import { digestOf } from '../../src/domain/snapshot.ts';
 import type { InventoryView } from '../../src/render/inventory.ts';
 
 /**
@@ -47,6 +48,10 @@ export const EMPTY_INVENTORY: InventoryView = {
   namesLeftOut: 0,
   aliases: [],
   groups: [],
+  // Arbitrary but fixed, on `FULL_INVENTORY_VIEW`'s own reasoning: this
+  // fixture's whole point is having nothing to say about content, and the real
+  // derivation is asserted over a live pass, not over this stub.
+  snapshotId: digestOf(['test/support/cli.ts', 'EMPTY_INVENTORY']),
 };
 
 /** The supplier form `StartServerOptions.inventory` takes. */

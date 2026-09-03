@@ -27,7 +27,7 @@ import { rmSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { canonical } from '../../src/adapters/fs/paths.ts';
+import { canonical, toPlatform } from '../../src/adapters/fs/paths.ts';
 import { ConfinedReader, ConfinementError, MAX_READ_BYTES } from '../../src/adapters/fs/read.ts';
 import {
   INVENTORY_BUDGET,
@@ -35,14 +35,18 @@ import {
   OUTPUT_DIRECTORY,
   SKIPPED_NAMES,
   takeInventory,
+  type Alias,
   type Inventory,
   type InventoryEntry,
+  type Skip,
 } from '../../src/cli/inventory.ts';
-import { MAX_RECORDED_SUPPRESSIONS } from '../../src/adapters/fs/walk.ts';
+import { MAX_RECORDED_SUPPRESSIONS, type WalkTruncation } from '../../src/adapters/fs/walk.ts';
 import type { Verdict } from '../../src/domain/identity.ts';
 import { interpret } from '../../src/domain/interpretation.ts';
 import { UNREAD, type Readability } from '../../src/domain/signal.ts';
 import { documentsOf, type Composition } from '../../src/domain/document.ts';
+import { projectInventory } from '../../src/cli/index.ts';
+import { renderPage } from '../../src/render/page.ts';
 import { makeScratchDir } from '../support/project.ts';
 import {
   deniableDirectories,
@@ -1802,4 +1806,104 @@ test('a directory says its listing was read, not that nothing was', async (t) =>
   assert.equal(unopened.state, 'unchecked');
   const reasonOf = (signal: Readability): string => (signal.state === 'present' ? '' : signal.reason);
   assert.equal(unopened.reason, reasonOf(UNREAD), 'the file signal is the shared unread one');
+});
+
+// ---------------------------------------------------------------------------
+// Freezing: AD-3's "immutable", made real
+// ---------------------------------------------------------------------------
+
+test('the returned inventory is frozen by construction, deeply', async (t) => {
+  // Measured before this story: `Object.isFrozen(inventory)` was `false`, and
+  // `skipped` was handed out as the very array `skipPolicy` pushed into — a
+  // caller holding a reference to either could mutate the snapshot every other
+  // reader of it was still relying on. This asserts the fix over a tree that
+  // produces a non-empty directory listing, so `children.names` — sorted in
+  // place today — is exercised too.
+  //
+  // Every attempt asserts `TypeError` rather than merely that *something*
+  // threw: a frozen array's `push` throws `TypeError`, and so does an
+  // assignment to a frozen property under the module semantics this suite runs
+  // under. A bare `assert.throws` would also be satisfied by a fixture that
+  // threw for an unrelated reason — a missing entry, say — which is how a
+  // freeze test passes over a snapshot nothing froze.
+  const root = await makeTree(t, [
+    { dir: '_bmad' },
+    { file: '_bmad-output/loose/one.md', text: '# One\n' },
+    { file: '_bmad-output/loose/two.md', text: '# Two\n' },
+  ]);
+  const inventory = takeInventory(new ConfinedReader(canonical(root)));
+
+  assert.ok(Object.isFrozen(inventory), 'the returned Inventory itself must be frozen');
+  assert.throws(() => {
+    (inventory as { root: unknown }).root = 'elsewhere';
+  }, TypeError);
+
+  assert.ok(Object.isFrozen(inventory.entries));
+  assert.throws(() => {
+    (inventory.entries as InventoryEntry[]).push(inventory.entries[0]!);
+  }, TypeError);
+  assert.throws(() => {
+    (inventory.entries as unknown as Record<number, unknown>)[0] = {};
+  }, TypeError);
+
+  assert.ok(Object.isFrozen(inventory.skipped));
+  assert.throws(() => {
+    (inventory.skipped as Skip[]).push({ relative: 'x', reason: 'y' });
+  }, TypeError);
+
+  assert.ok(Object.isFrozen(inventory.aliases));
+  assert.throws(() => {
+    (inventory.aliases as Alias[]).push({
+      relative: 'x',
+      reportedAt: 'y',
+      restored: false,
+      reason: 'z',
+    });
+  }, TypeError);
+
+  assert.ok(Object.isFrozen(inventory.truncations));
+  assert.throws(() => {
+    (inventory.truncations as WalkTruncation[]).push({ limit: 'entries', at: '.', reason: 'z' });
+  }, TypeError);
+
+  // The array `skipPolicy` itself pushed into, escaping live before this
+  // story: pushing into it directly must throw exactly as `inventory.skipped`
+  // above does — proving the freeze reaches the *same* array rather than a
+  // copy `inventory.skipped` happens to also be frozen.
+  const directory = inventory.entries.find(
+    (entry) => entry.children.available && entry.children.names.length > 0,
+  );
+  assert.ok(directory !== undefined, 'the fixture must produce a non-empty directory listing');
+  const children = directory.children;
+  assert.ok(children.available);
+  if (children.available) {
+    assert.ok(Object.isFrozen(children.names));
+    assert.throws(() => {
+      (children.names as string[]).push('nope');
+    }, TypeError);
+  }
+
+  // And one nested field for good measure — an entry's own verdict, reached
+  // two levels down from the array `entries` holds.
+  assert.ok(Object.isFrozen(directory.identity));
+});
+
+test('freezing surfaces nothing: the pass over this repository still projects and renders', () => {
+  // The code map's own prediction: nothing in `src/` mutates these arrays
+  // today, so freezing them should surface nothing — and if it throws, that is
+  // a finding.
+  //
+  // **Run through the consumers, not only through `takeInventory`.** An
+  // in-place sort or a `push` on an escaping array would throw where the array
+  // is *used*, not where it was frozen, so a test that only took the pass
+  // would report a clean freeze over a tool that could no longer draw a page.
+  // The projection and the render are every consumer the snapshot has.
+  const inventory = repoInventory();
+  assert.ok(Object.isFrozen(inventory));
+  assert.ok(inventory.entries.length > 0, 'the pass must still find this repository’s own artifacts');
+
+  const view = projectInventory(inventory);
+  assert.ok(view.artifactCount > 0, 'the projection must still place rows over a frozen snapshot');
+  const html = renderPage(toPlatform(inventory.root), view);
+  assert.ok(html.includes('<!doctype html>'), 'and the page must still render from it');
 });

@@ -54,6 +54,7 @@ import {
 import type { InterpretationState } from '../domain/interpretation.ts';
 import type { DateSignal, Reuse } from '../domain/runs.ts';
 import { SIGNAL_LABELS, type ReadStage, type SignalState } from '../domain/signal.ts';
+import type { SnapshotId } from '../domain/snapshot.ts';
 import { outOfTreeReport, type LocationState } from '../domain/sprint.ts';
 import type { TileContent, TileOptions } from './components.ts';
 import { fillIndexString, markup, type Markup } from './html.ts';
@@ -399,6 +400,21 @@ export interface InventoryView {
   /** Second spellings the walk dropped, which have no row of their own. */
   readonly aliases: readonly AliasReport[];
   readonly groups: readonly FamilyGroup[];
+  /**
+   * AD-17: which scan this view came from, derived from every other field on
+   * it rather than minted.
+   *
+   * Two views built from an unchanged project carry the same id, and anything
+   * that changes what is rendered changes it — true by construction rather
+   * than by a judgement about which fields render, because the digest walks
+   * the whole view and this surface is a pure function of the whole view. See
+   * `src/cli/index.ts`'s `snapshotIdOf`.
+   *
+   * Nothing on this page renders it: it is recorded as a response header
+   * (`bmad-snapshot-id`), which is what AD-17 asks for. A *visible* currency
+   * line is FR-47, Story 3.6.
+   */
+  readonly snapshotId: SnapshotId;
 }
 
 /** One name the walk dropped, and where the artifact behind it is reported. */

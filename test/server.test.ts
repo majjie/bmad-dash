@@ -15,7 +15,7 @@ import { request as httpRequest, createServer, Agent } from 'node:http';
 import { connect } from 'node:net';
 import type { AddressInfo } from 'node:net';
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
-import { mkdir, readFile } from 'node:fs/promises';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir, networkInterfaces } from 'node:os';
 import { join, dirname, resolve as resolvePath, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -25,11 +25,18 @@ import {
   isExpectedHost,
   LOOPBACK_ADDRESS,
   MAX_PORT,
+  SNAPSHOT_ID_HEADER,
 } from '../src/adapters/http/server.ts';
-import { parseInvocation, run } from '../src/cli/index.ts';
+// One statement, not two: `projectInventory` belongs to the same module as
+// `run`, and a second import of it would be the first step of the two drifting
+// apart in the reader's head.
+import { parseInvocation, projectInventory, run } from '../src/cli/index.ts';
+import { takeInventory } from '../src/cli/inventory.ts';
 import { makeProjectDir } from './support/project.ts';
 import { canonical, toPlatform } from '../src/adapters/fs/paths.ts';
-import { emptyInventory } from './support/cli.ts';
+import { ConfinedReader } from '../src/adapters/fs/read.ts';
+import { EMPTY_INVENTORY, emptyInventory } from './support/cli.ts';
+import type { InventoryView } from '../src/render/inventory.ts';
 
 /**
  * A synthetic absolute root. Fixed rather than `process.cwd()` so a test's
@@ -437,6 +444,150 @@ test('error responses are plain text and uncached', async (t) => {
     assert.equal(response.headers['content-type'], 'text/plain; charset=utf-8');
     assert.equal(response.headers['cache-control'], 'no-store');
   }
+});
+
+test('over a real project, two loads carry one identity and identical bodies', async (t) => {
+  // The I/O matrix's first row, both clauses, over the **composed** path. The
+  // two halves were each covered and the join was not: `page.test.ts:193`
+  // proves two responses are byte-identical given a *constant* supplier, and
+  // the projection test proves two real passes agree on the identity. Neither
+  // observes the real supplier feeding the real render, which is where AD-17's
+  // claim actually lives — and asserting a value at both ends with nothing
+  // crossing the join is the gap this project's verification standard names.
+  const root = await makeProjectDir(t, 'bmad-dash-one-identity-');
+  await mkdir(join(root, '_bmad-output', 'loose'), { recursive: true });
+  await writeFile(join(root, '_bmad-output', 'loose', 'one.md'), '# One\n');
+
+  const canonicalRoot = canonical(root);
+  const reader = new ConfinedReader(canonicalRoot);
+  const server = await startServer({
+    projectRoot: canonicalRoot,
+    // The real supplier, not a fixture: a full pass per request, exactly as
+    // the composition root wires it.
+    inventory: () => projectInventory(takeInventory(reader)),
+  });
+  t.after(() => server.close());
+
+  const first = await get({ port: server.port });
+  const second = await get({ port: server.port });
+
+  assert.equal(first.status, 200);
+  assert.equal(second.status, 200);
+  assert.match(
+    first.headers[SNAPSHOT_ID_HEADER] ?? '',
+    /^[0-9a-f]{16}$/,
+    'a 200 from a real pass must carry an identity',
+  );
+  assert.equal(
+    second.headers[SNAPSHOT_ID_HEADER],
+    first.headers[SNAPSHOT_ID_HEADER],
+    'two loads of an unchanged project are one snapshot',
+  );
+  assert.equal(second.body, first.body, 'and the bodies must be byte-identical');
+
+  // The other direction, so the row above cannot pass by nothing ever moving:
+  // a changed project must move both the identity and the page.
+  await writeFile(join(root, '_bmad-output', 'loose', 'two.md'), '# Two\n');
+  const third = await get({ port: server.port });
+  // **The status first, and this is not ceremony.** A regression that turned
+  // the third response into a 500 would satisfy both `notEqual`s below
+  // vacuously — a 500 carries no identity header and a plain-text body — and
+  // the test would report that a changed project is correctly distinguished.
+  assert.equal(third.status, 200, 'the third response must be a page, not a refusal');
+  assert.notEqual(
+    third.headers[SNAPSHOT_ID_HEADER],
+    first.headers[SNAPSHOT_ID_HEADER],
+    'a changed project must carry a different identity',
+  );
+  assert.notEqual(third.body, first.body, 'and must render differently');
+});
+
+test('the identity header is on 200 and HEAD, and absent on 403, 404, 405 and 500', async (t) => {
+  // AD-17's mechanical half, as a presence/absence matrix. The four
+  // no-identity responses divide into two reasons, which the spec states as
+  // two: 403, 404 and 405 are refused *before* the supplier is called, so no
+  // snapshot exists for them to name, while a 500 from a render throw happens
+  // after a snapshot existed — and omits the header because no body was
+  // produced from it.
+  const server = await startServer({ projectRoot: PROJECT_ROOT, inventory: emptyInventory });
+  t.after(() => server.close());
+
+  const page = await get({ port: server.port });
+  assert.equal(page.status, 200);
+  assert.equal(
+    page.headers[SNAPSHOT_ID_HEADER],
+    EMPTY_INVENTORY.snapshotId,
+    'the header carries the supplier’s own id, not one the adapter made up',
+  );
+
+  const head = await get({ port: server.port, method: 'HEAD' });
+  assert.equal(head.status, 200);
+  assert.equal(head.body, '', 'HEAD carries no body');
+  assert.equal(
+    head.headers[SNAPSHOT_ID_HEADER],
+    EMPTY_INVENTORY.snapshotId,
+    'HEAD carries the same identity as GET, per the I/O matrix',
+  );
+
+  for (const [status, response] of [
+    [404, await get({ port: server.port, path: '/nope' })],
+    [403, await get({ port: server.port, host: 'evil.example' })],
+    [405, await get({ port: server.port, method: 'POST' })],
+  ] as const) {
+    // The status is asserted alongside the absence: without it, a response
+    // that had regressed to some *other* refusal would still satisfy the
+    // header check, and the row would no longer be about the response it names.
+    assert.equal(response.status, status);
+    assert.equal(
+      response.headers[SNAPSHOT_ID_HEADER],
+      undefined,
+      `a ${String(status)} is refused before a snapshot exists, so it carries no identity`,
+    );
+  }
+  // And the 405 keeps its own header, so widening the 200 path did not touch it.
+  const rejected = await get({ port: server.port, method: 'POST' });
+  assert.equal(rejected.headers['allow'], 'GET, HEAD');
+
+  const failing = await startServer({
+    projectRoot: PROJECT_ROOT,
+    inventory: () => {
+      throw new Error('the project went away');
+    },
+    onError: () => {},
+  });
+  t.after(() => failing.close());
+  const failed = await get({ port: failing.port });
+  assert.equal(failed.status, 500);
+  assert.equal(
+    failed.headers[SNAPSHOT_ID_HEADER],
+    undefined,
+    'no body was produced from the snapshot, so a 500 carries no identity either',
+  );
+});
+
+test('a view whose identity cannot be a header value is a 500, not a hung request', async (t) => {
+  // Why `writeHead` is inside the surrounding `try`. It validates every header
+  // name and value it is handed, so a malformed identity threw *past* the
+  // request listener: no response written, no `onError`, and a reader watching
+  // the tab spin until the socket timed out. There is no snapshot id the
+  // projection can produce that looks like this — the digest is sixteen hex
+  // characters — which is exactly why it has to be asserted here rather than
+  // left to the type.
+  const reported: Error[] = [];
+  const server = await startServer({
+    projectRoot: PROJECT_ROOT,
+    inventory: () => ({
+      ...EMPTY_INVENTORY,
+      snapshotId: 'not\na header value' as InventoryView['snapshotId'],
+    }),
+    onError: (error) => reported.push(error),
+  });
+  t.after(() => server.close());
+
+  const response = await get({ port: server.port });
+  assert.equal(response.status, 500, 'the request must be answered rather than abandoned');
+  assert.equal(response.headers[SNAPSHOT_ID_HEADER], undefined);
+  assert.equal(reported.length, 1, 'and reported to onError exactly once');
 });
 
 test('the listening socket itself reports the loopback literal on IPv4', async (t) => {

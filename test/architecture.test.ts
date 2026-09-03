@@ -1058,6 +1058,33 @@ test('the constants two modules both depend on are stated once, and cross-checke
   assert.equal(MAX_PORT, 65535, 'and the value itself, so the single definition is still right');
 });
 
+test('the snapshot identity has a stated importer set, like every other domain module', async () => {
+  // Added in Story 2.1's second review round, not by its task list: every other
+  // module in the pure layer carries an exact importer set, and a new one
+  // arriving without makes that table silently non-exhaustive — the reader
+  // cannot tell "deliberately unconstrained" from "nobody added it".
+  //
+  // Two importers, and the pair is the story's whole shape: the composition
+  // root derives the identity when it projects the view, and the render layer
+  // takes only the *type* so `InventoryView` can carry it. A third importer
+  // would mean something else had started deriving an identity of its own,
+  // which is the AD-4 mistake — one authority, consumed everywhere — applied to
+  // snapshots rather than to identification.
+  assert.deepEqual(
+    await importersOf(REPO_ROOT, 'src/domain/snapshot.ts'),
+    ['src/cli/index.ts', 'src/render/inventory.ts'],
+    'the root derives the identity; the surface only carries its type',
+  );
+
+  // And the render layer takes the type and nothing executable, so it cannot
+  // derive an identity even accidentally.
+  assert.deepEqual(
+    await namedImportsIn(REPO_ROOT, 'src/render/inventory.ts', '../domain/snapshot.ts'),
+    ['SnapshotId'],
+    'the surface may name the type, and must not reach the digest',
+  );
+});
+
 test('the two most-coupled adapter modules have stated importer sets', async () => {
   // Added 2026-09-03, from the epic 1 retrospective: enforcement coverage was
   // inverse to actual coupling. `list.ts`, `walk.ts` and `segments.ts` each had

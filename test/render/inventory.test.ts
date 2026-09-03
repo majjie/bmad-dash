@@ -70,7 +70,7 @@ import {
   outOfTreeReport,
 } from '../../src/domain/sprint.ts';
 import { OUTPUT_DIRECTORY, takeInventory } from '../../src/cli/inventory.ts';
-import { projectInventory } from '../../src/cli/index.ts';
+import { projectInventory, snapshotIdOf } from '../../src/cli/index.ts';
 import { ConfinedReader } from '../../src/adapters/fs/read.ts';
 import { canonical, toPlatform } from '../../src/adapters/fs/paths.ts';
 import { EMPTY_INVENTORY, observeRun } from '../support/cli.ts';
@@ -106,9 +106,17 @@ function render(view: InventoryView): string {
   return tileGrid(inventoryTiles(view));
 }
 
-/** A view holding exactly the rows given, all under one family. */
+/**
+ * A view holding exactly the rows given, all under one family.
+ *
+ * The identity is **derived** from the content this builds, through the
+ * composition root's own `snapshotIdOf`, rather than stubbed: that is what lets
+ * the matrix below compare two hand-built views that render differently and
+ * assert their identities differ. A fixture with a constant id could not ask
+ * that question at all.
+ */
 function viewOf(view: Partial<InventoryView> & Pick<InventoryView, 'groups'>): InventoryView {
-  return {
+  const content = {
     complete: view.complete ?? true,
     artifactCount:
       view.artifactCount ?? view.groups.reduce((total, group) => total + group.rows.length, 0),
@@ -116,6 +124,7 @@ function viewOf(view: Partial<InventoryView> & Pick<InventoryView, 'groups'>): I
     aliases: view.aliases ?? [],
     groups: view.groups,
   };
+  return { ...content, snapshotId: view.snapshotId ?? snapshotIdOf(content) };
 }
 
 /**
@@ -695,6 +704,208 @@ test('a stage and an ambiguity survive the projection, over a tree that has both
   assert.ok(html.includes(AMBIGUOUS_RUN_OR_SHARDED));
 });
 
+// ---------------------------------------------------------------------------
+// AD-17: the identity crosses the projection
+// ---------------------------------------------------------------------------
+
+test('the identity crosses the projection: equal for two unchanged passes, and it moves when the project does', async (t) => {
+  // AD-17, over the composed pass rather than over `digestOf` in isolation —
+  // `test/domain/snapshot.test.ts` covers the pure function; this is "what is
+  // fed to it, from a real `takeInventory` pass, still agrees and disagrees
+  // when it should."
+  const root = await makeTree(t, [
+    { dir: '_bmad' },
+    { file: '_bmad-output/loose/one.md', text: '# One\n' },
+  ]);
+  const reader = new ConfinedReader(canonical(root));
+
+  const first = projectInventory(takeInventory(reader));
+  const second = projectInventory(takeInventory(reader));
+  assert.match(first.snapshotId, /^[0-9a-f]{16}$/, 'the identity is present and opaque');
+  assert.equal(first.snapshotId, second.snapshotId, 'two passes over an unchanged tree must agree');
+
+  await writeFile(join(root, '_bmad-output', 'loose', 'two.md'), '# Two\n');
+  const third = projectInventory(takeInventory(reader));
+  assert.notEqual(
+    third.snapshotId,
+    second.snapshotId,
+    'a changed project must carry a different identity',
+  );
+
+  // Present on every view — the fixtures included, so no branch of the
+  // projection and no fixture may build one without it.
+  assert.match(EMPTY_INVENTORY.snapshotId, /^[0-9a-f]{16}$/);
+  assert.match(FULL_INVENTORY_VIEW.snapshotId, /^[0-9a-f]{16}$/);
+});
+
+test('an empty project still derives an identity, and it is stable', async (t) => {
+  // The I/O matrix's empty-project row, which needs its own test: the row
+  // above asserts `EMPTY_INVENTORY.snapshotId` is hex, but that fixture
+  // carries a *hardcoded* id, so it shows the field exists rather than that
+  // the projection derives one. A markers-only project is the case where every
+  // digest input is empty or zero — no rows, no groups but the story family,
+  // `artifactCount` 0 — which is exactly where a derivation could plausibly
+  // produce nothing at all.
+  const root = await makeTree(t, [{ dir: '_bmad' }, { dir: '_bmad-output' }]);
+  const reader = new ConfinedReader(canonical(root));
+
+  const first = projectInventory(takeInventory(reader));
+  const second = projectInventory(takeInventory(reader));
+
+  assert.equal(first.artifactCount, 0, 'the fixture must actually be empty');
+  assert.match(first.snapshotId, /^[0-9a-f]{16}$/, 'an empty project still has an identity');
+  assert.equal(first.snapshotId, second.snapshotId, 'and it is stable across loads');
+
+  // And it is not the same identity as a project with something in it, so the
+  // empty case is not collapsing to a constant the derivation ignores its
+  // inputs for.
+  const filled = await makeTree(t, [
+    { dir: '_bmad' },
+    { file: '_bmad-output/loose/one.md', text: '# One\n' },
+  ]);
+  const other = projectInventory(takeInventory(new ConfinedReader(canonical(filled))));
+  assert.notEqual(other.snapshotId, first.snapshotId, 'empty is a fact about the scan, not a default');
+});
+
+/**
+ * The inputs iteration 1 of this story digested, and nothing else.
+ *
+ * Every pair in the matrix below is *equal* under this and renders
+ * differently, which is what makes the matrix load-bearing: an implementation
+ * that digested only these — as the reverted one did — passes every
+ * equal-for-unchanged and different-after-a-change assertion in this file and
+ * fails every row of that matrix.
+ */
+function iterationOneInputs(view: InventoryView): string {
+  const rows = view.groups.flatMap((group) =>
+    group.rows.map((row) => [row.path, row.identity.outcome, row.readability.state].join('|')),
+  );
+  return [...rows, view.complete, view.artifactCount, view.namesLeftOut].join('\n');
+}
+
+test('a rendering difference is an identity difference, for every field the view carries', async () => {
+  // **The property that pins the digest's coverage.** Equal-for-unchanged and
+  // different-after-a-change are both satisfied by digesting the artifact
+  // count alone — measured: reducing the whole digest body to it left 875/875
+  // green, because every "must differ" case added a file and so moved the
+  // count. So the pairs here hold the row set fixed and change one thing the
+  // page renders, which is the only shape of test that can tell a whole-view
+  // digest from a lucky one.
+  //
+  // Each row is: a name, and two views whose `iterationOneInputs` agree.
+  const CERTAIN: ArtifactRow['identity'] = {
+    outcome: 'identified',
+    shape: 'document',
+    confidence: 'certain',
+    resolvedAt: 'location',
+  };
+  const rowAt = (over: Partial<ArtifactRow> = {}): ArtifactRow => ({
+    ...CERTAIN_ROW,
+    ...over,
+  });
+  const oneGroup = (rows: readonly ArtifactRow[], over: Partial<InventoryView> = {}): InventoryView =>
+    viewOf({ groups: [{ family: 'prd', rows, notes: [] }], ...over });
+
+  const pairs: readonly (readonly [string, InventoryView, InventoryView])[] = [
+    [
+      'an added alias, which has no row of its own',
+      oneGroup([CERTAIN_ROW]),
+      oneGroup([CERTAIN_ROW], {
+        aliases: [{ name: '_bmad-output/specs/link.md', reportedAt: '_bmad-output/specs/SPEC.md' }],
+      }),
+    ],
+    [
+      'a different readability stage under one readability state',
+      oneGroup([rowAt({ readability: { state: 'unreadable', stage: 'decode' } })]),
+      oneGroup([rowAt({ readability: { state: 'unreadable', stage: 'read' } })]),
+    ],
+    [
+      "an ambiguous verdict's second reading",
+      oneGroup([
+        rowAt({
+          identity: {
+            outcome: 'ambiguous',
+            readings: [
+              { family: 'prd', shape: 'run-folder' },
+              { family: 'prd', shape: 'sharded-document' },
+            ],
+            confidence: 'likely',
+            resolvedAt: 'structure',
+          },
+        }),
+      ]),
+      oneGroup([
+        rowAt({
+          identity: {
+            outcome: 'ambiguous',
+            readings: [
+              { family: 'prd', shape: 'run-folder' },
+              { family: 'prd', shape: 'document' },
+            ],
+            confidence: 'likely',
+            resolvedAt: 'structure',
+          },
+        }),
+      ]),
+    ],
+    [
+      'a changed run fact',
+      oneGroup([rowAt({ runFacts: [{ measured: true, reuse: 'accidental', dateSignal: 'present' }] })]),
+      oneGroup([rowAt({ runFacts: [{ measured: true, reuse: 'deliberate', dateSignal: 'present' }] })]),
+    ],
+    [
+      'a different group note',
+      viewOf({
+        groups: [
+          { family: 'story', rows: [CERTAIN_ROW], notes: [{ kind: 'story-location', report: { kind: 'none' } }] },
+        ],
+      }),
+      viewOf({
+        groups: [
+          {
+            family: 'story',
+            rows: [CERTAIN_ROW],
+            notes: [{ kind: 'story-location', report: { kind: 'at', path: '_bmad-output/sprint-status.yaml' } }],
+          },
+        ],
+      }),
+    ],
+    [
+      "a row's family, which decides the tile it is placed on",
+      oneGroup([CERTAIN_ROW]),
+      viewOf({ groups: [{ family: 'brief', rows: [CERTAIN_ROW], notes: [] }] }),
+    ],
+    [
+      "a confidence below certain, which the row states",
+      oneGroup([rowAt({ identity: CERTAIN })]),
+      oneGroup([
+        rowAt({
+          identity: { outcome: 'identified', shape: 'document', confidence: 'likely', resolvedAt: 'location' },
+        }),
+      ]),
+    ],
+    [
+      'an interpretation state under one identity outcome',
+      oneGroup([rowAt({ interpretation: 'interpreted' })]),
+      oneGroup([rowAt({ interpretation: 'present-but-uninterpreted' })]),
+    ],
+  ];
+
+  for (const [name, left, right] of pairs) {
+    assert.equal(
+      iterationOneInputs(left),
+      iterationOneInputs(right),
+      `${name}: the pair must be identical under the inputs iteration 1 digested, or it proves nothing`,
+    );
+    assert.notEqual(render(left), render(right), `${name}: the pair must render differently`);
+    assert.notEqual(
+      left.snapshotId,
+      right.snapshotId,
+      `${name}: two views that render differently must not share one identity`,
+    );
+  }
+});
+
 test('a project root the pass could not read is not reported as a finished scan', async (t) => {
   // **The one loss the narrowing argument does not cover, one level up.**
   // `projectInventory` narrows the pass's `complete` on the grounds that a
@@ -736,6 +947,10 @@ test('a project root the pass could not read is not reported as a finished scan'
 
     const view = projectInventory(inventory);
     assert.equal(view.complete, false, 'and the projection must not widen it back');
+    // The I/O matrix's "unreadable root" row: the snapshot and its identity
+    // still exist even though the scan did not finish — AD-17 is about which
+    // scan a page came from, and a scan of an unreadable root is still a scan.
+    assert.match(view.snapshotId, /^[0-9a-f]{16}$/, 'the identity still exists for an unreadable root');
 
     const html = render(view);
     assert.ok(html.includes(SCAN_STOPPED), 'the page says the scan did not finish');

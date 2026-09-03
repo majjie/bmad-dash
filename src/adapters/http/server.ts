@@ -65,6 +65,31 @@ export const LOOPBACK_ADDRESS = '127.0.0.1';
 export const MAX_PORT = 65535;
 
 /**
+ * Where a response records which scan it was built from (AD-17), on the 200
+ * and `HEAD` paths only.
+ *
+ * **Not `ETag`, and that was decided rather than defaulted.** An `ETag`
+ * validates a *representation*; this identity names a *scan*. Story 2.1a
+ * introduces many representations per snapshot — AD-18's grammar covers
+ * artifacts and their sections — so one scan will serve `/`, an artifact's URL
+ * and each section's URL, which under `ETag` semantics must carry different
+ * values and under AD-17 must report the same one. Different cardinality, so
+ * one header cannot be both. `cache-control: no-store` below reinforces it: a
+ * client may not store the representation, so it can never revalidate from a
+ * stored copy and the `304` an `ETag` exists for is unreachable as this server
+ * behaves. `ETag` stays available for a later caching story as a genuine
+ * per-representation validator derived from the rendered document.
+ *
+ * No `X-` prefix, which RFC 6648 deprecates for new headers, and it names the
+ * BMAD family rather than this one package.
+ *
+ * `respondText` and the 405 path are untouched: none of those responses
+ * consults a snapshot, so none has an identity to carry — see
+ * `src/domain/snapshot.ts` for what the value is derived from.
+ */
+export const SNAPSHOT_ID_HEADER = 'bmad-snapshot-id';
+
+/**
  * The default port for the scheme this adapter serves. A client omits the port
  * from `Host` when it is the scheme default, so on port 80 a browser sends a
  * bare `Host: 127.0.0.1`. Only http is served here, so 443 is deliberately not
@@ -423,18 +448,40 @@ function handleRequest(
     // the pass is built not to throw at all (AD-7), but it reads a filesystem
     // that can change between two requests, which is the one honest reason a
     // second request can fail where the first succeeded.
+    //
+    // **`writeHead` is inside the `try` too, which it was not.** It validates
+    // every header name and value it is given, so a view carrying a malformed
+    // `snapshotId` would have thrown *past* this handler — no response written,
+    // no `onError`, and a reader watching a tab hang until the socket timed
+    // out. Inside, the same 500 covers it. Nothing has been written to the
+    // socket at that point: `writeHead` only records the status and headers,
+    // and `end` below is what flushes them, so the 500 can still be sent.
+    //
+    // The view is held rather than discarded after `renderPage` consumes it:
+    // its `snapshotId` is what AD-17 asks this response to record, and it is a
+    // fact about the *view*, not about the document string `renderPage`
+    // returns.
     let document: string;
     try {
-      document = renderPage(toPlatform(projectRoot), inventory());
+      const view = inventory();
+      document = renderPage(toPlatform(projectRoot), view);
+      response.writeHead(200, {
+        'content-type': 'text/html; charset=utf-8',
+        'cache-control': 'no-store',
+        [SNAPSHOT_ID_HEADER]: view.snapshotId,
+      });
     } catch (error: unknown) {
+      // **A 500 carries no identity, and its reason is not the other four's.**
+      // The 403, 404 and 405 responses are refused before the supplier is
+      // called, so no snapshot exists for them to name. Here one may well
+      // exist — a `renderPage` throw means the supplier already succeeded —
+      // and the header is omitted because no body was produced *from* it. An
+      // identity on a response that is not the page would be a claim about
+      // content this response does not carry.
       onError?.(error instanceof Error ? error : new Error(String(error)));
       respondText(response, 500, 'The page could not be rendered.\n');
       return;
     }
-    response.writeHead(200, {
-      'content-type': 'text/html; charset=utf-8',
-      'cache-control': 'no-store',
-    });
     response.end(document);
     return;
   }
