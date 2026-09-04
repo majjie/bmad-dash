@@ -47,6 +47,15 @@
  * response, refusals included, because a 403, a 404 and a 405 are all responses
  * a browser acts on and a Content-Security-Policy that covers only the happy
  * path is a policy with a hole the shape of an error page.
+ *
+ * **Story 2.3b gives the policy its first exception and this module its first
+ * derivation from the page.** FR-24's clipboard half has no HTML-only form, so
+ * the artifact view carries one inline script; the policy admits it by a
+ * `sha256` of exactly those bytes, computed here from `src/render/enhance.ts`'s
+ * own constant. The adapter still composes nothing — it does not build, wrap or
+ * inject the script, and it never sees the document the render layer wrote. It
+ * hashes a constant, which is header work, and headers are the one thing it has
+ * always decided.
  */
 
 import {
@@ -56,8 +65,10 @@ import {
   type ServerResponse,
 } from 'node:http';
 import type { AddressInfo } from 'node:net';
+import { createHash } from 'node:crypto';
 
 import { renderPage } from '../../render/page.ts';
+import { COPY_SCRIPT } from '../../render/enhance.ts';
 import { findArtifact, renderArtifact, type ArtifactBody } from '../../render/artifact.ts';
 import { assertProjectRoot } from '../../render/chrome.ts';
 import type { InventoryView } from '../../render/inventory.ts';
@@ -129,6 +140,31 @@ const SCHEME_DEFAULT_PORT = 80;
 const NOT_FOUND_BODY = 'Not found.\n';
 
 /**
+ * The one script source the policy permits: a hash of exactly that script.
+ *
+ * **Derived, never maintained.** The digest is over `COPY_SCRIPT` — the whole
+ * of the client code, a compile-time constant in `src/render/enhance.ts` — so
+ * the header and the page cannot disagree about which script is permitted: a
+ * byte changed there moves this value, and `test/server.test.ts` recomputes it
+ * from the **served response body** rather than from the constant, so the check
+ * cannot pass on a constant agreeing with itself.
+ *
+ * **Computed here rather than in `src/render/`, deliberately.** Nothing
+ * enforces what the render layer may import (the Epic 1 retrospective's item 13
+ * records it, and `./chrome.ts` already reaches for `node:path` against its
+ * layer row), so adding `node:crypto` there would widen a boundary this story
+ * is not widening. The script *text* belongs to the render layer, which writes
+ * the page; the *header* belongs to the adapter, which has always owned it.
+ * `node:crypto` is ungated — only `fs` and `child_process` are — and this
+ * module already imports `node:http` and `node:net`.
+ *
+ * Base64 of the raw digest, which is the only encoding a CSP hash source
+ * accepts, and `sha256` because it is the weakest of the three the spec allows
+ * and the one every browser that supports hashes at all supports.
+ */
+export const SCRIPT_SOURCE = `'sha256-${createHash('sha256').update(COPY_SCRIPT, 'utf8').digest('base64')}'`;
+
+/**
  * The headers every response carries, whatever it is answering.
  *
  * **Why they are in this story and not the next one.** Until now the page was
@@ -144,11 +180,27 @@ const NOT_FOUND_BODY = 'Not found.\n';
  * font, frame, connect, media — so an `<img src>` or a `<script src>` that
  * arrived out of a project's own markdown fetches nothing, and a
  * `javascript:` href from a markdown link is refused as a script source. The
- * page's one need is its inlined `<style>`, which is why `style-src` is the
- * single allowance; there is no `'unsafe-inline'` for script and no `script-src`
- * at all, so the `default-src` denial stands for it. `base-uri`, `form-action`
- * and `frame-ancestors` are listed because **none of them falls back to
- * `default-src`**: without them an injected `<base href>` could re-point every
+ * page's inlined `<style>` is why `style-src` is an allowance at all.
+ *
+ * **`script-src` is Story 2.3b's one exception, and it permits exactly one
+ * script.** FR-24 is copy-to-clipboard, which has no HTML-only form, so the
+ * artifact view carries `src/render/enhance.ts`'s single inline listener and
+ * this policy carries a `sha256` of exactly those bytes — see `SCRIPT_SOURCE`.
+ * Never `'unsafe-inline'`: `RENDER_EMBEDDED_HTML` is `true`, so a project's own
+ * markdown can contain a `<script>`, which `'unsafe-inline'` would execute and
+ * a hash cannot. Never `'self'`: there is no static-file route, and `'self'`
+ * would permit *any* same-origin script where a hash permits ours and nothing
+ * else. The exception costs nothing to maintain because it is *derived* from
+ * the script rather than written down beside it.
+ *
+ * The directive is on **every** response, including the Dashboard's, which
+ * carries no script at all. That is the point of one shared constant: a policy
+ * assembled per route is one that can be assembled wrongly, and a hash naming a
+ * script a response does not carry permits nothing extra.
+ *
+ * `base-uri`, `form-action` and `frame-ancestors` are listed because **none of
+ * them falls back to `default-src`**: without them an injected `<base href>`
+ * could re-point every
  * relative URL on the page, a `<form>` could post anywhere, and the page could
  * be framed by anything the browser is also showing.
  *
@@ -165,7 +217,8 @@ const NOT_FOUND_BODY = 'Not found.\n';
  */
 export const HARDENING_HEADERS: Readonly<Record<string, string>> = Object.freeze({
   'content-security-policy':
-    "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
+    `default-src 'none'; style-src 'unsafe-inline'; script-src ${SCRIPT_SOURCE}; ` +
+    "base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
   'x-content-type-options': 'nosniff',
   'referrer-policy': 'no-referrer',
 });

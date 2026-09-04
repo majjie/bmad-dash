@@ -39,6 +39,12 @@ import {
   renderArtifact,
   type ArtifactBody,
 } from '../../src/render/artifact.ts';
+import {
+  COPY_CONTROL_CLASS,
+  COPY_LABEL,
+  COPY_PAYLOAD_ATTRIBUTE,
+  COPY_SCRIPT,
+} from '../../src/render/enhance.ts';
 import { RENDER_EMBEDDED_HTML } from '../../src/render/markdown.ts';
 import { MAX_READ_BYTES } from '../../src/adapters/fs/read.ts';
 import { SIGNAL_LABELS } from '../../src/domain/signal.ts';
@@ -197,17 +203,27 @@ test('the page states which artifact it is, in the mono family', () => {
 });
 
 // ---------------------------------------------------------------------------
-// The exits: Story 2.3a's half of FR-24
+// The exits: FR-24, founded by Story 2.3a and completed by 2.3b
 // ---------------------------------------------------------------------------
 //
-// **FR-24 is founded here and not satisfied.** It is copy-to-clipboard *and*
-// open-in-editor; this story ships the second, and Story 2.3b ships the first.
+// **FR-24 is copy-to-clipboard *and* open-in-editor.** 2.3a shipped the second
+// as a link; 2.3b ships the first, which cannot be a link because no HTML-only
+// mechanism writes to the clipboard. The pair satisfies the requirement.
 //
-// Nothing in this section amends an existing assertion, and that is the story's
-// own boundary rather than an accident: the open-in-editor exit is a link, so
-// `the surface serves no script and fetches nothing` above and the page-level
-// no-script check further down both still hold with the link on the page. Story
-// 2.3b is the one that has to invert them, which is why it is a separate diff.
+// 2.3a's own note here read "nothing in this section amends an existing
+// assertion … Story 2.3b is the one that has to invert them, which is why it is
+// a separate diff." That is what happened, and where: `the link is keyboard
+// operable…`'s no-`<button>` line, `the surface serves no script…`, the shell's
+// element allowlist, and the page-level no-script line in `a readable markdown
+// artifact…`. Each says at its own site why its old meaning no longer holds.
+//
+// What did **not** move, and must not: `a non-markdown artifact carrying markup
+// creates no element` below. That assertion is about *project content* — an
+// artifact whose own text is `<script>alert(1)</script>` — which is escaped
+// exactly as before. Amending it would be editing an expectation to match code.
+// `test/render/page.test.ts`'s no-script assertion is untouched for the same
+// class of reason: the script is in the artifact shell, and the Dashboard is
+// not a viewer.
 
 /**
  * The exits row alone, so an assertion cannot pass on the rest of the shell.
@@ -251,10 +267,11 @@ function expectedEditorHref(relative: string): string {
 test('the exits are in the shell: the path as text, and the link that opens it', () => {
   const page = pageFor(FULL_INVENTORY_VIEW, CERTAIN_ROW.path);
   const exits = exitsOf(page);
-  // The path is visible, selectable text. It is the fact a reader needs — the
-  // clipboard convenience over it is Story 2.3b's — so it is a `<code>` with
-  // the row's own path in it and not, say, a `title` attribute or a `data-`
-  // value only a script could reach.
+  // The path is visible, selectable text, **and it stays that way now that the
+  // clipboard control exists**: the control is a convenience over the text, not
+  // a replacement for it, because it is the half that still works with no
+  // script. So it is a `<code>` with the row's own path in it and not, say, a
+  // `title` attribute or a `data-` value only a script could reach.
   assert.ok(exits.includes(`<code class="artifact-path">${CERTAIN_ROW.path}</code>`));
   // And the link beside it, carrying the **absolute** path: the row is
   // project-relative and an editor cannot open a relative path.
@@ -282,12 +299,96 @@ test('the exits are in the shell: the path as text, and the link that opens it',
   assert.ok(!contentOf(page).includes('button-primary'), 'the link is the shell\u2019s, not the body\u2019s');
 });
 
-test('both exits render for every row state, because both are functions of the path', () => {
+test('the third exit is the copy control: ghost, hidden, and carrying the path', () => {
+  // Story 2.3b's half of FR-24, asserted where the other half is. The whole
+  // element is pinned as one literal rather than attribute by attribute,
+  // because every part of it is load-bearing and each is satisfiable by markup
+  // that gets another part wrong: the element kind, the `type`, the variant,
+  // `hidden`, the payload and the label.
+  const exits = exitsOf(pageFor(FULL_INVENTORY_VIEW, CERTAIN_ROW.path));
+  assert.ok(
+    exits.includes(
+      '<button type="button" class="button-ghost artifact-copy" hidden ' +
+        'data-copy-path="_bmad-output/planning-artifacts/prds/prd-x-2026-08-28/prd.md">' +
+        'Copy path</button>',
+    ),
+    exits,
+  );
+  // The label and the class are the constants rather than second spellings of
+  // them, on UX-DR17's rule: a literal that merely happens to match is free to
+  // drift. The literal above is what a reader is handed; these bind it to the
+  // module that decides it.
+  assert.equal(COPY_LABEL, 'Copy path');
+  assert.equal(COPY_CONTROL_CLASS, 'artifact-copy');
+  assert.equal(COPY_PAYLOAD_ATTRIBUTE, 'data-copy-path');
+  assert.ok(exits.includes(`class="button-ghost ${COPY_CONTROL_CLASS}"`));
+  assert.ok(exits.includes(`${COPY_PAYLOAD_ATTRIBUTE}="${CERTAIN_ROW.path}"`));
+  assert.ok(exits.includes(`>${COPY_LABEL}</button>`));
+  // **Between the text and the link, and that ordering is the point.** The
+  // control acts on the text it sits beside, and the primary stays last so the
+  // forward action is at the end of the row where 2.3a put it.
+  assert.ok(exits.indexOf('artifact-path') < exits.indexOf('artifact-copy'));
+  assert.ok(exits.indexOf('artifact-copy') < exits.indexOf('button-primary'));
+});
+
+test('a control that cannot work is not visible: hidden in the markup, revealed by the script', () => {
+  // The no-script row of the matrix, which is decidable from markup alone —
+  // where "the button copies the path" is not. Served `hidden`, so a reader
+  // whose browser runs no script (disabled, or a CSP that refuses the hash)
+  // never sees it; the script is the only thing that unhides it.
+  const page = pageFor(FULL_INVENTORY_VIEW, CERTAIN_ROW.path);
+  assert.match(
+    page,
+    /<button[^>]*\shidden(?=[\s>])/,
+    'the control must be hidden in the served markup',
+  );
+  // Not by a class or an inline style: `hidden` is the attribute a browser
+  // honours with no stylesheet at all, and the stylesheet is inlined in the
+  // same document it would have to style.
+  assert.doesNotMatch(page, /<button[^>]*\sstyle=/i, 'not hidden by an inline style');
+  // And the script is what reveals it, from the one constant. Asserted as the
+  // pairing rather than as two facts: a `hidden` attribute nothing removes is a
+  // control no reader can ever reach.
+  assert.ok(COPY_SCRIPT.includes('hidden = false'), 'the script must clear the attribute');
+  // **And it runs after the control exists.** The script is a classic inline
+  // script with no `defer` and no `DOMContentLoaded` guard, so it executes at
+  // parse time and `querySelectorAll` sees only what precedes it — the
+  // placement `renderArtifact` documents as a mechanism. Measured in review
+  // 2026-09-04: moving the emit above `<main>` left the whole suite at
+  // 1040/1040 green while, in a browser, the control would never be revealed
+  // and FR-24's clipboard half would be dead on every page. Position is the
+  // whole of the correctness here, so position is what is asserted.
+  //
+  // Compared against the control's **element**, not against the bare class:
+  // the stylesheet is inlined in this same document and names `.artifact-copy`
+  // in `<head>`, so `indexOf(COPY_CONTROL_CLASS)` finds the *rule* and the
+  // comparison is satisfied by every placement. That was this assertion's first
+  // form and it was vacuous — caught by re-running the mutation against it.
+  const controlAt = page.search(/<button[^>]*\bartifact-copy\b/);
+  const scriptAt = page.indexOf(`<script>${COPY_SCRIPT}</script>`);
+  assert.ok(controlAt !== -1 && scriptAt !== -1, 'both the control and the script must be present');
+  assert.ok(scriptAt > controlAt, 'the script must come after the control it reveals');
+  // Also that the stylesheet lets `hidden` win. `[hidden] { display: none }` is
+  // a UA declaration and `.button-ghost` sets `display: inline-flex` in author
+  // origin, which beats it -- so without a rule of its own the control was
+  // served `hidden` and painted anyway. `test/render/stylesheet.test.ts` pins
+  // the rule; this checks the surface actually carries the class it needs.
+  assert.match(page, /<button[^>]*\bartifact-copy\b/, 'the control carries the class that rule targets');
+  assert.ok(page.includes(COPY_SCRIPT), 'and the page must carry that script verbatim');
+});
+
+test('all three exits render for every row state, because all three are functions of the path', () => {
   // The matrix's four "still render" rows in one loop, deliberately: read
-  // state, content type and directory-ness cannot vary a link derived from a
+  // state, content type and directory-ness cannot vary a control derived from a
   // path that every row has, so a row per state would be four copies of one
   // claim. The absent row is here too — a recorded absence is exactly when a
   // reader most needs the path, because the tool cannot show them the file.
+  //
+  // **Story 2.3b adds the copy control to the same loop rather than a second
+  // one**, which is the matrix's own reasoning: "the control's markup does not
+  // vary by row state — it carries the row's path, which every row has". The
+  // script is not crossed against row state for the same reason: it is one
+  // constant on every artifact page whatever the page shows.
   const states: readonly (readonly [string, string, ArtifactBody])[] = [
     ['readable markdown', CERTAIN_ROW.path, READABLE_BODY],
     [
@@ -308,11 +409,21 @@ test('both exits render for every row state, because both are functions of the p
     ],
   ];
   for (const [state, path, body] of states) {
-    const exits = exitsOf(pageFor(FULL_INVENTORY_VIEW, path, body));
+    const page = pageFor(FULL_INVENTORY_VIEW, path, body);
+    const exits = exitsOf(page);
     assert.ok(exits.includes(`<code class="artifact-path">${path}</code>`), `${state}: no path text`);
     assert.ok(
       exits.includes(`<a class="button-primary" href="${expectedEditorHref(path)}">`),
       `${state}: no editor link, or one pointing somewhere else`,
+    );
+    assert.ok(
+      exits.includes(`hidden ${COPY_PAYLOAD_ATTRIBUTE}="${path}"`),
+      `${state}: no copy control, one that is not hidden, or one carrying another path`,
+    );
+    assert.equal(
+      (page.match(/<script\b/gi) ?? []).length,
+      1,
+      `${state}: the script is one constant on every artifact page`,
     );
   }
   assert.equal(states.length, 5, 'every row state the matrix names is in the loop');
@@ -369,17 +480,52 @@ test('the link is keyboard operable by construction, and nothing in its row clip
   const exits = exitsOf(pageFor(FULL_INVENTORY_VIEW, CERTAIN_ROW.path));
   assert.match(exits, /<a class="button-primary" href="[^"]+">/, 'a real anchor, not a styled span');
   assert.doesNotMatch(exits, /tabindex/, 'nothing may take the link out of the tab order');
-  assert.doesNotMatch(exits, /<button\b/i, 'and there is no script to submit a form with');
+  // **This line read `doesNotMatch(exits, /<button\b/i)` until Story 2.3b, and
+  // its stated reason was "there is no script to submit a form with".** There
+  // is a script now, and the copy control is a real `<button>` — which is
+  // precisely what makes it keyboard operable: an `<a>` with no `href` is not
+  // in the tab order, and a `tabindex` on one announces a link that does not
+  // navigate. So the old claim is not weakened, it is false, and what replaces
+  // it is the half still worth enforcing: any `<button>` in this row must be
+  // `type="button"` (a bare one submits an enclosing form) and must not be a
+  // primary. Both controls are reachable and neither carries a `tabindex`,
+  // which the line above still covers for the whole row.
+  for (const button of exits.match(/<button\b[^>]*>/g) ?? []) {
+    assert.match(button, /\stype="button"/, `${button} must not be a submit button`);
+    assert.doesNotMatch(button, /\bbutton-primary\b/, `${button} may not take the primary slot`);
+  }
+  assert.equal((exits.match(/<button\b/g) ?? []).length, 1, 'one button in the row, and one only');
   // The ring itself: `.button-primary:focus-visible` draws an inner stroke
   // (`test/render/components.test.ts` owns that rule) and the container it sits
   // in must not cut it. The whole-sheet anti-clipping rule in that file covers
   // every rule including this one; asserted here as well because the exits row
   // is the first container to hold a focusable child at its own edge, which is
   // the case that rule exists for.
+  //
+  // **From Story 2.3b it holds two focusable children rather than one**, which
+  // is what `test/render/stylesheet.test.ts`'s pinned declarations were
+  // measured against unpinned in 2.3a's review round. So the row's reflow
+  // arrangement is re-asserted here with the second control in it: still no
+  // scroll container, and still `wrap` — a long path takes the whole line and
+  // drops *both* controls below it rather than squeezing either.
   const sheet = pageFor(FULL_INVENTORY_VIEW, CERTAIN_ROW.path);
   const container = /\.artifact-exits \{\n([\s\S]*?)\n\}/.exec(sheet)?.[1] ?? '';
   assert.ok(container.includes('flex-wrap: wrap;'), 'a long path wraps rather than scrolling');
+  assert.ok(container.includes('align-items: baseline;'), 'both controls sit on the path’s line');
   assert.doesNotMatch(container, /overflow|clip-path|mask|contain:/);
+  // The copy control's own rule may not reintroduce what the container refuses.
+  const control = /\.artifact-copy \{\n([\s\S]*?)\n\}/.exec(sheet)?.[1] ?? '';
+  assert.ok(control.includes('flex: 0 0 auto;'), 'the control takes only its label’s width');
+  assert.doesNotMatch(control, /overflow|clip-path|mask|contain:/);
+  // And the two variants are the same box now that they are adjacent, which is
+  // the `deferred-work.md` entry this story is the recorded trigger for. Both
+  // carry a hairline; primary's is transparent, so the geometry matches without
+  // a second visible edge.
+  const primary = /^\.button-primary \{\n([\s\S]*?)\n\}/m.exec(sheet)?.[1] ?? '';
+  const ghost = /^\.button-ghost \{\n([\s\S]*?)\n\}/m.exec(sheet)?.[1] ?? '';
+  assert.ok(primary.includes('border-width: thin;'), primary);
+  assert.ok(ghost.includes('border-width: thin;'), ghost);
+  assert.ok(primary.includes('border-color: transparent;'), 'and primary gains no visible edge');
 });
 
 test('a nameless project root is refused rather than anchored at the filesystem', () => {
@@ -549,12 +695,55 @@ test('a hostile filename renders as text on this surface too, creating no elemen
   assert.equal(findArtifact(FULL_INVENTORY_VIEW, HOSTILE_ROW.path)?.row, HOSTILE_ROW);
 });
 
-test('the surface serves no script and fetches nothing', () => {
+test('the surface serves exactly one script, inline, and fetches nothing', () => {
+  // **This test asserted `doesNotMatch(page, /<script\b/i)` until Story 2.3b,
+  // with the reason "the scripted model belongs to the reader stories".** That
+  // reason still holds for the model `EXPERIENCE.md` describes — arrows, `k`/`j`,
+  // `g`-then-a-letter — and none of it is here. What it cannot cover any more is
+  // *any* script: FR-24 is copy-to-clipboard, there is no HTML-only way to write
+  // to the clipboard, so the script satisfies the requirement rather than
+  // decorating a page that already worked. The claim is therefore not weakened
+  // but replaced by the one that is now load-bearing: **exactly one script, and
+  // it fetches nothing.**
   const page = pageFor(FULL_INVENTORY_VIEW, CERTAIN_ROW.path);
-  assert.doesNotMatch(page, /<script\b/i, 'the scripted model belongs to the reader stories');
+  assert.equal(
+    (page.match(/<script\b/gi) ?? []).length,
+    1,
+    'one script; a second is a second thing for the CSP hash to not cover',
+  );
+  // **"One" is a fact about the shell, not about every page — and that
+  // distinction was missing until review 2026-09-04.** `RENDER_EMBEDDED_HTML`
+  // is `true`, so a markdown artifact carrying its own `<script>` puts a second
+  // one on the page: measured, two elements for both the closed and the
+  // unclosed spelling. The count above therefore holds for a body that embeds
+  // none, and what actually matters is asserted here instead — that the shell's
+  // script is still its **own discrete element**, so the `sha256` covers
+  // exactly it and the browser refuses the document's rather than ours.
+  for (const embedded of ['# t\n\n<script>alert(1)</script>\n', '# t\n\n<script>alert(1)\n']) {
+    const withScript = pageFor(FULL_INVENTORY_VIEW, CERTAIN_ROW.path, { ok: true, text: embedded });
+    assert.ok(
+      withScript.includes(`<script>${COPY_SCRIPT}</script>`),
+      `the shell's script stays a discrete element beside a document's own (${JSON.stringify(embedded)})`,
+    );
+    assert.ok(
+      (withScript.match(/<script\b/gi) ?? []).length > 1,
+      'and the document\'s script is present too, which is why the count above is fixture-bound',
+    );
+  }
+  // Inline, with no attributes at all. A `src` would be a fetch this tool never
+  // makes; any attribute — a `type`, a `nonce`, a `defer` — would be outside the
+  // bytes the `sha256` source expression covers, so a browser honouring the
+  // policy would refuse the script while every assertion here still passed.
+  assert.match(page, /<script>/, 'no attribute on the element the hash permits');
+  assert.doesNotMatch(page, /<script[^>]/i, 'and therefore no src, type, nonce or defer');
   assert.doesNotMatch(page, /<link\b/i);
   assert.doesNotMatch(page, /https?:\/\//i);
   assert.doesNotMatch(page, /\sstyle=/);
+  // No inline event handler either, which the policy could not permit even if
+  // one were wanted: a hash source does not cover attribute handlers, and
+  // `'unsafe-hashes'` is what would be needed to admit them. The listener is
+  // attached by the script instead.
+  assert.doesNotMatch(page, /\son(?:click|keydown|keyup|focus|load|error)=/i);
 });
 
 test('the shell writes only the elements it owns, and the content region is one of them', () => {
@@ -593,6 +782,19 @@ test('the shell writes only the elements it owns, and the content region is one 
           // gained. `DESIGN.md:255` puts a rendered document in its own column
           // rather than in a tile, so it is a sibling of the tile grid.
           'article',
+          // **Story 2.3b's two, and this list is where they are decided.** The
+          // comment above says the point of keeping the allowlist is that "the
+          // shell must not grow elements of its own without a decision", so
+          // these are the decision rather than an accommodation. `button` is
+          // the copy control: it is the only element that is keyboard operable
+          // *and* activates without navigating, which is what the clipboard
+          // needs and what an `<a>` cannot be without an `href` it does not
+          // have. `script` is the listener that reveals and drives it — FR-24
+          // has no HTML-only form, so the element is the requirement rather
+          // than a convenience over it. Both are the shell's, not a viewer's,
+          // so Stories 2.4-2.8 inherit them rather than adding them five times.
+          'button',
+          'script',
         ].includes(tag),
     ),
     [],
@@ -665,9 +867,20 @@ test('a readable markdown artifact is in the page as server-rendered HTML', () =
   // catches is two `h1`s rather than a wrong tag in the region.
   assert.equal((page.match(/<h1>/g) ?? []).length, 1, 'one h1 per surface, still');
   assert.match(content, /<h2>Title<\/h2>/);
-  // No script and no fetch on the way in either: this is the same rule the
-  // shell is held to, asked again now that the region carries project bytes.
-  assert.doesNotMatch(page, /<script\b/i);
+  // No fetch on the way in, and **no script out of the document**: this is the
+  // same rule the shell is held to, asked again now that the region carries
+  // project bytes.
+  //
+  // **The assertion was `doesNotMatch(page, /<script\b/i)` until Story 2.3b.**
+  // The shell now carries one — FR-24's clipboard half, which has no HTML-only
+  // form — so a whole-page count of zero has become false about the shell while
+  // the claim it was making was about the *content region*. Narrowed to the
+  // region rather than dropped, which is what the claim always meant: a
+  // document's own markdown must not put a script on the page. The shell's own
+  // one is counted, and pinned at exactly one, by `the surface serves exactly
+  // one script, inline, and fetches nothing` above.
+  assert.doesNotMatch(content, /<script\b/i, 'no script may arrive out of a document');
+  assert.equal((page.match(/<script\b/gi) ?? []).length, 1, 'and the shell still carries one');
   assert.doesNotMatch(page, /\sstyle=/);
 });
 

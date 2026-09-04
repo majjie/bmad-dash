@@ -601,7 +601,24 @@ const REQUIRED_RULES: readonly (readonly [string, readonly string[]])[] = [
   ['.button-primary, .button-ghost', ['text-decoration-line: none']],
   [
     '.button-primary',
-    ['background: var(--button-primary-background)', 'color: var(--button-primary-color)'],
+    [
+      'background: var(--button-primary-background)',
+      'color: var(--button-primary-color)',
+      // **The transparent border is required, and Story 2.3b is what made it
+      // load-bearing.** Ghost carries a hairline on all four edges; primary
+      // carried none, so the two were different boxes — one to two pixels
+      // shorter and narrower. `deferred-work.md` recorded that from Story 2.3
+      // with the trigger "the first surface to render both variants
+      // adjacently"; 2.3a fired the trigger without meeting the condition, and
+      // this story meets it — the copy control and the editor link are flex
+      // siblings in `.artifact-exits` on a shared baseline. Named here because
+      // deleting all three declarations restores the mismatch with nothing else
+      // going red, which is this project's own standard for what a required
+      // rule is.
+      'border-style: solid',
+      'border-width: thin',
+      'border-color: transparent',
+    ],
   ],
   [
     '.button-ghost',
@@ -665,6 +682,23 @@ const REQUIRED_RULES: readonly (readonly [string, readonly string[]])[] = [
     ['display: flex', 'flex-wrap: wrap', 'align-items: baseline', 'gap: var(--space-3)'],
   ],
   ['.artifact-exits .artifact-path', ['flex: 1 1 auto']],
+  // Story 2.3b's copy control: the two things a `<button>` needs that the two
+  // anchor variants did not, and both are load-bearing rather than tidy.
+  // `appearance: none` because the shared button rules were written for `<a>`
+  // and nothing in them defeats a native control's own fill, bevel and radius,
+  // which a platform paints *over* the ghost treatment. `flex: 0 0 auto`
+  // because the path beside it is `1 1 auto`: without it the button shrinks
+  // below its own label on a narrow row, which is a clipped label where the row
+  // is arranged to wrap instead — and wrapping is what keeps the focus ring on
+  // this element out of a scroll container that would clip it (WCAG 2.4.11).
+  // **The rule that makes `hidden` mean anything on this control.** `[hidden]
+  // { display: none }` is a UA declaration and `.button-ghost` sets
+  // `display: inline-flex` in author origin, which beats it — so without
+  // this the control was served `hidden` and painted regardless. Measured
+  // in review 2026-09-04. Pinned because the whole no-dead-control design
+  // rests on it and nothing else in the suite can see a browser.
+  ['.artifact-copy[hidden]', ['display: none']],
+  ['.artifact-copy', ['appearance: none', 'flex: 0 0 auto']],
   // **The pair that makes the exits row survivable, required for the same
   // reason `.project-path` requires it one table up.** `.artifact-path` became
   // a flex item beside a focusable button in Story 2.3a, and `flex-wrap` only

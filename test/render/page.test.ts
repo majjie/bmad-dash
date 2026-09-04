@@ -176,6 +176,14 @@ test('the markup carries no colour or size literal, and no inline style', () => 
     // path of its own to show. `test/render/stylesheet.test.ts` asserts the
     // other direction over the artifact surface, where the class does render.
     'artifact-exits',
+    // Story 2.3b's copy control, listed on `artifact-exits`'s own terms: the
+    // allowlist is the document's vocabulary rather than this surface's
+    // inventory, and the Dashboard renders neither — it is not a viewer, has no
+    // artifact path to copy, and deliberately serves no script for a control to
+    // be driven by. `test/render/enhance.test.ts` owns the control itself and
+    // `test/render/stylesheet.test.ts`'s round trip asserts the other direction
+    // over the artifact surface, where the class does render.
+    'artifact-copy',
     // Story 2.3's two surface action buttons. `button-ghost` is exercised by
     // this very page — Refresh carries it. `button-primary` is **not** rendered
     // on the Dashboard and is listed anyway: Story 2.3a puts it on the artifact

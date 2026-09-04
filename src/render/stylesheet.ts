@@ -448,6 +448,23 @@ function componentRules(): readonly string[] {
       declaration('background', 'var(--button-primary-background)'),
       declaration('color', 'var(--button-primary-color)'),
       declaration('border-radius', 'var(--button-primary-border-radius)'),
+      // **A transparent border, so the two variants are the same box.** Ghost
+      // carries a hairline on all four edges and primary carried none, which
+      // made primary two hairlines shorter and narrower than a ghost beside it.
+      // `deferred-work.md` recorded that from Story 2.3 with the trigger "the
+      // first surface to render both variants adjacently" and the remedy named;
+      // Story 2.3a fired the trigger without meeting the condition (its primary
+      // was in `<main>` and its only ghost was Refresh, in the header, with the
+      // `h1` between them). **Story 2.3b meets it:** the copy control and the
+      // editor link are flex siblings in `.artifact-exits`, on a shared
+      // baseline, where a one- or two-pixel mismatch is exactly where an eye
+      // catches it. `transparent` is a CSS keyword rather than a colour
+      // literal, and `thin` is the same keyword `.button-ghost` uses one rule
+      // down, so the geometry is shared without inventing a width token
+      // DESIGN.md does not own.
+      declaration('border-style', 'solid'),
+      declaration('border-width', 'thin'),
+      declaration('border-color', 'transparent'),
     ]),
     rule('.button-ghost', [
       declaration('background', 'var(--button-ghost-background)'),
@@ -673,6 +690,53 @@ function componentRules(): readonly string[] {
     // not *grow* into the space a short path leaves without this, which would
     // leave the button floating mid-line instead of at the end of it.
     rule('.artifact-exits .artifact-path', [declaration('flex', '1 1 auto')]),
+
+    // -----------------------------------------------------------------------
+    // Story 2.3b: the copy control, the one element that is a real button
+    // -----------------------------------------------------------------------
+    //
+    // It carries `button-ghost` for its appearance and this rule for the two
+    // things a `<button>` needs that the two anchor variants did not.
+    //
+    // **`appearance: none` is load-bearing, not tidying.** The button rules
+    // above were written for `<a>` elements — "an anchor, not a `<button>`",
+    // says their own comment — so nothing in them defeats the native control
+    // appearance a `<button>` gets. Left native, the platform paints its own
+    // grey fill and bevel *over* the ghost treatment on the browsers that still
+    // do (and, on iOS, rounds the corners to its own radius), which is a
+    // control that looks like neither variant. `none` is a keyword, so it costs
+    // the token layer nothing.
+    //
+    // **`flex: 0 0 auto` because the row's other item grows.**
+    // `.artifact-exits .artifact-path` is `1 1 auto`, so the path takes the
+    // free space; without this the button would still *shrink* below its label
+    // on a narrow row, which is a label clipped rather than a row wrapped. The
+    // row wraps instead — which is what `.artifact-exits`'s comment above says
+    // the whole row is arranged to do rather than scroll, since a scroll
+    // container would clip the focus ring on this very element (WCAG 2.4.11).
+    //
+    // No `overflow`, no `clip-path`, no `contain`, and there could not be: this
+    // is a focusable element at a container's edge, and the whole-sheet
+    // anti-clipping rule in `test/render/components.test.ts` refuses all three.
+    // **`hidden` must win, and without this rule it does not.** `[hidden]
+    // { display: none }` is a *user-agent* declaration, and the
+    // `.button-primary, .button-ghost` rule above sets `display: inline-flex`
+    // in author origin — author beats UA regardless of specificity, so the
+    // control this story serves `hidden` was **painted anyway**. A reader with
+    // no script, or whose browser refused the hash, saw a button that does
+    // nothing: the dead control the hidden-then-revealed design exists to
+    // prevent, and the story's own acceptance criterion unmet. Found in review
+    // 2026-09-04. Class-plus-attribute outranks the class-only rule, so this
+    // wins by specificity and does not depend on rule order.
+    rule('.artifact-copy[hidden]', [declaration('display', 'none')]),
+    rule('.artifact-copy', [
+      declaration('appearance', 'none'),
+      declaration('flex', '0 0 auto'),
+      // The pointer affordance the anchor beside it gets from the UA for free.
+      // Both controls do something on click, so both should say so; a keyword,
+      // and DESIGN.md owns no cursor token to resolve it through.
+      declaration('cursor', 'pointer'),
+    ]),
 
     // -----------------------------------------------------------------------
     // Story 2.1b: the reading surface

@@ -1244,6 +1244,12 @@ test('the artifact view has a stated importer set, and reaches no filesystem', a
   // the parser boundary; it imports a *bundled* third-party parser, which is
   // why the reach question is asked of it separately below rather than answered
   // by this list. Neither can open a file: the body arrives as an argument.
+  //
+  // **Story 2.3b's one addition.** `./enhance.ts` holds the page's single
+  // client script as a string constant and builds the copy control's markup; it
+  // imports `./html.ts` and nothing else, so it cannot open a file either. Its
+  // presence here is the only structural record that the surface serves a
+  // script at all — which is why the addition is stated rather than absorbed.
   assert.deepEqual(
     await importSpecifiersIn(REPO_ROOT, 'src/render/artifact.ts'),
     [
@@ -1252,6 +1258,7 @@ test('the artifact view has a stated importer set, and reaches no filesystem', a
       '../domain/signal.ts',
       '../domain/url.ts',
       './components.ts',
+      './enhance.ts',
       './html.ts',
       './inventory.ts',
       './markdown.ts',
@@ -1263,6 +1270,48 @@ test('the artifact view has a stated importer set, and reaches no filesystem', a
     scanSource(await readFile(join(REPO_ROOT, 'src', 'render', 'artifact.ts'), 'utf8')).code,
     /\bnode:|\brequire\b|getBuiltinModule/,
     'and the resolver names no Node built-in, not even through a global',
+  );
+});
+
+test('the one script has two importers and each takes only its own half', async () => {
+  // **Story 2.3b's new module, held to this layer's convention.** Every module
+  // here carries an exact importer set, and a new one arriving without makes
+  // the table silently non-exhaustive.
+  //
+  // Two importers, and the split *is* the story's whole safety argument. The
+  // render layer writes the script into the page; the HTTP adapter hashes it
+  // into the Content-Security-Policy. Both ends read one constant, which is
+  // what makes "the header and the page cannot disagree" structural rather than
+  // a promise. A **third** importer would be a second surface serving a script
+  // — which is the boundary the story states as "no script on the Dashboard" —
+  // or a second place a policy is derived.
+  assert.deepEqual(
+    await importersOf(REPO_ROOT, 'src/render/enhance.ts'),
+    ['src/adapters/http/server.ts', 'src/render/artifact.ts'],
+    'the artifact view serves the script and the adapter permits it; a third importer is a second scripted surface',
+  );
+  // And neither end can grow into the other's job. The adapter takes the script
+  // *text* and nothing that builds markup — AD-2 puts document HTML in
+  // `src/render/`, and `copyScriptElement` is document HTML. The surface takes
+  // the two builders and **not** `COPY_SCRIPT`, so it cannot assemble a
+  // `<script>` of its own shape that the hash would then refuse.
+  assert.deepEqual(
+    await namedImportsIn(REPO_ROOT, 'src/adapters/http/server.ts', '../../render/enhance.ts'),
+    ['COPY_SCRIPT'],
+    'the adapter hashes the script and may not compose the element',
+  );
+  assert.deepEqual(
+    await namedImportsIn(REPO_ROOT, 'src/render/artifact.ts', './enhance.ts'),
+    ['copyControl', 'copyScriptElement'],
+    'the surface emits the control and the element, and never the bare text',
+  );
+  // The client code is a string under `src/`, which is why `web/` is still the
+  // one empty scanned root — asserted above, and the reason that tripwire stays
+  // armed for the story that genuinely earns a `web/`.
+  assert.doesNotMatch(
+    scanSource(await readFile(join(REPO_ROOT, 'src', 'render', 'enhance.ts'), 'utf8')).code,
+    /\bnode:|\brequire\b|getBuiltinModule/,
+    'the script module names no Node built-in: the hash is the adapter’s job',
   );
 });
 

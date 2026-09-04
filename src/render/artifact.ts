@@ -50,6 +50,7 @@ import { SIGNAL_LABELS, type ReadStage, type SignalState } from '../domain/signa
 import { artifactUrl } from '../domain/url.ts';
 import { markup } from './html.ts';
 import { buttonPrimary, tileGrid } from './components.ts';
+import { copyControl, copyScriptElement } from './enhance.ts';
 import { renderMarkdown } from './markdown.ts';
 import { documentShell } from './page.ts';
 import {
@@ -317,7 +318,10 @@ function contentRegion(path: string, body: ArtifactBody): string {
  * From Story 2.3a that `<code>` sits in `.artifact-exits` beside the
  * open-in-editor link, because the path and the way out of the tool are one
  * thing to a reader: the link is the exit, and the text is what they act on when
- * the link's editor is not the one they use.
+ * the link's editor is not the one they use. Story 2.3b puts the copy control in
+ * the same row, between them, for the same reason — it acts on the text it sits
+ * beside — and it is the whole of why this surface, alone among the two, ends
+ * with a `<script>`.
  *
  * `body` is **required**, on `StartServerOptions.inventory`'s own reasoning:
  * from this story the surface *is* the artifact's content, so a page rendered
@@ -363,9 +367,18 @@ export function renderArtifact(
   // only for a path that is not absolute, which the join above cannot produce,
   // and a surface whose primary action cannot be addressed is better refused as
   // a 500 the reader can report than served with a control that lies.
+  //
+  // **Story 2.3b adds the third exit and the page's one script.** FR-24's
+  // copy-to-clipboard half cannot be a link — there is no HTML-only way to
+  // write to the clipboard — so it is a `<button>` served `hidden` and revealed
+  // by `./enhance.ts`'s one script. A reader without script sees the path text
+  // and no dead control; a reader with it gets the convenience over the text
+  // that is already there. It is a `button-ghost`, because the editor link
+  // above holds this surface's one primary.
   const exits = [
     '<div class="artifact-exits">',
     markup`<code class="artifact-path">${found.row.path}</code>`.html,
+    copyControl(found.row.path),
     buttonPrimary({
       label: OPEN_IN_EDITOR_LABEL,
       href: editorUrl(artifactAbsolutePath(projectRoot, found.row.path)),
@@ -392,6 +405,15 @@ export function renderArtifact(
     contentRegion(found.row.path, body),
     '</article>',
     '</main>',
+    // **The one script, once, and on this surface only.** After `</main>`
+    // rather than in the head, because it attaches listeners to controls that
+    // must already exist — and outside `documentShell` because the shell is
+    // shared with the Dashboard, which is not a viewer, needs no clipboard, and
+    // whose `test/render/page.test.ts` no-script assertion therefore stands
+    // unamended. `src/adapters/http/server.ts` derives the CSP's
+    // `script-src 'sha256-…'` from the same constant this emits, so the header
+    // and the body cannot disagree about which script is permitted.
+    copyScriptElement(),
   ].join('\n');
   return documentShell(projectRoot, refreshHref, main);
 }

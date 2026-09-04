@@ -13,6 +13,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { request as httpRequest, createServer, Agent } from 'node:http';
 import { connect } from 'node:net';
+import { createHash } from 'node:crypto';
 import type { AddressInfo } from 'node:net';
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { mkdir, readFile, writeFile, symlink } from 'node:fs/promises';
@@ -40,6 +41,7 @@ import { EMPTY_INVENTORY, emptyInventory } from './support/cli.ts';
 import type { InventoryView } from '../src/render/inventory.ts';
 import { artifactUrl, sectionUrl } from '../src/domain/url.ts';
 import { ARTIFACT_SURFACE_TITLE, type ArtifactBody } from '../src/render/artifact.ts';
+import { COPY_LABEL, COPY_PAYLOAD_ATTRIBUTE, COPY_SCRIPT } from '../src/render/enhance.ts';
 import {
   CERTAIN_ROW,
   DELIBERATE_RUN_ROW,
@@ -1848,9 +1850,21 @@ test("an artifact URL serves the artifact's own content, rendered on the server"
   assert.ok(response.body.includes('<article class="artifact-content">'));
   assert.ok(response.body.includes('<h2>The title</h2>'), 'rendered, not echoed');
   assert.ok(response.body.includes('<p>A paragraph.</p>'));
-  // Server-rendered, so there is nothing on the page that would need to run to
-  // produce it. `web/` is still the one empty scanned root.
-  assert.doesNotMatch(response.body, /<script\b/i);
+  // **Server-rendered, and that is the claim this line makes now.** It read
+  // `doesNotMatch(response.body, /<script\b/i)` until Story 2.3b, on the
+  // reasoning that nothing on the page needs to run to produce it. That is
+  // still true of the *content* — the heading and the paragraph above came off
+  // the server — and it is no longer true of the page, which carries FR-24's
+  // one clipboard listener. So the assertion narrows to what it always meant:
+  // the content region is server-rendered, and the page's one script is the
+  // shell's, counted at exactly one.
+  const article = /<article class="artifact-content">([\s\S]*?)<\/article>/.exec(response.body);
+  assert.ok(article !== null, 'the served page has no content region');
+  assert.doesNotMatch(article[1] ?? '', /<script\b/i, 'no script produced this content');
+  assert.equal((response.body.match(/<script\b/gi) ?? []).length, 1, 'and the shell carries one');
+  // `web/` is still the one empty scanned root: the script is a string constant
+  // under `src/`, so nothing is served from disk and no client build exists.
+  // `test/architecture.test.ts` holds both halves of that.
 
   // **Exactly one file was read, and it is the one asked for.** The Dashboard
   // reads none, a 404 reads none, and the artifact page reads its own row's
@@ -1922,11 +1936,44 @@ test('a body supplier that throws is a 500 the reader can report, not a hung tab
   assert.equal((await get({ port: server.port, path: '/' })).status, 200);
 });
 
-/** The three headers, and their exact values, as one place to change them. */
+/**
+ * The script hash the policy must carry, recomputed here rather than imported.
+ *
+ * **Spelled out from the script's own bytes, which is what makes the header
+ * checkable at all.** Importing `SCRIPT_SOURCE` would assert that the constant
+ * equals itself. This recomputes the digest from `COPY_SCRIPT` — the render
+ * layer's script text — so the expectation below is what the *policy ought to
+ * say about the script the page carries*, and the server's own derivation is
+ * the thing under test. The stronger form of the same check is further down,
+ * where the hash is recomputed from the **served response body**.
+ */
+const EXPECTED_SCRIPT_SOURCE = `'sha256-${createHash('sha256')
+  .update(COPY_SCRIPT, 'utf8')
+  .digest('base64')}'`;
+
+/**
+ * The three headers, and their exact values, as one place to change them.
+ *
+ * **`script-src` arrived with Story 2.3b, and the row below used to assert its
+ * absence.** Until then the policy had no `script-src` at all and the
+ * `default-src 'none'` fallback denied script outright, which was correct while
+ * the tool served none. FR-24 is copy-to-clipboard and there is no HTML-only
+ * way to write to the clipboard, so the artifact view now carries exactly one
+ * inline script and the policy admits exactly that one, by hash. The old
+ * assertion is not weakened — a hash permits one script and nothing else,
+ * which is a *narrower* grant than `'unsafe-inline'` and the reason that was
+ * refused — but it is no longer true, and this is where it is said.
+ *
+ * The hash is interpolated rather than written out as base64, because the
+ * digest of a script is not a fact a human can check by reading it; what a
+ * human can check is that it is a digest of *this* script, which is what
+ * `EXPECTED_SCRIPT_SOURCE` above states and the served-body test below proves.
+ */
 const EXPECTED_HARDENING: readonly (readonly [string, string])[] = [
   [
     'content-security-policy',
-    "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
+    `default-src 'none'; style-src 'unsafe-inline'; script-src ${EXPECTED_SCRIPT_SOURCE}; ` +
+      "base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
   ],
   ['x-content-type-options', 'nosniff'],
   ['referrer-policy', 'no-referrer'],
@@ -1947,8 +1994,37 @@ test('the hardening headers are exactly what the module exports, spelled out her
       `${directive} does not inherit default-src and must be stated`,
     );
   }
-  // Script is denied by the `default-src` fallback and never allowed back in.
-  assert.doesNotMatch(HARDENING_HEADERS['content-security-policy'] ?? '', /script-src/);
+  // **This line read `doesNotMatch(policy, /script-src/)` until Story 2.3b**,
+  // on the reasoning that script was denied by the `default-src` fallback and
+  // "never allowed back in". It is allowed back in, once, by hash — see the
+  // constant above for why the requirement leaves no other option. What
+  // replaces the absence is the two things that make the exception narrow, and
+  // both are stronger claims than the one they replace:
+  const policy = HARDENING_HEADERS['content-security-policy'] ?? '';
+  //   1. **The one script source is a hash, not a keyword.** `'unsafe-inline'`
+  //      would execute a `<script>` out of a project's own markdown, which
+  //      `RENDER_EMBEDDED_HTML` makes possible; a hash cannot. `'self'` would
+  //      permit any same-origin script. `'strict-dynamic'` would let the
+  //      permitted script load more. A nonce would have to be per-response and
+  //      is not derivable from a constant.
+  assert.match(policy, /script-src 'sha256-[A-Za-z0-9+/]+={0,2}'/, 'one hash source, spelled out');
+  // Read out of the `script-src` directive alone, not out of the whole policy:
+  // `style-src` legitimately carries `'unsafe-inline'` one directive earlier,
+  // and a whole-string search would either miss the case that matters or fire
+  // on the one that does not.
+  const scriptSrc = policy.slice(policy.indexOf('script-src')).split(';')[0] ?? '';
+  for (const forbidden of ["'unsafe-inline'", "'unsafe-eval'", "'unsafe-hashes'", "'strict-dynamic'", "'self'", 'nonce-']) {
+    assert.ok(!scriptSrc.includes(forbidden), `script-src must not carry ${forbidden}`);
+  }
+  //   2. **It is a hash of *our* script**, derived from the same constant the
+  //      page is built from rather than written down beside it. The served-body
+  //      form of this check is below; this one catches a header assembled from
+  //      a stale digest.
+  assert.ok(policy.includes(`script-src ${EXPECTED_SCRIPT_SOURCE}`), policy);
+  // `style-src` keeps `'unsafe-inline'` and is untouched: the stylesheet is
+  // inlined by `src/render/page.ts` and a hash over it would move on every
+  // token edit for no gain, since a style cannot execute.
+  assert.ok(policy.includes("style-src 'unsafe-inline'"));
 });
 
 test('every response carries the hardening headers — the 200 and every refusal', async (t) => {
@@ -2013,10 +2089,153 @@ test('the policy permits the one thing the page needs and nothing else', async (
   const response = await get({ port: fixture.port, path: artifactUrl(CERTAIN_ROW.path) });
   assert.ok(response.body.includes('<style>'), 'the page does inline a stylesheet');
   assert.ok(!response.body.includes('<link'), 'and fetches no stylesheet');
-  assert.doesNotMatch(response.body, /<script\b/i, 'and serves no script');
+  // **This line read `and serves no script` until Story 2.3b.** The page serves
+  // one, because FR-24's clipboard half has no HTML-only form — so the claim
+  // this test makes is unchanged in shape and stronger in content: the policy
+  // permits *the things the page needs and nothing else*, and the page's needs
+  // are now two rather than one. Both are inline and neither is fetched.
+  assert.equal(
+    (response.body.match(/<script\b/gi) ?? []).length,
+    1,
+    'exactly one script, so the one hash covers the whole of it',
+  );
+  assert.doesNotMatch(response.body, /<script[^>]/i, 'inline, with no src and no attribute');
   const policy = response.headers['content-security-policy'] ?? '';
-  assert.ok(policy.includes("style-src 'unsafe-inline'"), 'so inline style is the one allowance');
+  assert.ok(policy.includes("style-src 'unsafe-inline'"), 'inline style is the style allowance');
+  assert.ok(policy.includes(`script-src ${EXPECTED_SCRIPT_SOURCE}`), 'and one hash is the script one');
   assert.ok(policy.startsWith("default-src 'none'"), 'and everything else falls back to none');
+  // Nothing else was let in on the way. Everything the document could ask for
+  // besides style and that one script — an image, a font, a frame, a fetch — is
+  // still denied by the fallback, which is the half of this test that a new
+  // directive would quietly cost.
+  assert.deepEqual(
+    policy.split('; ').map((directive) => directive.split(' ')[0]),
+    ['default-src', 'style-src', 'script-src', 'base-uri', 'form-action', 'frame-ancestors'],
+    'a seventh directive is a decision, not a detail',
+  );
+});
+
+test('the CSP hash is the hash of the script in that same response body', async (t) => {
+  // **The check the story exists to make, and the shape matters more than the
+  // result.** A test that compared `HARDENING_HEADERS` to `SCRIPT_SOURCE` would
+  // be a constant agreeing with itself: both come from `COPY_SCRIPT`, so it
+  // would pass over a page that served a *different* script, or none. This one
+  // takes the script out of the **served response body**, digests those bytes,
+  // and compares the result to the directive in that same response's header. If
+  // the page and the header ever describe different scripts, this is what says
+  // so — and a browser honouring the policy would refuse the script while every
+  // other assertion in this file still passed.
+  //
+  // Mechanism check, per the spec's Verification section: changing one byte of
+  // `COPY_SCRIPT` and reverting the header is expected to fail this row.
+  const fixture = await servingFixture(t);
+  const response = await get({ port: fixture.port, path: artifactUrl(CERTAIN_ROW.path) });
+  assert.equal(response.status, 200);
+
+  const served = /<script>([\s\S]*?)<\/script>/.exec(response.body);
+  assert.ok(served !== null, 'the served page carries no script to hash');
+  const script = served[1] ?? '';
+  assert.ok(script.trim() !== '', 'an empty script would hash to a constant that permits nothing');
+  const recomputed = `'sha256-${createHash('sha256').update(script, 'utf8').digest('base64')}'`;
+
+  const policy = response.headers['content-security-policy'] ?? '';
+  const directive = /script-src ('sha256-[^']+')/.exec(policy)?.[1];
+  assert.equal(directive, recomputed, 'the header permits a script this response does not carry');
+  // And it is the module's own script, not merely *a* script whose hash happens
+  // to be in the header — which a page serving `<script></script>` and a header
+  // built from the same empty string would also satisfy.
+  assert.equal(script, COPY_SCRIPT, 'the served bytes are the render layer’s constant');
+
+  // Every other response carries the same directive, because the constant is
+  // shared: the Dashboard, which serves no script at all, and the four
+  // refusals, which serve no HTML. A policy assembled per route is one that can
+  // be assembled wrongly.
+  const others = [
+    ['the Dashboard', await get({ port: fixture.port, path: '/' })],
+    ['a 404', await get({ port: fixture.port, path: '/artifact/nope.md' })],
+    ['a 403', await get({ port: fixture.port, path: '/', host: 'evil.example' })],
+    ['a 405', await get({ port: fixture.port, path: '/', method: 'POST' })],
+  ] as const;
+  assert.deepEqual(
+    others.map(([, r]) => r.status),
+    [200, 404, 403, 405],
+    'not vacuous: the three refusals are refusals',
+  );
+  for (const [what, other] of others) {
+    assert.ok(
+      (other.headers['content-security-policy'] ?? '').includes(`script-src ${recomputed}`),
+      `${what} carries a different script-src`,
+    );
+  }
+  // The Dashboard carries the directive and no script, which is the point of
+  // one shared constant: a hash naming a script a response does not carry
+  // permits nothing extra, and `test/render/page.test.ts` holds the other half.
+  assert.doesNotMatch(others[0][1].body, /<script\b/i, 'the Dashboard is not a viewer');
+});
+
+test('the served artifact response carries the exits row, with an absolute editor href', async (t) => {
+  // **The wiring seam Story 2.3a could not see, closed here.** Every render
+  // test passes `PROJECT_ROOT` in directly, so all of them prove the shell
+  // builds an href from whatever root it is handed and none of them proves the
+  // root the *server* passes is absolute — the one place that is decided is
+  // `toPlatform(projectRoot)` in this module, reached only through the real
+  // composition root. `deferred-work.md` recorded the gap against 2.3a and
+  // named this story as the moment to close it, since it touches this file
+  // anyway. The shape is copied from `the composition root wires the real
+  // confined reader, end to end` above.
+  const root = await makeProjectDir(t, 'bmad-dash-exits-');
+  const relative = '_bmad-output/planning-artifacts/prds/prd-exits-2026-09-04/prd.md';
+  await mkdir(join(root, dirname(relative)), { recursive: true });
+  await writeFile(join(root, relative), "---\ntitle: 'Exits'\ntype: 'prd'\n---\n\n# Exits\n");
+
+  let url = '';
+  let shutdown: () => void = () => {};
+  const code = await run([root], {
+    launch: () => Promise.resolve({ opened: false as const, command: 'stub', reason: 'stubbed' }),
+    stdout: (text) => {
+      url += text;
+    },
+    stderr: () => {},
+    onSignal: (handler) => {
+      shutdown = handler;
+    },
+    exit: () => {},
+  });
+  t.after(() => shutdown());
+  assert.equal(code, 0, `the run did not start: ${JSON.stringify(url)}`);
+  const port = Number(URL_PATTERN.exec(url.trim())?.[1]);
+  assert.ok(Number.isInteger(port), `no port in ${JSON.stringify(url)}`);
+
+  const response = await get({ port, path: artifactUrl(relative) });
+  assert.equal(response.status, 200);
+  assert.ok(response.body.includes('<div class="artifact-exits">'), 'no exits row was served');
+
+  // **The href is absolute, and it is absolute under the root this invocation
+  // actually resolved** — not under a root a test chose. Built here from the
+  // real directory rather than by calling `editorUrl`, so the expectation does
+  // not come from the code under test. `makeProjectDir` returns a canonical
+  // path, which is why this can be compared literally.
+  const expected = `vscode://file/${[...root.split('/'), ...relative.split('/')]
+    .filter((segment) => segment !== '')
+    .map(encodeURIComponent)
+    .join('/')}`;
+  assert.ok(response.body.includes(`href="${expected}"`), `no such href in the served page`);
+  assert.match(expected, /^vscode:\/\/file\/[^/]/, 'an editor cannot open a relative path');
+  // The path text and the copy control travel with it, both carrying the row's
+  // **project-relative** path — the exits row states one fact three ways and
+  // only the editor needs it absolute.
+  assert.ok(response.body.includes(`<code class="artifact-path">${relative}</code>`));
+  assert.ok(response.body.includes(`hidden ${COPY_PAYLOAD_ATTRIBUTE}="${relative}"`));
+  assert.ok(response.body.includes(`>${COPY_LABEL}</button>`));
+  // And the hash on a real invocation's response matches its own body, which is
+  // the check above asked of the composition root rather than of a fixture.
+  const script = /<script>([\s\S]*?)<\/script>/.exec(response.body)?.[1] ?? '';
+  assert.ok(
+    (response.headers['content-security-policy'] ?? '').includes(
+      `script-src 'sha256-${createHash('sha256').update(script, 'utf8').digest('base64')}'`,
+    ),
+    'a real invocation serves a script its own policy does not permit',
+  );
 });
 
 test('the composition root wires the real confined reader, end to end', async (t) => {

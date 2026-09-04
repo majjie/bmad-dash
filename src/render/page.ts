@@ -23,12 +23,22 @@
  * line Stories 1.1 to 1.3 served in that slot is gone: `Serving. No surface
  * built yet.` stopped being true here.
  *
- * **No font is fetched, and no script is served.** There is no `<link>`, no
- * `@import`, no `@font-face` and no `<script>` in what this module emits. Each
- * typography token names IBM Plex first and falls back to the platform's own
- * faces; refresh is a link, because a page load builds a new snapshot. A page
- * that fetched a font would make the reader's browser talk to a third party,
- * which the no-outbound-network rule forbids outright.
+ * **No font is fetched, and this module serves no script.** There is no
+ * `<link>`, no `@import`, no `@font-face` and no `<script>` in anything this
+ * module *writes*. Each typography token names IBM Plex first and falls back to
+ * the platform's own faces; refresh is a link, because a page load builds a new
+ * snapshot. A page that fetched a font would make the reader's browser talk to
+ * a third party, which the no-outbound-network rule forbids outright.
+ *
+ * **From Story 2.3b that sentence is about this module and not about every
+ * document, and the distinction is deliberate.** `documentShell` emits `main`
+ * verbatim, and the artifact view's `main` now ends with `./enhance.ts`'s one
+ * script — FR-24's clipboard half, which has no HTML-only form. The Dashboard
+ * is not a viewer and needs no clipboard, so `renderPage` still emits none and
+ * `test/render/page.test.ts`'s no-script assertion stands unamended over it.
+ * The shell was deliberately not made the script's home for exactly that
+ * reason: a script in here would be one on every surface, permitted by the CSP
+ * on every surface, for a control only one surface has.
  */
 
 import { STYLESHEET } from './stylesheet.ts';
