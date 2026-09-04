@@ -44,11 +44,12 @@
  * row the reader can see would be the tool hiding an artifact it listed.
  */
 
+import { editorUrl } from '../domain/editor.ts';
 import { FAMILY_LABELS, type Family } from '../domain/identity.ts';
 import { SIGNAL_LABELS, type ReadStage, type SignalState } from '../domain/signal.ts';
 import { artifactUrl } from '../domain/url.ts';
 import { markup } from './html.ts';
-import { tileGrid } from './components.ts';
+import { buttonPrimary, tileGrid } from './components.ts';
 import { renderMarkdown } from './markdown.ts';
 import { documentShell } from './page.ts';
 import {
@@ -155,6 +156,87 @@ export type ArtifactBody =
  */
 export const EMPTY_BODY_SENTENCE = 'Empty file.';
 
+/**
+ * The open-in-editor link's own text, and therefore its accessible name.
+ *
+ * A verb phrase rather than a noun, because an anchor's accessible name is what
+ * a screen reader announces in a links list and "Editor" would name a place
+ * rather than an action. No document dictates this string — `EXPERIENCE.md:213`
+ * names the affordance ("open it in the user's editor") without prescribing
+ * copy — so it is held as a constant here and pinned by
+ * `test/render/artifact.test.ts` on the same terms as any other page string: one
+ * definition, so a reword is a change to state rather than a drifted duplicate.
+ */
+export const OPEN_IN_EDITOR_LABEL = 'Open in editor';
+
+/**
+ * The row's project-relative path joined onto the project root.
+ *
+ * **The join is here rather than in `../domain/editor.ts`, deliberately.** The
+ * root is `renderArtifact`'s own first argument and a URL formatter has no
+ * business learning about roots — so the domain module takes an already-absolute
+ * path and stays a pure formatter, which is what keeps it testable with no
+ * server and no filesystem. It is also string work rather than `node:path`
+ * work, because `test/architecture.test.ts` pins this module's import list
+ * precisely to stop a resolver here growing a filesystem reach; `basename` and
+ * `isAbsolute` in `./page.ts` are the render layer's whole allowance and neither
+ * would help.
+ *
+ * **It cannot produce a path outside the root, and that is the point of the
+ * loop rather than a happy consequence.** Three shapes are handled, each of
+ * which a naive `${root}/${relative}` would get wrong:
+ *
+ *   - An **empty** segment, which is what a leading or doubled separator
+ *     splits to. Dropped, so a relative path spelled `/etc/passwd` joins as
+ *     `<root>/etc/passwd` rather than resolving to the system file — the
+ *     matrix's absolute-looking row.
+ *   - A `.` segment. Dropped, as RFC 3986 §5.2.4 drops it.
+ *   - A `..` segment. It removes the segment before it and is otherwise
+ *     dropped, exactly as `../domain/url.ts`'s `normalizeSegments` does — and
+ *     because the loop only ever pops segments of the *relative* path, the root
+ *     itself can never be popped off. Climbing past it is not defended against,
+ *     it is unrepresentable.
+ *
+ * A drive-shaped relative path (`C:\Windows\x`) needs no branch: it is one
+ * segment containing legal POSIX filename characters, so it joins as
+ * `<root>/C:\Windows\x` — a file inside the project that this project does not
+ * contain, which is the same answer `../domain/url.ts` gives for the same input.
+ *
+ * **None of these shapes can reach this function through a page today**, and it
+ * is guarded anyway. `WalkEntry.relative` is `/`-separated, non-empty, never
+ * absolute and carries no dot segment, and `artifactUrl` above throws for each
+ * of the three — so a row spelling one 500s at the refresh href a line earlier.
+ * That makes this the second line of defence, which is why it is asserted at
+ * the unit it lives in rather than through a page that cannot render one.
+ */
+export function artifactAbsolutePath(projectRoot: string, relative: string): string {
+  // **A nameless root is refused, not anchored.** An empty `projectRoot` joined
+  // to `a/b.md` produced `/a/b.md` — silently rooted at the filesystem, an href
+  // naming a file the project does not contain. `./chrome.ts` already refuses a
+  // blank root rather than rendering a nameless project; this is the same rule
+  // at the same boundary. A relative root is refused here too, because the throw
+  // is more useful than `editorUrl`'s: this one names which argument was wrong.
+  if (projectRoot.trim() === '') {
+    throw new Error('an artifact path needs a project root; it was empty');
+  }
+  // A trailing separator on the root would double when joined, and a root of
+  // `/` must survive as the leading separator rather than becoming one segment.
+  const root = projectRoot.replace(/[\\/]+$/, '');
+  const inside: string[] = [];
+  // Split on `/` alone. A backslash is a legal character in a POSIX filename,
+  // and `WalkEntry.relative` is `/`-separated on every platform, so treating
+  // `\` as a separator here would break one name into two.
+  for (const segment of relative.split('/')) {
+    if (segment === '' || segment === '.') continue;
+    if (segment === '..') {
+      inside.pop();
+      continue;
+    }
+    inside.push(segment);
+  }
+  return [root, ...inside].join('/');
+}
+
 /** Which artifacts the parser is pointed at. Everything else is shown as it is. */
 function isMarkdown(path: string): boolean {
   return path.toLowerCase().endsWith('.md');
@@ -232,6 +314,11 @@ function contentRegion(path: string, body: ArtifactBody): string {
  * string off the filesystem, which `DESIGN.md`'s own rule puts in the mono
  * family rather than in a display role.
  *
+ * From Story 2.3a that `<code>` sits in `.artifact-exits` beside the
+ * open-in-editor link, because the path and the way out of the tool are one
+ * thing to a reader: the link is the exit, and the text is what they act on when
+ * the link's editor is not the one they use.
+ *
  * `body` is **required**, on `StartServerOptions.inventory`'s own reasoning:
  * from this story the surface *is* the artifact's content, so a page rendered
  * without a body is not the page — and deciding for a caller what an absent
@@ -256,10 +343,39 @@ export function renderArtifact(
   // whose own refresh control cannot be addressed is better refused as a 500 the
   // reader can report than served with a control that lies about where it goes.
   const refreshHref = artifactUrl(found.row.path);
+  // **The two exits, in the shell.** Story 2.3a puts FR-24's open-in-editor half
+  // here rather than in a per-type viewer so Stories 2.4-2.8 inherit it rather
+  // than reimplementing it five times — and the path text moves in beside the
+  // link for the same reason it was already on the surface: it is the fact a
+  // reader needs, and the one that still works when the link's editor is not
+  // theirs. Both are functions of the row's **path**, which every row has, so
+  // they render identically for a readable, unreadable, non-markdown or
+  // directory row; there is no read state to branch on.
+  //
+  // **The link is this surface's one `button-primary`**, which until now no
+  // surface carried at all: Story 2.3 gave Refresh the ghost treatment
+  // precisely to keep the slot free, and `test/render/components.test.ts`'s
+  // one-primary bound has been asserted-but-vacuous since. Opening the artifact
+  // where the reader works is the forward action they came for, so this is what
+  // makes that bound a real constraint.
+  //
+  // Unguarded, on `refreshHref`'s own reasoning one line up: `editorUrl` throws
+  // only for a path that is not absolute, which the join above cannot produce,
+  // and a surface whose primary action cannot be addressed is better refused as
+  // a 500 the reader can report than served with a control that lies.
+  const exits = [
+    '<div class="artifact-exits">',
+    markup`<code class="artifact-path">${found.row.path}</code>`.html,
+    buttonPrimary({
+      label: OPEN_IN_EDITOR_LABEL,
+      href: editorUrl(artifactAbsolutePath(projectRoot, found.row.path)),
+    }),
+    '</div>',
+  ].join('\n');
   const main = [
     '<main>',
     markup`<h1>${ARTIFACT_SURFACE_TITLE}</h1>`.html,
-    markup`<code class="artifact-path">${found.row.path}</code>`.html,
+    exits,
     tileGrid([
       {
         label,

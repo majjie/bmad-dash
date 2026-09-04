@@ -56,7 +56,7 @@ Five surfaces. Each is reachable by URL and survives reload (AD-18).
 - **Core artifacts** — right column. Central documents, present or absent.
 - **Risk summary** — beneath core artifacts. Counts by signal state, linking into Oversight.
 
-**Global chrome.** The **project header** is not a Dashboard tile — it is present on every surface, and it is where snapshot currency, refresh progress, and refresh failure are reported. Refreshing and Stale are reported here, so every surface inherits both. It carries: project name, resolved root path, snapshot currency, the refresh control, and the git-availability indicator.
+**Global chrome.** The **project header** is not a Dashboard tile — it is present on every surface, and it is where snapshot currency, refresh progress, and refresh failure are reported (all three Story 3.6's; the per-document **Stale** mismatch that used to be listed among them was withdrawn 2026-09-04 with AD-11). Refreshing is reported here, so every surface inherits it. (~~and Stale~~ — **withdrawn 2026-09-04** with AD-11: with no currency mismatch there is nothing for a surface to inherit.) It carries: project name, resolved root path, snapshot currency, the refresh control, and the git-availability indicator.
 
 **Overlays.** One overlay pattern exists: the **artifact nominator**, opened from the Comparison surface to choose an artifact. It is the only modal in v1, traps focus while open, and returns focus to its trigger on close.
 
@@ -151,7 +151,7 @@ Refreshing has two outcomes, complete and failed. The failure branch is a branch
 | **Dashboard** | tiles stay live | per-tile, by cause | per row or card | header currency |
 | **Oversight** | findings stay live | `No findings. <n> artifacts examined.` — never a bare "no findings" | unreadable artifacts listed as their own group | header currency |
 | **Artifact view** | stays on its snapshot | artifact exists but has no content → `Empty file.` | parse failure replaces the viewer, path and stage shown | ~~mismatch banner + refresh offer (AD-11)~~ withdrawn 2026-09-04 |
-| **Document reader** | position preserved | document with no headings → single unsectioned page | section unparseable → that section only shows the failure | mismatch banner; contents rail marked stale |
+| **Document reader** | position preserved | document with no headings → single unsectioned page | section unparseable → that section only shows the failure | ~~mismatch banner; contents rail marked stale~~ — **WITHDRAWN 2026-09-04** with AD-11 and Story 2.2, the same strike already applied to the Artifact view row above. With no currency mismatch there is nothing to banner, so the Document reader (Story 2.10) has no Stale behaviour to build. |
 | **Comparison** | both panes hold their snapshot | pane with nothing nominated → `Choose an artifact.` | either pane degrades independently | per-pane currency, independently |
 
 **Cross-cutting rules.**

@@ -250,10 +250,11 @@ test('an empty destination is refused, the same way an empty label is', () => {
 test('at most one button-primary appears on any surface the suite renders', async () => {
   // UX-DR11, asserted over rendered markup rather than by the component: a
   // button cannot see its neighbours, so this is the same division of labour
-  // as `tileGrid` policing raised tiles from the caller's side. `buttonPrimary`
-  // itself is called twice in this very test file — once here, once in the
-  // round-trip corpus in `stylesheet.test.ts` — and neither call site is a
-  // surface, so this loop is the one place the rule is actually checked.
+  // as `tileGrid` policing raised tiles from the caller's side. From Story 2.3a
+  // there is exactly one shipped call site — `src/render/artifact.ts`'s
+  // open-in-editor link — and the other two calls, one here and one in the
+  // round-trip corpus in `stylesheet.test.ts`, are not surfaces; so this loop is
+  // still the one place the rule is actually checked.
   //
   // **Mechanism check** (see the spec's Verification section): rendering a
   // second `button-primary` into one of these surfaces and re-running this
@@ -264,17 +265,24 @@ test('at most one button-primary appears on any surface the suite renders', asyn
   const opened = findArtifact(FULL_INVENTORY_VIEW, CERTAIN_ROW.path);
   assert.ok(opened !== undefined, 'the fixture must hold the row the artifact view is rendered for');
 
-  const surfaces = [
-    renderPage('/tmp/bmad-dash-test-project', FULL_INVENTORY_VIEW),
-    renderArtifact('/tmp/bmad-dash-test-project', opened, READABLE_BODY),
+  // **The bound is non-vacuous from Story 2.3a**, which is the whole reason the
+  // expected counts are named per surface rather than asserted as `<= 1` alone.
+  // The artifact view carries the open-in-editor link, so its `1` is the budget
+  // *spent*: a second primary there fails this row, which is the mechanism check
+  // Story 2.3a's Verification section calls for. The Dashboard's `0` is equally
+  // deliberate — it has no forward action, Refresh is ghost, and a `1` appearing
+  // there is a primary added without a decision.
+  const surfaces: readonly (readonly [string, string, number])[] = [
+    ['the Dashboard', renderPage('/tmp/bmad-dash-test-project', FULL_INVENTORY_VIEW), 0],
+    ['the artifact view', renderArtifact('/tmp/bmad-dash-test-project', opened, READABLE_BODY), 1],
   ];
-  // **A positive control, because today every surface counts zero.** Refresh is
-  // ghost and no surface has a forward action yet, so `count <= 1` is satisfied
-  // by `0` and would pass just as happily on a counter that matches nothing at
-  // all — a typo in the pattern would look identical to a clean surface. So the
-  // same expression is run over markup that really does hold two, and must see
-  // them. Until Story 2.3a puts a real primary on a surface, this is what makes
-  // the loop below a test rather than a formality.
+  // **A positive control, kept although one surface now counts one.** It was
+  // added when every surface counted zero, where `count <= 1` would pass just as
+  // happily on a counter matching nothing at all. The exact counts above would
+  // now catch that — a broken pattern reads `0` where `1` is required — but the
+  // control is retained because it is what proves the counter can see *two*,
+  // which is the state no real surface may reach and therefore the one no real
+  // surface can demonstrate.
   const countPrimaries = (html: string): number =>
     (html.match(/class="[^"]*\bbutton-primary\b[^"]*"/g) ?? []).length;
   assert.equal(
@@ -284,9 +292,10 @@ test('at most one button-primary appears on any surface the suite renders', asyn
   );
   assert.equal(countPrimaries(buttonGhost({ label: 'G', href: '/g' })), 0, 'and must not count a ghost');
 
-  for (const surface of surfaces) {
+  for (const [name, surface, expected] of surfaces) {
     const count = countPrimaries(surface);
-    assert.ok(count <= 1, `a surface may carry at most one button-primary; found ${String(count)}`);
+    assert.ok(count <= 1, `${name} may carry at most one button-primary; found ${String(count)}`);
+    assert.equal(count, expected, `${name} must carry ${String(expected)}, not ${String(count)}`);
   }
 });
 

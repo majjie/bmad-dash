@@ -33,6 +33,8 @@ import { fileURLToPath } from 'node:url';
 import {
   ARTIFACT_SURFACE_TITLE,
   EMPTY_BODY_SENTENCE,
+  OPEN_IN_EDITOR_LABEL,
+  artifactAbsolutePath,
   findArtifact,
   renderArtifact,
   type ArtifactBody,
@@ -192,6 +194,242 @@ test('the shell is a whole document: head, chrome, one h1, one main', () => {
 test('the page states which artifact it is, in the mono family', () => {
   const page = pageFor(FULL_INVENTORY_VIEW, CERTAIN_ROW.path);
   assert.ok(page.includes(`<code class="artifact-path">${CERTAIN_ROW.path}</code>`));
+});
+
+// ---------------------------------------------------------------------------
+// The exits: Story 2.3a's half of FR-24
+// ---------------------------------------------------------------------------
+//
+// **FR-24 is founded here and not satisfied.** It is copy-to-clipboard *and*
+// open-in-editor; this story ships the second, and Story 2.3b ships the first.
+//
+// Nothing in this section amends an existing assertion, and that is the story's
+// own boundary rather than an accident: the open-in-editor exit is a link, so
+// `the surface serves no script and fetches nothing` above and the page-level
+// no-script check further down both still hold with the link on the page. Story
+// 2.3b is the one that has to invert them, which is why it is a separate diff.
+
+/**
+ * The exits row alone, so an assertion cannot pass on the rest of the shell.
+ *
+ * **Depth-counted rather than matched to the first `</div>`.** A non-greedy
+ * match stops at the first closing tag, so the moment the row gains a nested
+ * element — which Story 2.3b's copy affordance plausibly is — every "in the
+ * exits" assertion would silently narrow to a prefix and keep passing instead
+ * of failing. Counting the nesting makes that a non-event.
+ */
+function exitsOf(page: string): string {
+  const open = page.indexOf('<div class="artifact-exits">');
+  assert.ok(open !== -1, 'the page has no exits row');
+  const from = open + '<div class="artifact-exits">'.length;
+  let depth = 1;
+  let at = from;
+  while (depth > 0) {
+    const next = /<div\b|<\/div>/.exec(page.slice(at));
+    assert.ok(next !== null, 'the exits row is never closed');
+    at += next.index + next[0].length;
+    depth += next[0] === '</div>' ? -1 : 1;
+  }
+  return page.slice(from, at - '</div>'.length);
+}
+
+/**
+ * The href the surface should carry for one row, built independently of it.
+ *
+ * The join and the encoding are spelled out here from `PROJECT_ROOT` and the
+ * row's own path rather than obtained by calling `editorUrl` — a test that
+ * derives its expectation from the code under test asserts only that the code
+ * is self-consistent. The exact literal for the encoding case is pinned
+ * separately below, which is what stops this helper from being the only
+ * statement of what an href looks like.
+ */
+function expectedEditorHref(relative: string): string {
+  const segments = `${PROJECT_ROOT}/${relative}`.split('/').filter((segment) => segment !== '');
+  return `vscode://file/${segments.map(encodeURIComponent).join('/')}`;
+}
+
+test('the exits are in the shell: the path as text, and the link that opens it', () => {
+  const page = pageFor(FULL_INVENTORY_VIEW, CERTAIN_ROW.path);
+  const exits = exitsOf(page);
+  // The path is visible, selectable text. It is the fact a reader needs — the
+  // clipboard convenience over it is Story 2.3b's — so it is a `<code>` with
+  // the row's own path in it and not, say, a `title` attribute or a `data-`
+  // value only a script could reach.
+  assert.ok(exits.includes(`<code class="artifact-path">${CERTAIN_ROW.path}</code>`));
+  // And the link beside it, carrying the **absolute** path: the row is
+  // project-relative and an editor cannot open a relative path.
+  assert.equal(
+    exits.match(/<a class="button-primary" href="([^"]+)">([^<]+)<\/a>/)?.slice(1).join('|'),
+    `${expectedEditorHref(CERTAIN_ROW.path)}|${OPEN_IN_EDITOR_LABEL}`,
+  );
+  // Pinned as a whole literal once, so a refactor that changes what a reader is
+  // handed fails here rather than being found by a link that does not open.
+  assert.ok(
+    exits.includes(
+      '<a class="button-primary" ' +
+        'href="vscode://file/tmp/bmad-dash-test-project/_bmad-output/planning-artifacts/prds/prd-x-2026-08-28/prd.md">' +
+        'Open in editor</a>',
+    ),
+    exits,
+  );
+  // The label is the constant rather than a second spelling of it, on UX-DR17's
+  // rule: a literal that merely happens to match is free to drift.
+  assert.equal(OPEN_IN_EDITOR_LABEL, 'Open in editor');
+  // **In the shell, not in a viewer.** Stories 2.4-2.8 replace the content
+  // region per type, so the exits are outside it — inherited rather than
+  // reimplemented five times.
+  assert.ok(page.indexOf('<div class="artifact-exits">') < page.indexOf('<article'));
+  assert.ok(!contentOf(page).includes('button-primary'), 'the link is the shell\u2019s, not the body\u2019s');
+});
+
+test('both exits render for every row state, because both are functions of the path', () => {
+  // The matrix's four "still render" rows in one loop, deliberately: read
+  // state, content type and directory-ness cannot vary a link derived from a
+  // path that every row has, so a row per state would be four copies of one
+  // claim. The absent row is here too — a recorded absence is exactly when a
+  // reader most needs the path, because the tool cannot show them the file.
+  const states: readonly (readonly [string, string, ArtifactBody])[] = [
+    ['readable markdown', CERTAIN_ROW.path, READABLE_BODY],
+    [
+      'unreadable',
+      UNREADABLE_ROW.path,
+      { ok: false, state: 'unreadable', stage: 'decode', reason: 'not valid UTF-8 text' },
+    ],
+    ['not markdown', UNINTERPRETED_ROW.path, { ok: true, text: 'key: value\n' }],
+    [
+      'a directory',
+      DELIBERATE_RUN_ROW.path,
+      { ok: false, state: 'unreadable', stage: 'examine', reason: 'not a regular file (directory)' },
+    ],
+    [
+      'absent',
+      NOT_FOUND_ROW.path,
+      { ok: false, state: 'absent', stage: 'resolve', reason: 'no such file' },
+    ],
+  ];
+  for (const [state, path, body] of states) {
+    const exits = exitsOf(pageFor(FULL_INVENTORY_VIEW, path, body));
+    assert.ok(exits.includes(`<code class="artifact-path">${path}</code>`), `${state}: no path text`);
+    assert.ok(
+      exits.includes(`<a class="button-primary" href="${expectedEditorHref(path)}">`),
+      `${state}: no editor link, or one pointing somewhere else`,
+    );
+  }
+  assert.equal(states.length, 5, 'every row state the matrix names is in the loop');
+});
+
+test('the href encodes a path that needs it, and the visible text does not', () => {
+  // The encoding row of the matrix, over the fixture whose name is markup: it
+  // carries two spaces, `=`, `<` and `>`, so both halves of the claim are
+  // exercised at once. Pinned as exact literals in both directions, because
+  // "the href is encoded" and "the text is readable" are each satisfiable by a
+  // page that gets the other one wrong.
+  const exits = exitsOf(pageFor(FULL_INVENTORY_VIEW, HOSTILE_PATH));
+  assert.ok(
+    exits.includes(
+      '<a class="button-primary" href="vscode://file/tmp/bmad-dash-test-project/_bmad-output/' +
+        'planning-artifacts/prds/%3Cimg%20src%3Dx%20onerror%3Dalert(1)%3E.md">',
+    ),
+    exits,
+  );
+  // The whole path survives: decoded segment by segment, it is the row's own.
+  const href = /href="vscode:\/\/file\/([^"]+)"/.exec(exits)?.[1] ?? '';
+  assert.equal(
+    `/${href.split('/').map(decodeURIComponent).join('/')}`,
+    `${PROJECT_ROOT}/${HOSTILE_PATH}`,
+    'the href must decode back to exactly the file it names',
+  );
+  // The visible text stays the readable path — escaped for HTML, which is a
+  // different thing from percent-encoded and is the reason the two are pinned
+  // separately.
+  assert.ok(exits.includes(`<code class="artifact-path">${escapeHtml(HOSTILE_PATH)}</code>`));
+  assert.ok(exits.includes('&lt;img src=x onerror=alert(1)&gt;.md'), 'plainly, not percent-encoded');
+});
+
+test('the surface carries exactly one button-primary, filling the slot 2.3 left free', () => {
+  // **UX-DR11 is Story 2.3's claim, not this story's** — one requirement, one
+  // owner — and `test/render/components.test.ts` is where the bound is owned,
+  // across every surface the suite renders. What this row adds is the positive
+  // half that story could not state: the slot Story 2.3 deliberately kept free
+  // is now filled, so its bound has stopped being satisfied by zero.
+  const page = pageFor(FULL_INVENTORY_VIEW, CERTAIN_ROW.path);
+  assert.equal((page.match(/class="[^"]*\bbutton-primary\b[^"]*"/g) ?? []).length, 1);
+  // And Refresh stays ghost, in the header, which is why the primary slot was
+  // free at all.
+  assert.ok(page.includes('class="project-refresh button-ghost"'));
+});
+
+test('the link is keyboard operable by construction, and nothing in its row clips a ring', () => {
+  // **Reachability is asserted structurally, because that is what is decidable
+  // here.** There is no browser in this suite, so "the reader can tab to it"
+  // is proved by the element rather than observed: an `<a>` with a non-empty
+  // `href` is in the tab order natively, and no `tabindex` is emitted that
+  // could remove it. `./components.ts` refuses an empty `href` outright, so the
+  // anchor cannot be the focusable-but-inert kind.
+  const exits = exitsOf(pageFor(FULL_INVENTORY_VIEW, CERTAIN_ROW.path));
+  assert.match(exits, /<a class="button-primary" href="[^"]+">/, 'a real anchor, not a styled span');
+  assert.doesNotMatch(exits, /tabindex/, 'nothing may take the link out of the tab order');
+  assert.doesNotMatch(exits, /<button\b/i, 'and there is no script to submit a form with');
+  // The ring itself: `.button-primary:focus-visible` draws an inner stroke
+  // (`test/render/components.test.ts` owns that rule) and the container it sits
+  // in must not cut it. The whole-sheet anti-clipping rule in that file covers
+  // every rule including this one; asserted here as well because the exits row
+  // is the first container to hold a focusable child at its own edge, which is
+  // the case that rule exists for.
+  const sheet = pageFor(FULL_INVENTORY_VIEW, CERTAIN_ROW.path);
+  const container = /\.artifact-exits \{\n([\s\S]*?)\n\}/.exec(sheet)?.[1] ?? '';
+  assert.ok(container.includes('flex-wrap: wrap;'), 'a long path wraps rather than scrolling');
+  assert.doesNotMatch(container, /overflow|clip-path|mask|contain:/);
+});
+
+test('a nameless project root is refused rather than anchored at the filesystem', () => {
+  // Measured 2026-09-04: an empty root joined to `a/b.md` returned `/a/b.md` --
+  // an href naming a file at the filesystem root that the project does not
+  // contain, which is worse than a refusal because it looks valid. `./chrome.ts`
+  // already refuses a blank root rather than rendering a nameless project.
+  for (const root of ['', '   ']) {
+    assert.throws(
+      () => artifactAbsolutePath(root, 'a/b.md'),
+      /needs a project root/,
+      `a root of ${JSON.stringify(root)} must be refused, not anchored`,
+    );
+  }
+});
+
+test('the absolute path is joined onto the root, and cannot be talked outside it', () => {
+  // The matrix's absolute-looking row, asserted at the unit the join lives in.
+  // **No row reaching a page can carry one of these** — `WalkEntry.relative` is
+  // relative, non-empty and dot-free by construction, and `artifactUrl` throws
+  // for each shape one line before the join runs — so this is the second line
+  // of defence and there is nowhere else to state it. Escaping the root is not
+  // defended against here, it is unrepresentable: the loop only ever pops
+  // segments of the relative path.
+  assert.equal(artifactAbsolutePath('/root', 'a/b.md'), '/root/a/b.md');
+  // A leading separator does not make the relative path win.
+  assert.equal(artifactAbsolutePath('/root', '/etc/passwd'), '/root/etc/passwd');
+  assert.equal(artifactAbsolutePath('/root', '///etc/passwd'), '/root/etc/passwd');
+  // Dot segments, as RFC 3986 §5.2.4 treats them — and `..` with nothing left
+  // to remove is dropped rather than climbing.
+  assert.equal(artifactAbsolutePath('/root', './a/./b.md'), '/root/a/b.md');
+  assert.equal(artifactAbsolutePath('/root', 'a/../b.md'), '/root/b.md');
+  assert.equal(artifactAbsolutePath('/root', '../../../etc/passwd'), '/root/etc/passwd');
+  assert.equal(artifactAbsolutePath('/root', '..'), '/root');
+  // A drive-shaped relative path needs no branch: on POSIX it is one legal
+  // filename, which is the same answer `src/domain/url.ts` gives for it.
+  assert.equal(artifactAbsolutePath('/root', 'C:\\Windows\\x'), '/root/C:\\Windows\\x');
+  // A trailing separator on the root does not double, and a root of `/`
+  // survives as the leading separator rather than becoming a segment.
+  assert.equal(artifactAbsolutePath('/root/', 'a.md'), '/root/a.md');
+  assert.equal(artifactAbsolutePath('/', 'a.md'), '/a.md');
+  assert.equal(artifactAbsolutePath('C:\\proj', 'a/b.md'), 'C:\\proj/a/b.md');
+  // Every result is under the root it was given, stated as the property rather
+  // than left implied by the rows above.
+  for (const relative of ['/etc/passwd', '../../etc/passwd', 'a/../../../b', 'C:\\Windows']) {
+    assert.ok(
+      artifactAbsolutePath('/root', relative).startsWith('/root'),
+      `${relative} escaped the root`,
+    );
+  }
 });
 
 test('the page states exactly what the inventory row states about the artifact', () => {

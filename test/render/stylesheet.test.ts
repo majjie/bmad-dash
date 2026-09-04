@@ -649,6 +649,32 @@ const REQUIRED_RULES: readonly (readonly [string, readonly string[]])[] = [
     ],
   ],
   ['.artifact-link .artifact-path', ['text-decoration-line: underline']],
+  // Story 2.3a's exits row: the artifact's path beside the open-in-editor link.
+  // `flex-wrap` is required and not cosmetic — a path is unbreakable text of
+  // unbounded length, so without it the row either pushes the page sideways
+  // (WCAG 1.4.10) or wants the scroll container that would clip the focus ring
+  // on the button sitting at its edge (WCAG 2.4.11). `flex: 1 1 auto` on the
+  // path is what keeps the button at the end of the line rather than floating
+  // mid-row after a short path.
+  // `align-items` is named here because the rule's own comment calls it
+  // load-bearing — the path's mono text must sit on the label's line rather
+  // than on the button box's centre. Measured 2026-09-04: deleting it left the
+  // suite at 1025/1025 green, so it was a claim with nothing behind it.
+  [
+    '.artifact-exits',
+    ['display: flex', 'flex-wrap: wrap', 'align-items: baseline', 'gap: var(--space-3)'],
+  ],
+  ['.artifact-exits .artifact-path', ['flex: 1 1 auto']],
+  // **The pair that makes the exits row survivable, required for the same
+  // reason `.project-path` requires it one table up.** `.artifact-path` became
+  // a flex item beside a focusable button in Story 2.3a, and `flex-wrap` only
+  // wraps *between* items — it does nothing for one unbreakable path inside
+  // one item. Without `min-width: 0` a flex item will not shrink below its
+  // content, and without `overflow-wrap` it cannot break: the row then pushes
+  // the page sideways (WCAG 1.4.10) and re-invites the scroll container the
+  // stylesheet comment says is refused. Measured 2026-09-04: deleting both
+  // left the suite at 1025/1025 green.
+  ['.artifact-path', ['overflow-wrap: anywhere', 'min-width: 0']],
   // Story 2.1b's reading surface. `DESIGN.md:255` — "a rendered document uses a
   // single column at `{spacing.reading-measure}`" — so the measure is the one
   // declaration this rule exists for, and a column without it is the dashboard
@@ -879,10 +905,13 @@ test('every class rule is exercised by some render path, and vice versa', async 
       { label: 'B', content: { empty: 'Nothing yet.' } },
     ]),
     tile({ label: 'C', content: { empty: 'Nothing yet.' } }),
-    // `.button-primary` on `.tile-raised`'s own precedent, cited above: no
-    // surface calls `buttonPrimary` yet (Refresh is ghost; a real main action
-    // is Story 2.3a's), so it is rendered directly here or its rule would pass
-    // this loop's "styled but nothing renders it" direction unexercised.
+    // `.button-primary` rendered directly, originally on `.tile-raised`'s
+    // precedent because no surface called `buttonPrimary`. **Story 2.3a changed
+    // that** — the four `renderArtifact` calls in this same corpus each carry
+    // one now — so this call is redundant for the round trip and kept
+    // deliberately: it exercises the component in isolation from the one
+    // surface that happens to use it, which is what keeps the rule covered if
+    // that surface ever stops.
     // `.button-ghost` is already exercised through the header's Refresh
     // control on every surface above; rendered again directly so the two
     // variants are asserted the same way.

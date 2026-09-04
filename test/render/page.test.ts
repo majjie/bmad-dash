@@ -169,10 +169,18 @@ test('the markup carries no colour or size literal, and no inline style', () => 
     // Story 2.1a: an openable row is an anchor around the whole row, so the
     // link's accessible name carries the row's state rather than a bare path.
     'artifact-link',
+    // Story 2.3a's exits row, in the artifact-view shell. Listed here for the
+    // same reason `button-primary` was listed by Story 2.3 — the allowlist is
+    // the document's vocabulary, not this surface's inventory — and the
+    // Dashboard renders neither, since it is not a viewer and has no artifact
+    // path of its own to show. `test/render/stylesheet.test.ts` asserts the
+    // other direction over the artifact surface, where the class does render.
+    'artifact-exits',
     // Story 2.3's two surface action buttons. `button-ghost` is exercised by
-    // this very page — Refresh carries it — and `button-primary` is listed
-    // even though no surface renders one yet, on `.tile-raised`'s own
-    // precedent: known ahead of use rather than unknown until 2.3a adds one.
+    // this very page — Refresh carries it. `button-primary` is **not** rendered
+    // on the Dashboard and is listed anyway: Story 2.3a puts it on the artifact
+    // view, and this allowlist scans the Dashboard's markup alone, so the entry
+    // is known-ahead-of-use here rather than an assertion that it appears.
     'button-ghost',
     'button-primary',
   ];

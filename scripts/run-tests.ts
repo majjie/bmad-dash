@@ -35,7 +35,7 @@ import {
  * Raise this when you add tests; never lower it to make a run pass. It exists
  * so a suite that quietly stops collecting cannot report success.
  */
-const DEFAULT_MIN_TESTS = 1008;
+const DEFAULT_MIN_TESTS = 1027;
 
 /** Recursive on purpose: `**` is expanded by the test runner, not the shell. */
 const DEFAULT_PATTERN = 'test/**/*.test.ts';

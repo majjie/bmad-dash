@@ -66,7 +66,10 @@ development_status:
   # `epics.md` (Story 2.2), the spine's Amendment log, and `deferred-work.md`.
   # Story 2.3 was split on 2026-09-04 by user decision: buttons first, exits second.
   2-3-build-the-surface-action-buttons: review
-  2-3a-get-from-the-tool-to-your-editor: backlog
+  # Story 2.3a was split again on 2026-09-04, by risk class: the editor link here,
+  # the clipboard (which needs a script and a CSP change) in 2-3b.
+  2-3a-get-from-the-tool-to-your-editor: review
+  2-3b-copy-the-artifact-path: backlog
   2-4-read-a-memlog-as-a-decision-trail: backlog
   2-5-read-reviewer-output-as-findings: backlog
   2-6-read-a-reconciliation-as-gaps: backlog

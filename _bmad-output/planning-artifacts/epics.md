@@ -173,7 +173,7 @@ From the UX design contract (DESIGN.md + EXPERIENCE.md), both final. 24 colour t
 - UX-DR16: Build the artifact nominator overlay — the only modal in v1 — trapping focus while open and returning focus to its trigger on close.
 - UX-DR17: Implement all 25 strings in the load-bearing string index verbatim, following the stated conventions: period for sentence-shaped strings and none for label-shaped, initial capital for badge and pill labels, `<placeholder>` for substituted values.
 - UX-DR18: Implement the surface-state matrix: five states across six surfaces, with the cross-cutting defaults binding and the matrix carrying departures. Includes the refresh-failure branch, where a partial scan is discarded rather than published.
-- UX-DR19: Implement the edge conditions with their specified strings — **six, not eight, since 2026-09-04**: the changed-since-scan and artifact-vanished conditions were withdrawn with AD-11 and Story 2.2. Remaining: no git repository, sharded document, `story_location` out of tree, unidentified artifact, dead section permalink, multi-run folder, valid project with zero artifacts.
+- UX-DR19: Implement the edge conditions with their specified strings — **seven, not eight, since 2026-09-04**: the artifact-vanished condition was withdrawn with AD-11 and Story 2.2. (An earlier correction on the same day said "six", double-counting: changed-since-scan was withdrawn too, but it lived in the string index and the Stale cross-cutting rule, never in this list of eight.) Remaining: no git repository, sharded document, `story_location` out of tree, unidentified artifact, dead section permalink, multi-run folder, valid project with zero artifacts.
 - UX-DR20: Implement the keyboard model: eight bindings shared by every surface, single-letter keys inert while a text input has focus, and no surface implementing its own.
 - UX-DR21: Meet the accessibility floor behaviourally: full keyboard operation, focus never obscured, nothing dependent on colour alone, banner/navigation/main landmarks with one `h1` per surface, tile labels as real headings, polite live region for refresh completion only, honest state in accessible names, and text resizing to 200% without loss.
 - UX-DR22: Implement responsive behaviour at the single 900px breakpoint: tile grid to one column in reading order, contents rail above content in the Document reader. Nothing below 600px is a design target.
@@ -510,15 +510,27 @@ So that I can tell what the tool offers from what it is showing me.
 
 ### Story 2.3a: Get from the tool to your editor
 
+*Split again on 2026-09-04 by user decision, **on the risk boundary rather than on size**: open-in-editor is a link needing no client script, no CSP change and no amended assertions, while copying to the clipboard needs all three. The same shape as Story 2.1's three-way split — one risk class each — so the story touching the Content-Security-Policy does so in its own diff. See Story 2.3b below.*
+
 As a practitioner who found the thing that is wrong,
 I want the file path and a way to open it where I work,
 So that reading and fixing are one motion.
 
-**Satisfies:** FR-24 (consumes Story 2.3's components; **UX-DR11 is 2.3's claim, not this story's** — one requirement, one owner)
+**Satisfies:** *nothing on its own — founds FR-24.* FR-24 is copy-to-clipboard *and* open-in-editor; this story ships the second and **Story 2.3b** ships the first, so FR-24 is satisfied by the pair. (**UX-DR11 is Story 2.3's claim, not this story's** — one requirement, one owner.)
 
-**Done when:** every viewer offers copy-to-clipboard of the artifact's path and an open-in-editor affordance, built into the artifact-view shell so later viewers inherit them rather than reimplementing. Nothing in either affordance writes to the project.
+**Done when:** the artifact's path is on the surface as visible, selectable text and an open-in-editor link beside it carries the absolute path, both in the artifact-view shell so later viewers inherit them rather than reimplementing. Nothing writes to the project, and the page still carries no script.
 
-**Two things settled in advance, recorded in `deferred-work.md` so this story does not re-derive them.** FR-24 says "copy-to-clipboard" and there is **no HTML-only way to write to the clipboard**, so client script is what satisfies the requirement rather than a nicety over it. Jamie decided the resulting CSP question on 2026-09-04: an inline script with a `sha256-` hash derived from the script constant, rather than `'unsafe-inline'` — which would also execute a `<script>` inside a project's own markdown, since `RENDER_EMBEDDED_HTML` is `true` — and rather than an external file, which would need a new route and the broader `script-src 'self'`.
+### Story 2.3b: Copy the artifact's path
+
+As a practitioner who found the thing that is wrong,
+I want the path on my clipboard without selecting it by hand,
+So that moving from reading to acting costs one keystroke.
+
+**Satisfies:** FR-24 — completing what Story 2.3a founds; neither story satisfies it alone.
+
+**Done when:** the artifact view offers a copy affordance that puts the path on the clipboard, and the path remains visible selectable text whether or not it runs. Nothing writes to the project.
+
+**The CSP decision is already made and must not be re-asked.** FR-24 says "copy-to-clipboard" and there is **no HTML-only way to write to the clipboard**, so client script is what satisfies the requirement rather than decorating it. Jamie decided on 2026-09-04: an **inline script with `script-src 'sha256-…'`**, the hash derived from the script constant so the two cannot drift. Not `'unsafe-inline'` — `RENDER_EMBEDDED_HTML` is `true`, so a project's own markdown can contain `<script>`, which `'unsafe-inline'` would execute and a hash cannot. Not an external file — no static-file route exists, and `script-src 'self'` would permit any same-origin script where a hash permits exactly one. Full reasoning and the assertion inventory are in `deferred-work.md`.
 
 ### Story 2.4: Read a memlog as a decision trail
 

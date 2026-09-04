@@ -419,11 +419,13 @@ function componentRules(): readonly string[] {
     // `button-primary` is DESIGN.md's component for a surface's single main
     // action; `button-ghost` for every other one, including Refresh
     // (`.project-refresh` in `./chrome.ts`, which carries both classes). Both
-    // are emitted and styled here before either has a surface consumer of its
-    // own for `button-primary` — `.tile-raised`'s own precedent, noted in that
-    // rule's comment: a component may be built ahead of the surface that uses
-    // it, and `test/render/stylesheet.test.ts`'s round-trip corpus renders one
-    // directly so the rule is exercised rather than merely defined.
+    // were emitted and styled here one story ahead of a surface consumer for
+    // `button-primary`, on `.tile-raised`'s own precedent. **That is no longer
+    // the case:** Story 2.3a's open-in-editor link fills the slot, so the
+    // artifact view renders exactly one primary and the one-per-surface bound
+    // in `test/render/components.test.ts` is doing real work rather than
+    // counting zero. The round-trip corpus still renders one directly, which is
+    // now belt as well as braces.
     //
     // An anchor, not a `<button>`: everything on these surfaces navigates and
     // there is no client script to submit a form, so `<a>` is the honest
@@ -499,9 +501,12 @@ function componentRules(): readonly string[] {
     ]),
     // Pushed to the end of the header, and given the label role rather than
     // inheriting body text: it is a control, not prose. `button-primary` is what
-    // DESIGN.md assigns a surface's single main action, and that component
-    // belongs to a later story — so this is deliberately a plain link for now,
-    // styled only enough to read as the control it is.
+    // DESIGN.md assigns a surface's single main action, and Refresh is not that
+    // on a reading surface — so it carries `button-ghost` (Story 2.3), and this
+    // rule styles only its position at the header's end. DESIGN.md's own
+    // parenthetical naming refresh as primary's example was corrected on
+    // 2026-09-04: it predates the header's promotion to global chrome, and a
+    // primary there would spend every surface's one-primary budget.
     rule('.project-refresh', [
       typeRole('body-dense'),
       declaration('margin-inline-start', 'auto'),
@@ -631,6 +636,43 @@ function componentRules(): readonly string[] {
       declaration('color', 'var(--color-on-surface-variant)'),
       declaration('margin', '0'),
     ]),
+
+    // -----------------------------------------------------------------------
+    // Story 2.3a: the exits — the artifact's path, and the way out of the tool
+    // -----------------------------------------------------------------------
+    //
+    // One line holding the path text and the open-in-editor `button-primary`,
+    // in the artifact-view shell so Stories 2.4-2.8 inherit it rather than
+    // reimplementing it. `baseline` so the path's mono text sits on the label's
+    // line rather than on the button box's centre, and `wrap` so a path too
+    // long for the line takes the whole of it and drops the button below it
+    // rather than squeezing the button — the same choice `.project-header`
+    // makes one rule set up, for the same reason.
+    //
+    // No margin of its own: `h1` already carries the space above and
+    // `.tile-grid` the space below, so a third value here would be a spacing
+    // step invented for a container that needs none.
+    //
+    // **It must not scroll, and nothing here could.** A path is unbreakable
+    // text of unbounded length, so the obvious way to hold a long one on one
+    // line is a scroll container — and that clips a focus ring drawn on a child
+    // at its edge (WCAG 2.4.11), which `test/render/components.test.ts` refuses
+    // across the whole sheet. The refusal is live here rather than theoretical:
+    // the button *is* a focusable child at this container's edge. Wrapping is
+    // what makes the ring survivable, which is what `.artifact-path`'s
+    // `overflow-wrap` below is for.
+    rule('.artifact-exits', [
+      declaration('display', 'flex'),
+      declaration('flex-wrap', 'wrap'),
+      declaration('align-items', 'baseline'),
+      declaration('gap', 'var(--space-3)'),
+    ]),
+    // The path takes the line and the button takes only what it needs. A flex
+    // item will not shrink below its content without `min-width: 0` — which
+    // `.artifact-path` already carries, for `.project-path`'s reason — and will
+    // not *grow* into the space a short path leaves without this, which would
+    // leave the button floating mid-line instead of at the end of it.
+    rule('.artifact-exits .artifact-path', [declaration('flex', '1 1 auto')]),
 
     // -----------------------------------------------------------------------
     // Story 2.1b: the reading surface

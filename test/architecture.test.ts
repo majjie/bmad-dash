@@ -1176,6 +1176,46 @@ test('the URL grammar has a stated importer set, like every other domain module'
   );
 });
 
+test('the editor URL has a stated importer set, like every other domain module', async () => {
+  // Story 2.3a's new pure module, held to the convention the two rows above
+  // state: every module in this layer carries an exact importer set, and a new
+  // one arriving without makes the table silently non-exhaustive — the reader
+  // cannot tell "deliberately unconstrained" from "nobody added it". This row
+  // was not on the story's task list; it is here because the convention is
+  // asserted twice already and a third pure module joining unasserted is how a
+  // convention stops being one.
+  //
+  // **One importer, and that is the shape of the split.** FR-24's exits live in
+  // the artifact-view shell so Stories 2.4-2.8 inherit them, so exactly one
+  // surface builds this href. A second importer would mean a per-type viewer had
+  // started building its own exit, which is the duplication the shell placement
+  // exists to prevent.
+  assert.deepEqual(
+    await importersOf(REPO_ROOT, 'src/domain/editor.ts'),
+    ['src/render/artifact.ts'],
+    'the shell builds the exit; a second importer is a viewer reimplementing it',
+  );
+
+  // The purity gate reads imports, and this module uses one *global* —
+  // `encodeURIComponent` — which is invisible to it. So the property the gate
+  // cannot see is asserted directly, as an exactly **empty** specifier list,
+  // on `src/domain/url.ts`'s own reasoning: the module's header claims zero
+  // imports, and anything that could resolve, join, read or stat a path would
+  // have to arrive through one. That is what makes "all path work here is string
+  // work" an enforced claim rather than a comment — `node:path` is not a gated
+  // module, so nothing else would have stopped it.
+  assert.deepEqual(
+    await importSpecifiersIn(REPO_ROOT, 'src/domain/editor.ts'),
+    [],
+    'the editor URL imports nothing, so it can reach nothing',
+  );
+  assert.doesNotMatch(
+    scanSource(await readFile(join(REPO_ROOT, 'src', 'domain', 'editor.ts'), 'utf8')).code,
+    /\bnode:|\brequire\b|getBuiltinModule/,
+    'and names no Node built-in, not even through a global',
+  );
+});
+
 test('the artifact view has a stated importer set, and reaches no filesystem', async () => {
   // Finding from review round 1: the traversal argument leans on this module
   // having no filesystem reach exactly as much as on `src/domain/url.ts`, and
@@ -1207,6 +1247,7 @@ test('the artifact view has a stated importer set, and reaches no filesystem', a
   assert.deepEqual(
     await importSpecifiersIn(REPO_ROOT, 'src/render/artifact.ts'),
     [
+      '../domain/editor.ts',
       '../domain/identity.ts',
       '../domain/signal.ts',
       '../domain/url.ts',
