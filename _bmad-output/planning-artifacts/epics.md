@@ -496,15 +496,29 @@ There was also nothing recorded to compare against: `ArtifactRow` carries no siz
 
 **What this does not cancel.** FR-47's currency *line* in the global header — "scanned N minutes ago" — is UX-DR14 and Story 3.6, a different mechanism, and it stands; `src/render/chrome.ts` already reports it as `Not checked` rather than omitting it. AD-3's guarantee that all content in one response comes from one snapshot also stands. Story 2.11's `That section no longer exists in this document.` is untouched. And Story 2.3 does not depend on this story, so the artifact-view shell 2.4-2.8 inherit is complete without it.
 
-### Story 2.3: Get from the tool to your editor
+### Story 2.3: Build the surface action buttons
+
+*Split from the original Story 2.3 on 2026-09-04 by user decision at the build workflow's spec checkpoint — "buttons first, exits second". The original entry covered both halves at ~4,100 tokens. The buttons have their own consumer, the Refresh control whose styling `src/render/chrome.ts` had explicitly deferred to "a later story" (that docblock now records the deferral as closed); the exits are additive on top of them.*
+
+As a practitioner using any surface,
+I want its actions to look like actions and its main one to stand out,
+So that I can tell what the tool offers from what it is showing me.
+
+**Satisfies:** UX-DR11
+
+**Done when:** `button-primary` and `button-ghost` exist as components consuming the tokens that already describe them; the Refresh control adopts the ghost treatment; and "at most one primary per surface" is enforced by a test rather than by care. The missing contrast row for `primary` used as label text is added, recomputed from the tokens.
+
+### Story 2.3a: Get from the tool to your editor
 
 As a practitioner who found the thing that is wrong,
 I want the file path and a way to open it where I work,
 So that reading and fixing are one motion.
 
-**Satisfies:** FR-24 · UX-DR11
+**Satisfies:** FR-24 (consumes Story 2.3's components; **UX-DR11 is 2.3's claim, not this story's** — one requirement, one owner)
 
 **Done when:** every viewer offers copy-to-clipboard of the artifact's path and an open-in-editor affordance, built into the artifact-view shell so later viewers inherit them rather than reimplementing. Nothing in either affordance writes to the project.
+
+**Two things settled in advance, recorded in `deferred-work.md` so this story does not re-derive them.** FR-24 says "copy-to-clipboard" and there is **no HTML-only way to write to the clipboard**, so client script is what satisfies the requirement rather than a nicety over it. Jamie decided the resulting CSP question on 2026-09-04: an inline script with a `sha256-` hash derived from the script constant, rather than `'unsafe-inline'` — which would also execute a `<script>` inside a project's own markdown, since `RENDER_EMBEDDED_HTML` is `true` — and rather than an external file, which would need a new route and the broader `script-src 'self'`.
 
 ### Story 2.4: Read a memlog as a decision trail
 

@@ -142,3 +142,76 @@ export function tileGrid(tiles: readonly TileOptions[]): string {
   }
   return [`<div class="tile-grid">`, ...tiles.map(tile), '</div>'].join('\n');
 }
+
+// ---------------------------------------------------------------------------
+// Surface action buttons
+// ---------------------------------------------------------------------------
+
+/**
+ * A surface action: a label and where it goes.
+ *
+ * `href` rather than a click handler, because everything on these surfaces
+ * navigates and there is no client JavaScript to attach one to (the CSP denies
+ * script; `test/render/chrome.test.ts:117` already asserts no `<button>`
+ * reaches the page for the same reason). An anchor styled as a button is
+ * therefore the honest element: it works with no script, is reachable by
+ * keyboard the same way every other link on the page is, and its accessible
+ * name is its own text rather than something a script would have to supply.
+ */
+export interface ButtonOptions {
+  readonly label: string;
+  readonly href: string;
+}
+
+/**
+ * `<a class="{variant}">`, with the label escaped and refused if blank.
+ *
+ * Shares `tile`'s shape: an options interface, a guard that throws rather than
+ * rendering nothing, `escapeHtml` on the one value that can carry project data
+ * or a caller's mistake, and a plain `string` return. `href` is escaped too, on
+ * the same reasoning as every other attribute value this layer builds.
+ */
+function button(variant: 'button-primary' | 'button-ghost', options: ButtonOptions): string {
+  if (options.label.trim() === '') {
+    throw new Error('a button must carry a label; an empty one is refused rather than rendered');
+  }
+  // **The destination is guarded on the same reasoning as the label.** An empty
+  // `href` renders `<a href="">`, which re-requests the current page — a
+  // control that looks like it works and goes nowhere, which is worse than one
+  // that is absent. Story 2.3a feeds these from project-derived paths, so the
+  // refusal belongs here rather than at each call site.
+  if (options.href.trim() === '') {
+    throw new Error('a button must say where it goes; an empty destination is refused');
+  }
+  return `<a class="${variant}" href="${escapeHtml(options.href)}">${escapeHtml(options.label)}</a>`;
+}
+
+/**
+ * A surface's single main action (UX-DR11).
+ *
+ * Nothing here counts how many times this is called — a component cannot see
+ * its neighbours, only `tileGrid` can see its own — so "at most one per
+ * surface" is asserted over rendered markup, in **one** place:
+ * `test/render/components.test.ts`'s `at most one button-primary appears on
+ * any surface the suite renders`. That is the same division of labour by which
+ * `tileGrid` polices raised tiles from the *caller's* side rather than the
+ * tile's. An earlier version of this comment also named
+ * `test/render/page.test.ts`; that file only allow-lists the class in
+ * `KNOWN_CLASSES` and counts nothing, so the claim was false and is corrected
+ * rather than left for a future editor to rely on.
+ */
+export function buttonPrimary(options: ButtonOptions): string {
+  return button('button-primary', options);
+}
+
+/**
+ * Any of a surface's other actions.
+ *
+ * Refresh (`./chrome.ts`) carries this class directly rather than calling this
+ * function: it also needs `.project-refresh`, the header's own positioning
+ * class, and this function renders exactly one class. Every later caller with
+ * no second class to carry can call it as written.
+ */
+export function buttonGhost(options: ButtonOptions): string {
+  return button('button-ghost', options);
+}

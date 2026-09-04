@@ -64,7 +64,9 @@ development_status:
   # and AD-11 withdrawn with it. Key removed rather than restatused, for the same reason as
   # 2-1c: anything not `done` counts as a pending story. Decision and measurements in
   # `epics.md` (Story 2.2), the spine's Amendment log, and `deferred-work.md`.
-  2-3-get-from-the-tool-to-your-editor: backlog
+  # Story 2.3 was split on 2026-09-04 by user decision: buttons first, exits second.
+  2-3-build-the-surface-action-buttons: review
+  2-3a-get-from-the-tool-to-your-editor: backlog
   2-4-read-a-memlog-as-a-decision-trail: backlog
   2-5-read-reviewer-output-as-findings: backlog
   2-6-read-a-reconciliation-as-gaps: backlog

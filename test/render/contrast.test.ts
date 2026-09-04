@@ -190,6 +190,32 @@ test('the outline clears 3:1 where it is the edge of an unfilled control', () =>
   }
 });
 
+test('primary as label text clears 4.5:1 on every ground in the ladder', () => {
+  // `button-ghost`'s label is `{colors.primary}`, and Story 2.3 is the first
+  // component to put that colour on text at button scale rather than only at
+  // link scale. Closes the entry `deferred-work.md` recorded against Story
+  // 2.1a: a pairing the system already used (the artifact link, since Story
+  // 1.3) with no row enumerating it, so nothing would fail if the token or a
+  // ground it sits on moved. The spec names these four grounds specifically —
+  // the four the ratios below were measured against at spec time — rather than
+  // the whole `LADDER`, which includes two levels (`surface-container-low`,
+  // `surface-container-highest`) no button sits on today.
+  // **The whole ladder, plus `primary-container`, rather than a hand-picked
+  // four.** The set was originally the four grounds the spec measured, on the
+  // rule "only grounds a button sits on" — but that rule did not describe the
+  // set: `primary-container` was in it though no button sits there either, and
+  // `surface-container-low` was out of it though that is `components.tile`'s
+  // own background and therefore the exact ground the `deferred-work.md` entry
+  // this test closes was about. `primary` on it measures 9.57:1, which is the
+  // figure that entry recorded by hand. Iterating the ladder costs nothing —
+  // every level clears the threshold — and removes the judgement call.
+  const grounds: readonly ColorName[] = [...LADDER, 'primary-container'];
+  for (const ground of grounds) {
+    const ratio = contrast('primary', ground);
+    assert.ok(ratio >= TEXT_THRESHOLD, `primary as text on ${ground} is ${quoted(ratio)}`);
+  }
+});
+
 test('primary against body text is below 3:1, which is why colour alone cannot carry a link', () => {
   // Not a failure — an accent is not required to contrast with text. It is
   // recorded because it is the reason `a` carries an underline: at this ratio a

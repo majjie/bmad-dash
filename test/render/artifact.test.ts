@@ -180,10 +180,10 @@ test('the shell is a whole document: head, chrome, one h1, one main', () => {
   // Dashboard: `EXPERIENCE.md:161` forbids replacing the current surface under
   // the reader, and `:153` gives this surface "stays on its snapshot".
   assert.ok(
-    page.includes(`class="project-refresh" href="${artifactUrl(CERTAIN_ROW.path)}"`),
+    page.includes(`class="project-refresh button-ghost" href="${artifactUrl(CERTAIN_ROW.path)}"`),
     'the refresh control points at the artifact, not at the Dashboard',
   );
-  assert.ok(!page.includes(`class="project-refresh" href="${DASHBOARD_HREF}"`));
+  assert.ok(!page.includes(`class="project-refresh button-ghost" href="${DASHBOARD_HREF}"`));
   assert.equal((page.match(/<h1>/g) ?? []).length, 1, 'one h1 per surface');
   assert.ok(page.includes(`<h1>${ARTIFACT_SURFACE_TITLE}</h1>`));
   assert.equal((page.match(/<main>/g) ?? []).length, 1);

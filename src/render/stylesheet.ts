@@ -52,13 +52,21 @@ export const PROSE_TOKENS: readonly string[] = [
 /**
  * The component sets whose tokens are emitted as custom properties.
  *
- * A set rather than a single name, because Story 1.3 builds the containers. The
- * remaining seven stay transcribed in `./tokens.ts` and unemitted, so the
- * fidelity test still compares whole documents while nothing reaches a
- * stylesheet before the story that owns it — and `unemittedTokens()` names each
- * one with its reason rather than dropping it quietly.
+ * A set rather than a single name, because Story 1.3 builds the containers and
+ * Story 2.3 builds the two buttons. The remaining five — `activity-row`,
+ * `core-artifact-card`, `evidence-badge`, `refresh-progress`, `signal-pill` —
+ * stay transcribed in `./tokens.ts` and unemitted, so the fidelity test still
+ * compares whole documents while nothing reaches a stylesheet before the story
+ * that owns it — and `unemittedTokens()` names each one with its reason rather
+ * than dropping it quietly.
  */
-export const EMITTED_COMPONENTS: readonly string[] = ['tile', 'tile-raised', 'focus-ring'];
+export const EMITTED_COMPONENTS: readonly string[] = [
+  'tile',
+  'tile-raised',
+  'focus-ring',
+  'button-primary',
+  'button-ghost',
+];
 
 /**
  * The one breakpoint, in pixels — DESIGN.md's own value.
@@ -402,6 +410,69 @@ function componentRules(): readonly string[] {
       declaration('color', 'var(--tile-label-color)'),
       declaration('text-transform', 'uppercase'),
       declaration('margin', '0 0 var(--space-2)'),
+    ]),
+
+    // -----------------------------------------------------------------------
+    // Story 2.3: the two surface action buttons
+    // -----------------------------------------------------------------------
+    //
+    // `button-primary` is DESIGN.md's component for a surface's single main
+    // action; `button-ghost` for every other one, including Refresh
+    // (`.project-refresh` in `./chrome.ts`, which carries both classes). Both
+    // are emitted and styled here before either has a surface consumer of its
+    // own for `button-primary` — `.tile-raised`'s own precedent, noted in that
+    // rule's comment: a component may be built ahead of the surface that uses
+    // it, and `test/render/stylesheet.test.ts`'s round-trip corpus renders one
+    // directly so the rule is exercised rather than merely defined.
+    //
+    // An anchor, not a `<button>`: everything on these surfaces navigates and
+    // there is no client script to submit a form, so `<a>` is the honest
+    // element — `./components.ts`'s `ButtonOptions` doc comment states the same
+    // reasoning for the function that builds one.
+    rule('.button-primary, .button-ghost', [
+      typeRole('body-dense'),
+      declaration('display', 'inline-flex'),
+      declaration('align-items', 'center'),
+      declaration('justify-content', 'center'),
+      declaration('padding', 'var(--space-2) var(--space-4)'),
+      // Cancels the base `a` rule's underline. A link relies on the underline
+      // because colour alone fails WCAG 1.4.1 against `on-surface` — but a
+      // button is not that: its fill or its border is already a non-colour
+      // channel, which is what `.artifact-link` argues for the same reason one
+      // rule further down this file.
+      declaration('text-decoration-line', 'none'),
+    ]),
+    rule('.button-primary', [
+      declaration('background', 'var(--button-primary-background)'),
+      declaration('color', 'var(--button-primary-color)'),
+      declaration('border-radius', 'var(--button-primary-border-radius)'),
+    ]),
+    rule('.button-ghost', [
+      declaration('background', 'var(--button-ghost-background)'),
+      declaration('color', 'var(--button-ghost-color)'),
+      declaration('border-radius', 'var(--button-ghost-border-radius)'),
+      // DESIGN.md's `button-ghost.border` token names only a colour — there is
+      // no border-width token anywhere in the system, and the tile rule above
+      // records why one was never added. `thin` is a CSS keyword, not a
+      // dimension: it draws the hairline the token's own name promises without
+      // inventing a pixel value the token layer does not own.
+      declaration('border-style', 'solid'),
+      declaration('border-width', 'thin'),
+      declaration('border-color', 'var(--button-ghost-border)'),
+    ]),
+    // The filled variant's own fill is `--color-primary`, and the base
+    // `:focus-visible` ring above is drawn in `--color-focus-ring` — the same
+    // token value, by DESIGN.md's own frontmatter. An outer ring in that colour
+    // reads as the button growing, not as a ring, which is why UX-DR13 gives
+    // filled controls an inner stroke instead: `focus-ring.innerStrokeOnFilled`
+    // is the dark colour that contrasts with the fill rather than matching it.
+    // A negative offset the width of the ring pulls it fully inside the
+    // button's own border box; nothing clips it, because nothing in this sheet
+    // sets `overflow` on a button, the same invariant `test/render/components.
+    // test.ts` already holds every container to.
+    rule('.button-primary:focus-visible', [
+      declaration('outline-color', 'var(--focus-ring-inner-stroke-on-filled)'),
+      declaration('outline-offset', 'calc(var(--focus-ring-width) * -1)'),
     ]),
 
     rule('.project-header', [

@@ -112,7 +112,18 @@ test('the git signal is present and unexamined, not absent', () => {
 
 test('the refresh control is a link, and the header carries no script', () => {
   const html = projectHeader(PROJECT_ROOT, DASHBOARD_HREF);
-  assert.match(html, /<a class="project-refresh" href="\/">/);
+  assert.match(html, /<a class="project-refresh button-ghost" href="\/">/);
+  assert.doesNotMatch(html, /<script|onclick|on[a-z]+=/i, 'refresh is navigation, not script');
+  assert.doesNotMatch(html, /<button/i, 'a page load is the refresh; there is nothing to submit');
+});
+
+test('refresh carries the ghost button treatment, and remains a plain link', () => {
+  // Story 2.3 closes the deferral `chrome.ts` used to record: Refresh is not a
+  // surface's single main action — reading is — so it takes `button-ghost`
+  // rather than spending the one `button-primary` UX-DR11 allows a surface.
+  const html = projectHeader(PROJECT_ROOT, DASHBOARD_HREF);
+  assert.match(html, /<a class="project-refresh button-ghost" href="\/">/);
+  assert.doesNotMatch(html, /class="[^"]*\bbutton-primary\b/, 'refresh is ghost, never primary');
   assert.doesNotMatch(html, /<script|onclick|on[a-z]+=/i, 'refresh is navigation, not script');
   assert.doesNotMatch(html, /<button/i, 'a page load is the refresh; there is nothing to submit');
 });

@@ -169,6 +169,12 @@ test('the markup carries no colour or size literal, and no inline style', () => 
     // Story 2.1a: an openable row is an anchor around the whole row, so the
     // link's accessible name carries the row's state rather than a bare path.
     'artifact-link',
+    // Story 2.3's two surface action buttons. `button-ghost` is exercised by
+    // this very page — Refresh carries it — and `button-primary` is listed
+    // even though no surface renders one yet, on `.tile-raised`'s own
+    // precedent: known ahead of use rather than unknown until 2.3a adds one.
+    'button-ghost',
+    'button-primary',
   ];
   const used = [...markup.matchAll(/\sclass="([^"]+)"/g)].flatMap((m) => (m[1] ?? '').split(/\s+/));
   assert.ok(used.length > 0, 'the markup must carry the classes its rules style');

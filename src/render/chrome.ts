@@ -32,9 +32,26 @@
  * the three places making that claim over a snapshot frozen at bind time.) Only
  * `GET` and `HEAD` are served, and no client router may own a URL — so refresh
  * is navigation, and the page needs no JavaScript to offer it.
- * It is unstyled beyond the document's link rule: `button-primary` is the
- * component DESIGN.md assigns to a surface's single main action, and that
- * component belongs to a later story.
+ *
+ * **Refresh carries `button-ghost`, not `button-primary`.** Story 2.3 built
+ * both of the components DESIGN.md assigns to a surface's actions, which
+ * closes the deferral this paragraph used to record.
+ *
+ * `DESIGN.md` gives `button-primary` to "the single main action on a surface"
+ * and — while the project header was still a *Dashboard tile* — named refresh
+ * as the example. That parenthetical is stale and was corrected in DESIGN.md
+ * on 2026-09-04: this header is now global chrome on **every** surface
+ * (`EXPERIENCE.md:59`), so against the same sentence's one-primary rule,
+ * making Refresh primary would spend every surface's budget permanently and
+ * no forward action could ever be primary. Hence ghost, and it stays ghost.
+ *
+ * The control is `<a class="project-refresh button-ghost">`: `.project-refresh`
+ * positions it at the header's end, exactly as before, and `.button-ghost`
+ * supplies the border — its only painted channel, since the ghost fill is
+ * `transparent` — plus the label colour. It adds no focus rule of its own and
+ * deliberately inherits the base `:focus-visible` ring, which
+ * `test/render/components.test.ts` pins by asserting no
+ * `.button-ghost:focus-visible` rule exists.
  */
 
 import { basename, isAbsolute } from 'node:path';
@@ -150,6 +167,6 @@ export function projectHeader(projectRoot: string, refreshHref: string): string 
 <p class="project-name">${name}</p>
 <code class="project-path">${projectRoot}</code>
 <p class="project-signal">${`${GIT_SIGNAL_LABEL} ${SIGNAL_NOT_CHECKED}`}</p>
-<a class="project-refresh" href="${refreshHref}">${REFRESH_LABEL}</a>
+<a class="project-refresh button-ghost" href="${refreshHref}">${REFRESH_LABEL}</a>
 </header>`.html;
 }

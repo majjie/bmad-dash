@@ -300,7 +300,7 @@ The logic: the larger the surface, the larger the radius, so curvature reads as 
 
 **Core artifact card** — name and a monospaced status line, in `{colors.on-surface-faint}` when absent. The token alone carries the reduced weight; no opacity is applied, which would drop it below conformance. An absent card keeps its grid position and is not a link.
 
-**Buttons** — `button-primary` for the single main action on a surface (refresh); `button-ghost` for everything else. No more than one primary button visible at a time.
+**Buttons** — `button-primary` for the single main action on a surface; `button-ghost` for everything else. No more than one primary button visible at a time. ~~(refresh)~~ **The parenthetical naming refresh as the example is stale, corrected 2026-09-04 during Story 2.3.** It was written while the project header was a *Dashboard tile*, so refresh was one surface's main action; the header was later "promoted from Dashboard tile to GLOBAL CHROME" (see this design's `.memlog.md`) and `EXPERIENCE.md:59` now puts it on **every** surface. Against the one-primary rule in this same sentence, making refresh primary would therefore spend every surface's entire primary budget permanently — no surface could ever carry another primary action, and FR-24's open-in-editor could never be one. So refresh takes `button-ghost` and primary is reserved for a surface's own forward action.
 
 **Focus ring** — `{components.focus-ring}`, 2px of `{colors.focus-ring}` at 2px offset, on every focusable element without exception. It must never be clipped by a tile edge or occluded by a sticky region: tiles reserve the offset inside their padding rather than letting the ring overflow.
 

@@ -182,9 +182,9 @@ test('every unemitted token is held for one of exactly three stated reasons', ()
   assert.deepEqual(
     [...deferred].sort(),
     [
+      // `button-primary` and `button-ghost` are built by Story 2.3 and no
+      // longer held back — see the emission tests below.
       'activity-row',
-      'button-ghost',
-      'button-primary',
       'core-artifact-card',
       'evidence-badge',
       'refresh-progress',
@@ -221,6 +221,31 @@ test('the containers this story owns are emitted, and their references resolve',
   }
   // The one tile token that is a role reference, deliberately absent.
   assert.equal(emitted.get('components.tile.labelType'), undefined);
+});
+
+test('the two buttons this story owns are emitted, and their references resolve', () => {
+  const emitted = new Map(customProperties().map((p) => [p.token, p]));
+  for (const [token, expected] of [
+    ['components.button-primary.background', 'var(--color-primary)'],
+    ['components.button-primary.color', 'var(--color-on-primary)'],
+    ['components.button-primary.borderRadius', 'var(--radius-full)'],
+    // `button-ghost.background` is `transparent` in DESIGN.md's own frontmatter
+    // — a literal, not a reference — so it resolves to itself rather than to a
+    // var(); `cssValue` only rewrites a `{group.key}` reference.
+    ['components.button-ghost.background', 'transparent'],
+    ['components.button-ghost.color', 'var(--color-primary)'],
+    ['components.button-ghost.border', 'var(--color-outline)'],
+    ['components.button-ghost.borderRadius', 'var(--radius-full)'],
+  ] as const) {
+    const property = emitted.get(token);
+    assert.ok(property !== undefined, `${token} is not emitted`);
+    assert.equal(property.value, expected, `${token} resolved to ${property.value}`);
+  }
+  // Both buttons' `type` is a role reference, on `tile.labelType`'s own
+  // precedent: a role is five declarations, so it is applied by `typeRole()`
+  // at the point of use rather than emitted as one custom property.
+  assert.equal(emitted.get('components.button-primary.type'), undefined);
+  assert.equal(emitted.get('components.button-ghost.type'), undefined);
 });
 
 test('tile-raised sits exactly one elevation level above tile', () => {
@@ -380,6 +405,7 @@ test('the type roles reach the elements that carry them', () => {
     ['.project-path', 'mono'],
     ['.project-signal', 'mono-badge'],
     ['.project-refresh', 'body-dense'],
+    ['.button-primary, .button-ghost', 'body-dense'],
   ] as const) {
     const block = new RegExp(`^${selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} \\{\\n([\\s\\S]*?)\\n\\}`, 'm').exec(RULES);
     assert.ok(block !== null, `no rule for ${selector}`);
@@ -568,6 +594,41 @@ const REQUIRED_RULES: readonly (readonly [string, readonly string[]])[] = [
   ['.tile-raised', ['background: var(--tile-raised-background)']],
   ['.tile-label', ['color: var(--tile-label-color)', 'text-transform: uppercase']],
   ['.tile-empty', ['color: var(--color-on-surface-variant)']],
+  // Story 2.3's two surface action buttons. `.button-primary` and
+  // `.button-ghost` share their layout in one combined rule and diverge in
+  // their own; both are asserted, since either missing is a button that looks
+  // unstyled or a button that looks like the wrong variant.
+  ['.button-primary, .button-ghost', ['text-decoration-line: none']],
+  [
+    '.button-primary',
+    ['background: var(--button-primary-background)', 'color: var(--button-primary-color)'],
+  ],
+  [
+    '.button-ghost',
+    [
+      'background: var(--button-ghost-background)',
+      'color: var(--button-ghost-color)',
+      'border-color: var(--button-ghost-border)',
+      // **`border-style` is required, not incidental.** The button rules cancel
+      // the base `a` underline on the reasoning that a fill or a border is
+      // already a non-colour channel — and ghost has no fill, so the border is
+      // the whole of that channel. CSS's initial `border-style` is `none`,
+      // which computes `border-width` to zero, so dropping this one
+      // declaration paints no border at all and leaves Refresh as
+      // `primary`-coloured text with colour as its only channel: a WCAG 1.4.1
+      // failure on the one control present on every surface. Measured
+      // 2026-09-04: deleting it left the suite at 1007/1007 green, which is
+      // why it is named here.
+      'border-style: solid',
+    ],
+  ],
+  // The filled variant's inner-stroke focus treatment: an outer ring in
+  // `--color-focus-ring` is invisible against a fill in the same colour, so
+  // this overrides just the two channels that need to differ.
+  [
+    '.button-primary:focus-visible',
+    ['outline-color: var(--focus-ring-inner-stroke-on-filled)', 'outline-offset: calc(var(--focus-ring-width) * -1)'],
+  ],
   ['.project-header', ['display: flex', 'gap: var(--space-3)']],
   ['.project-name', ['margin: 0']],
   ['.project-path', ['color: var(--color-on-surface-variant)', 'overflow-wrap: anywhere', 'min-width: 0']],
@@ -780,7 +841,7 @@ test('every class rule is exercised by some render path, and vice versa', async 
   // each component closes the loop without pretending the page uses everything.
   const { renderPage } = await import('../../src/render/page.ts');
   const { findArtifact, renderArtifact } = await import('../../src/render/artifact.ts');
-  const { tile, tileGrid } = await import('../../src/render/components.ts');
+  const { tile, tileGrid, buttonPrimary, buttonGhost } = await import('../../src/render/components.ts');
   const { markup } = await import('../../src/render/html.ts');
   const { CERTAIN_ROW, FULL_INVENTORY_VIEW, READABLE_BODY, UNINTERPRETED_ROW } = await import(
     '../support/inventory.ts'
@@ -818,6 +879,15 @@ test('every class rule is exercised by some render path, and vice versa', async 
       { label: 'B', content: { empty: 'Nothing yet.' } },
     ]),
     tile({ label: 'C', content: { empty: 'Nothing yet.' } }),
+    // `.button-primary` on `.tile-raised`'s own precedent, cited above: no
+    // surface calls `buttonPrimary` yet (Refresh is ghost; a real main action
+    // is Story 2.3a's), so it is rendered directly here or its rule would pass
+    // this loop's "styled but nothing renders it" direction unexercised.
+    // `.button-ghost` is already exercised through the header's Refresh
+    // control on every surface above; rendered again directly so the two
+    // variants are asserted the same way.
+    buttonPrimary({ label: 'Primary', href: '/primary' }),
+    buttonGhost({ label: 'Ghost', href: '/ghost' }),
   ].join('\n');
   const inMarkup = new Set(
     [...rendered.matchAll(/\sclass="([^"]+)"/g)].flatMap((m) => (m[1] ?? '').split(/\s+/)),
