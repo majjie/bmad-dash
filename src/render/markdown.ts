@@ -107,8 +107,11 @@ const DEEPEST_HEADING = 6;
  * The parser, configured once per switch position.
  *
  * Both instances are built at module load: they are pure, cheap, and holding
- * one per position keeps the switch out of the per-render path. Story 2.1c owns
- * caching the *parse*; nothing here is memoised on content.
+ * one per position keeps the switch out of the per-render path. **Nothing is
+ * memoised on content, and nothing will be:** Story 2.1c would have cached the
+ * parse and was cancelled on 2026-09-04 as overkill for a local developer tool.
+ * A document is re-parsed on each open, at a measured 1.7 ms for a typical spec
+ * and 31.6 ms for the largest document in this repository.
  */
 function parser(embeddedHtml: boolean): Marked {
   const options: MarkedExtension = {

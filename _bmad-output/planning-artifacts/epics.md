@@ -430,7 +430,7 @@ So that I am never shown two halves of two different states and cannot tell.
 
 ### Story 2.1a: Open an artifact at its own URL
 
-*Split three ways on 2026-09-03 by user decision, at the build workflow's multi-goal checkpoint — see 2.1b and 2.1c below. The three sit in different risk classes: URL identity and sanitization here, a bundled parser and injection defence in 2.1b, cache coherence in 2.1c. Epic 1's retrospective recorded that pairing risk classes in one review round produced three consecutive `bad_spec` loops, and Story 2.1 — a single concern — still took two.*
+*Split three ways on 2026-09-03 by user decision, at the build workflow's multi-goal checkpoint — see 2.1b and 2.1c below. The three sat in different risk classes: URL identity and sanitization here, a bundled parser and injection defence in 2.1b, cache coherence in 2.1c — and 2.1c was cancelled on 2026-09-04 when that cache coherence turned out to be unattainable on the key it was specified against, and not worth attaining another way. Epic 1's retrospective recorded that pairing risk classes in one review round produced three consecutive `bad_spec` loops, and Story 2.1 — a single concern — still took two.*
 
 As a practitioner who found something in the inventory,
 I want to reach it at its own address and get back to it later,
@@ -452,15 +452,26 @@ So that I do not leave for my editor just to look.
 
 **Done when:** an artifact's content is HTML produced on the server, with the client enhancing delivered markup only and never assembling content; the markdown parser is a **bundled** dependency rather than an installed runtime one, following the measured precedent already recorded for `yaml`; and the response carries hardening headers and a Content-Security-Policy. The headers are not optional dressing here: until now the page has been safe *structurally*, because every interpolated value is escaped and raw strings are refused outright, and rendering markdown is precisely what ends that guarantee — so the story that first emits raw markup is the story that owes the defence.
 
-### Story 2.1c: Parse each document once per snapshot
+### Story 2.1c: Parse each document once per snapshot — **CANCELLED 2026-09-04**
 
-As a practitioner rereading a long document,
-I want the page back without the tool redoing work it already did,
-So that reading does not get slower the longer the document is.
+**Cancelled by user decision (Jamie), not deferred.** The grounds, in his words: this is a tool developers run on their own local repositories, a slight delay while a document loads is fine, and caching a file's content is overkill at this level of tooling. Nothing replaces it and no follow-up story is owed. AD-3's cache clause was withdrawn to match — see the spine's Amendment log, 2026-09-04.
 
-**Satisfies:** AD-3 (the render-cache half)
+The original intent, kept for the record:
 
-**Done when:** the rendering parse happens on first open and is cached for the life of the snapshot identity Story 2.1 introduced, and is discarded with it; a repeat load of an unchanged project reuses the parse rather than redoing it; and any change to the project invalidates the cache, which follows from the identity being content-derived. Note what this does **not** fix: every page load is still a full scan, because refresh is Epic 3 and AD-3's bounded-work limit is deferred — so a repeat load skips the parse and still pays the walk.
+> As a practitioner rereading a long document,
+> I want the page back without the tool redoing work it already did,
+> So that reading does not get slower the longer the document is.
+>
+> **Done when:** the rendering parse happens on first open and is cached for the life of the snapshot identity Story 2.1 introduced, and is discarded with it; a repeat load of an unchanged project reuses the parse rather than redoing it; and any change to the project invalidates the cache, which follows from the identity being content-derived.
+
+**Two of those clauses were unbuildable, and the investigation that priced the story is what retired it.** Measured 2026-09-04 while planning it:
+
+- **The last clause is false.** "Any change to the project invalidates the cache, which follows from the identity being content-derived" does not follow. The identity is content-derived over the **view**, and Story 2.1b's frozen Never list keeps document bodies *off* the snapshot on purpose. Verified end to end against a running server: editing a document's prose, its first heading, and its frontmatter title each left the identity **unmoved**; only adding a new artifact moved it. A cache keyed on it would have served the previous render of an edited file — the opposite of what Story 2.2 exists to guarantee.
+- **The obvious repair buys nothing.** Keying on a digest of the document text costs **as much as the parse**: 0.8-1.1x across four real documents from 27 KB to the 8 MiB read cap. You would pay the parse's price to compute the key that lets you skip the parse.
+- **"Discarded with the snapshot" cannot mean anything yet.** Refresh is Story 3.6's; `inventory()` runs per request, so a snapshot's lifetime *is* one request and discarding with it means never caching.
+- **What it was worth, measured on this repository.** A typical spec page is 11.2 ms of which the parse is 1.7 ms (15%). The largest document in the tree, 270 KB, is 41.1 ms of which the parse is 31.6 ms (77%). So the win was real only for unusually large documents.
+
+**What survives.** `snapshotIdOf` is not orphaned — it serves AD-17's identity half and the `bmad-snapshot-id` header, which is Story 2.1's delivered value. AD-3's *deferral* also stands: the rendering parse still happens at first open and never in the scan, which is the half that keeps document length out of refresh latency. Story 2.9 is where a long document's parse cost becomes load-bearing again; if it ever needs one, the viable key is the `stat` identity Story 2.2's currency probe will already be reading, not the snapshot id.
 
 ### Story 2.2: Know when what you are reading has moved
 

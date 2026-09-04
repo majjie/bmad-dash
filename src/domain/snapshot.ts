@@ -12,10 +12,14 @@
  * **Derived, not minted, and that is the whole design.** Every page load is
  * still a full pass (the per-request scan stays; real refresh is FR-37/FR-47,
  * Epic 3), so a counter, a clock or a request id would differ on every
- * response even when nothing on disk changed — and Story 2.1a's parse cache,
- * which this identity is the key for, would never hit. A digest of the
- * recorded facts is equal exactly when those facts are equal, which is the
- * property the cache needs.
+ * response even when nothing on disk changed, so a reader could never tell one
+ * page's provenance from another's. A digest of the recorded facts is equal
+ * exactly when those facts are equal, which is the property AD-17's identity
+ * half needs.
+ *
+ * This identity was also going to key Story 2.1c's parse cache. That story was
+ * cancelled on 2026-09-04, partly because this id is the wrong key for it: it
+ * digests the view, and document bodies are deliberately not in the view.
  *
  * **Structural, not an enumerated list of inputs.** `digestOf` walks whatever
  * value it is handed rather than taking a chosen tuple of fields. The first

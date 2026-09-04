@@ -97,8 +97,9 @@ export interface FoundArtifact {
  * A linear scan, deliberately, and not an index built per request. The measured
  * shape of this repository is 58 rows; the pass that produced them walked the
  * whole tree first, so a map keyed by path would be a micro-optimisation
- * downstream of a full directory walk. Story 2.1c's parse cache is where the
- * per-request cost is addressed, keyed by the snapshot identity.
+ * downstream of a full directory walk. The per-request cost is not addressed
+ * anywhere: Story 2.1c would have cached the parse and was cancelled on
+ * 2026-09-04, so a repeat open re-parses. Deliberate — see `epics.md`.
  *
  * Row paths are unique across the whole view — `src/adapters/fs/walk.ts` keys
  * its `seen` map on the resolved real path, so a second spelling is suppressed

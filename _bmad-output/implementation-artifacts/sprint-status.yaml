@@ -55,7 +55,11 @@ development_status:
   2-1-serve-every-response-from-one-snapshot: review
   2-1a-open-an-artifact-at-its-own-url: review
   2-1b-show-an-artifact-s-content-safely: review
-  2-1c-parse-each-document-once-per-snapshot: backlog
+  # 2-1c-parse-each-document-once-per-snapshot: CANCELLED 2026-09-04 by user decision.
+  # The key is removed rather than given a status: anything that is not `done` counts
+  # as a pending story, which would make Epic 2's retrospective read as unfinished
+  # forever. The decision and its measurements live in `epics.md` (Story 2.1c) and
+  # `deferred-work.md`; AD-3's cache clause was withdrawn to match.
   2-2-know-when-what-you-are-reading-has-moved: backlog
   2-3-get-from-the-tool-to-your-editor: backlog
   2-4-read-a-memlog-as-a-decision-trail: backlog

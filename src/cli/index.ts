@@ -514,11 +514,20 @@ export type ViewContent = Omit<InventoryView, 'snapshotId'>;
  * `toPlatform(root)`: that is a deterministic function of this one, so the two
  * distinguish exactly the same roots.
  *
- * **The conservatism to accept.** Any change anywhere in the project changes
- * the id, so Story 2.1a's parse cache — which this identity is the key for —
- * invalidates wholesale. Correct rather than minimal; a finer key is a later
- * optimisation that needs its own cache-coherence argument, and this story does
- * not make one.
+ * **What this id does and does not track, measured rather than reasoned.** It
+ * is a digest of the *view*, so it moves when the view moves — a new artifact,
+ * a changed verdict, a different row set. It does **not** move when a
+ * document's bytes change: bodies are kept off the snapshot on purpose, and
+ * verified end to end on 2026-09-04, editing a document's prose, its first
+ * heading and its frontmatter title each left this id unmoved while only adding
+ * an artifact moved it.
+ *
+ * So this is **not** a currency signal and must never be used as one. Story 2.2
+ * owns "has what I am reading changed", and it reads the filesystem at the
+ * moment of open precisely because this id cannot answer it. An earlier version
+ * of this comment claimed any change anywhere in the project changes the id;
+ * that was wrong, and it was the reasoning that made a parse cache keyed here
+ * look sound. Story 2.1c would have built that cache and was cancelled.
  *
  * A thin wrapper over `digestOf` and deliberately so: it is the one place that
  * names *what* is digested, and it is exported so a test can build two pages
