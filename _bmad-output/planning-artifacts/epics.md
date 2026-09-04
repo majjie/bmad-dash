@@ -139,13 +139,13 @@ From the architecture spine (19 architecture decisions, hexagonal paradigm, feat
 - AD-8: Signal availability recorded per artifact and per signal as exactly one of present, absent, unreadable, unchecked.
 - AD-9: Project root resolved once in the composition root; exactly one permitted root, never widened (narrowed 2026-09-02; artifact roots from config are deferred with FR-10).
 - AD-10: Content-derived path segments sanitized and confinement-checked on every read, with **one scoped exception** (added 2026-09-02): the not-a-project suggestion scan enumerates directory *names* outside the permitted root, reads nothing, and is importable only by that scan.
-- AD-11: Currency mismatch surfaced on open with a refresh offer.
+- ~~AD-11: Currency mismatch surfaced on open with a refresh offer.~~ **Withdrawn 2026-09-04** with Story 2.2 — it had no reachable divergence to surface. See the spine's Amendment log.
 - AD-12: Ephemeral single process; nothing persisted, no outbound network, literal `127.0.0.1`.
 - AD-13: Convention-derived sources validate that extraction produced something and fail visibly.
 - AD-14: One canonical path representation; platform difference confined to the adapter.
 - AD-15: Browser launch best-effort; the server binds and reports before any launch attempt.
 - AD-16: Git invoked read-only in the strong sense — optional locks disabled, repository-configured hook and monitor mechanisms neutralized, reporting commands only.
-- AD-17: A rendered page belongs to exactly one snapshot; the currency probe is never cached.
+- AD-17: A rendered page belongs to exactly one snapshot. (Its currency-probe clause went with AD-11 on 2026-09-04.)
 - AD-18: Document and section URL grammar fixed and server-owned; section URLs stable across refreshes and independent of how the document was divided.
 - AD-19: Requests rejected unless the `Host` header matches the bound address and port.
 - Stack, verified 2026-08-28: Node 24 (floor 22), markdown-it 15.x, yaml 2.x, Preact 10.x, esbuild 0.28.x, `node:http`, `node:util` parseArgs, git as a subprocess. Prebuilt client assets ship in the package so `npx` never builds.
@@ -173,7 +173,7 @@ From the UX design contract (DESIGN.md + EXPERIENCE.md), both final. 24 colour t
 - UX-DR16: Build the artifact nominator overlay — the only modal in v1 — trapping focus while open and returning focus to its trigger on close.
 - UX-DR17: Implement all 25 strings in the load-bearing string index verbatim, following the stated conventions: period for sentence-shaped strings and none for label-shaped, initial capital for badge and pill labels, `<placeholder>` for substituted values.
 - UX-DR18: Implement the surface-state matrix: five states across six surfaces, with the cross-cutting defaults binding and the matrix carrying departures. Includes the refresh-failure branch, where a partial scan is discarded rather than published.
-- UX-DR19: Implement the eight edge conditions with their specified strings: no git repository, artifact vanished between scan and open, sharded document, `story_location` out of tree, unidentified artifact, dead section permalink, multi-run folder, valid project with zero artifacts.
+- UX-DR19: Implement the edge conditions with their specified strings — **six, not eight, since 2026-09-04**: the changed-since-scan and artifact-vanished conditions were withdrawn with AD-11 and Story 2.2. Remaining: no git repository, sharded document, `story_location` out of tree, unidentified artifact, dead section permalink, multi-run folder, valid project with zero artifacts.
 - UX-DR20: Implement the keyboard model: eight bindings shared by every surface, single-letter keys inert while a text input has focus, and no surface implementing its own.
 - UX-DR21: Meet the accessibility floor behaviourally: full keyboard operation, focus never obscured, nothing dependent on colour alone, banner/navigation/main landmarks with one `h1` per surface, tile labels as real headings, polite live region for refresh completion only, honest state in accessible names, and text resizing to 200% without loss.
 - UX-DR22: Implement responsive behaviour at the single 900px breakpoint: tile grid to one column in reading order, contents rail above content in the Document reader. Nothing below 600px is a design target.
@@ -473,15 +473,28 @@ The original intent, kept for the record:
 
 **What survives.** `snapshotIdOf` is not orphaned — it serves AD-17's identity half and the `bmad-snapshot-id` header, which is Story 2.1's delivered value. AD-3's *deferral* also stands: the rendering parse still happens at first open and never in the scan, which is the half that keeps document length out of refresh latency. Story 2.9 is where a long document's parse cost becomes load-bearing again; if it ever needs one, the viable key is the `stat` identity Story 2.2's currency probe will already be reading, not the snapshot id.
 
-### Story 2.2: Know when what you are reading has moved
+### Story 2.2: Know when what you are reading has moved — **CANCELLED 2026-09-04**
 
-As a practitioner reading an artifact while agents are working,
-I want to be told when the file has changed since the scan,
-So that I do not act on a version that no longer exists.
+**Cancelled by user decision (Jamie), not deferred.** In his words: he does not mind if what you are reading moves, the tool is not that heavyweight, and this comes out as a step and as a requirement. **AD-11 is withdrawn** to match — see the spine's Amendment log, 2026-09-04 — and its two `EXPERIENCE.md` strings are withdrawn with it. Nothing replaces this and no later story inherits it.
 
-**Satisfies:** AD-11 · UX-DR19 (currency and vanished conditions)
+The original intent, kept for the record:
 
-**Done when:** opening an artifact compares its current on-disk state against the snapshot's record and surfaces a mismatch with a refresh offer, never silently correcting it; the probe is evaluated at the moment of open and never cached; and an artifact that has disappeared since the scan says so in its own words rather than reusing the changed-since-scan wording. Two distinct facts, two distinct strings.
+> As a practitioner reading an artifact while agents are working,
+> I want to be told when the file has changed since the scan,
+> So that I do not act on a version that no longer exists.
+>
+> **Satisfies:** AD-11 · UX-DR19 (currency and vanished conditions)
+>
+> **Done when:** opening an artifact compares its current on-disk state against the snapshot's record and surfaces a mismatch with a refresh offer, never silently correcting it; the probe is evaluated at the moment of open and never cached; and an artifact that has disappeared since the scan says so in its own words rather than reusing the changed-since-scan wording.
+
+**It had no reachable behaviour, measured before it was written.** `inventory()` runs **per request**, so the snapshot a response is produced from was built during that same request — the record and the file are both "now". Verified end to end against a running server:
+
+- Edit an artifact, reopen it: **200, the new text, no notice** — and correctly so, because the snapshot already recorded the edit.
+- Delete an artifact, reopen it: **404** — the re-scan removed the row along with the file, so the artifact page never renders and the "gone since the scan" region is unreachable outside a synthetic test view.
+
+There was also nothing recorded to compare against: `ArtifactRow` carries no size, no mtime and no digest, and **no code in `src/` reads a modification time at all**. Adding one was affordable — 47 artifacts stat in 0.32 ms, 3.3% of the 9.5 ms scan — so cost was never the obstacle. The obstacle was that a currency mismatch cannot occur until a snapshot outlives a request, which is Story 3.6's replacement half (FR-37/FR-47).
+
+**What this does not cancel.** FR-47's currency *line* in the global header — "scanned N minutes ago" — is UX-DR14 and Story 3.6, a different mechanism, and it stands; `src/render/chrome.ts` already reports it as `Not checked` rather than omitting it. AD-3's guarantee that all content in one response comes from one snapshot also stands. Story 2.11's `That section no longer exists in this document.` is untouched. And Story 2.3 does not depend on this story, so the artifact-view shell 2.4-2.8 inherit is complete without it.
 
 ### Story 2.3: Get from the tool to your editor
 

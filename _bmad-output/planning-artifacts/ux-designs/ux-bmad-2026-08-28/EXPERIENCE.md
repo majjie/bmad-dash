@@ -86,13 +86,13 @@ Terse and technical, matching the fluent-practitioner default. This is load-bear
 | Ordering from mtime only | `File time only — weak evidence` |
 | Ordering at day resolution | `Day resolution — order within the day unknown` |
 | Items that cannot be ordered | `Order unknown` (grouped, not interleaved) |
-| Document changed since scan | `This file changed after the last scan.` + refresh action |
+| ~~Document changed since scan~~ | ~~`This file changed after the last scan.` + refresh action~~ — **WITHDRAWN 2026-09-04** with AD-11 and Story 2.2. The condition cannot arise: the snapshot is rebuilt per request, so it always already records the edit. |
 | Run folder may hold several runs | `This folder may contain more than one run.` |
 | No memlog for a build stage | `No decision trail — bmad-build does not write one.` |
 | Artifact unidentified | `Not identified. Tried: config path, frontmatter, structure, filename.` |
 | Refresh failed partway | `Refresh failed — showing the previous scan.` plus the reason |
 | Project is not a git repository | `Not a git repository — ordering from BMAD records only` |
-| Artifact gone since scan | `No longer on disk. It was present at the last scan.` |
+| ~~Artifact gone since scan~~ | ~~`No longer on disk. It was present at the last scan.`~~ — **WITHDRAWN 2026-09-04** with AD-11 and Story 2.2. A vanished artifact loses its row in the same re-scan, so the request is a 404 and no artifact page renders. |
 | Section permalink target gone | `That section no longer exists in this document.` |
 | Oversight with nothing flagged | `No findings. <n> artifacts examined.` |
 | Artifact exists but is empty | `Empty file.` |
@@ -150,7 +150,7 @@ Refreshing has two outcomes, complete and failed. The failure branch is a branch
 |---|---|---|---|---|
 | **Dashboard** | tiles stay live | per-tile, by cause | per row or card | header currency |
 | **Oversight** | findings stay live | `No findings. <n> artifacts examined.` — never a bare "no findings" | unreadable artifacts listed as their own group | header currency |
-| **Artifact view** | stays on its snapshot | artifact exists but has no content → `Empty file.` | parse failure replaces the viewer, path and stage shown | mismatch banner + refresh offer (AD-11) |
+| **Artifact view** | stays on its snapshot | artifact exists but has no content → `Empty file.` | parse failure replaces the viewer, path and stage shown | ~~mismatch banner + refresh offer (AD-11)~~ withdrawn 2026-09-04 |
 | **Document reader** | position preserved | document with no headings → single unsectioned page | section unparseable → that section only shows the failure | mismatch banner; contents rail marked stale |
 | **Comparison** | both panes hold their snapshot | pane with nothing nominated → `Choose an artifact.` | either pane degrades independently | per-pane currency, independently |
 
@@ -166,7 +166,7 @@ Refreshing has two outcomes, complete and failed. The failure branch is a branch
 
 **Degraded** — a failing artifact renders in place, stating what failed and at which stage (AD-7). Never omitted, never fatal to its neighbours.
 
-**Stale** — currency is always stated. On opening a document whose on-disk state differs from the snapshot record, the mismatch is surfaced with a refresh offer (AD-11), never silently corrected.
+**Stale** — ~~currency is always stated. On opening a document whose on-disk state differs from the snapshot record, the mismatch is surfaced with a refresh offer (AD-11), never silently corrected.~~ **WITHDRAWN 2026-09-04** with AD-11 and Story 2.2: a per-request snapshot cannot differ from the file it just recorded. The *header's* currency line (FR-47, Story 3.6) is a different thing and is unaffected.
 
 ## Edge conditions
 
@@ -174,7 +174,7 @@ Conditions beyond the five surface states, drawn from `bmad-source-shapes.md`. E
 
 **No git repository** — FR-14's top two tiers vanish, so every badge would read weak and the feed would be one large `Order unknown` group. Instead: the header states `Not a git repository — ordering from BMAD records only`, and the badge weights re-base on the tiers that *are* available, so a weak badge still means weak relative to the evidence this project can offer. Where items share a day-resolution timestamp, AD-6 breaks the tie by run-folder date, then path, so ordering is deterministic rather than arbitrary. No displayed timestamp is finer than its evidence supports.
 
-**Artifact vanished between scan and open** — ordinary in a tool opened while agents write. The artifact view renders `No longer on disk. It was present at the last scan.` with a refresh offer. It is a distinct string from the changed-since-scan case, which is a different fact.
+**Artifact vanished between scan and open** — ~~ordinary in a tool opened while agents write. The artifact view renders `No longer on disk. It was present at the last scan.` with a refresh offer. It is a distinct string from the changed-since-scan case, which is a different fact.~~ **WITHDRAWN 2026-09-04** with AD-11 and Story 2.2. Verified: the re-scan that would notice the file is gone also drops its row, so the request answers 404 rather than rendering an artifact page with a notice on it.
 
 **Sharded document** — a document arriving as a directory with `index.md` uses its existing shard boundaries as pages (FR-77); one arriving whole is carved by heading weight. The reader looks identical either way, and the contents rail does not disclose which it was. Where the shape is genuinely ambiguous (AD-4 forbids resolving it silently), the artifact view states `Could be a run folder or a sharded document` and offers both readings.
 

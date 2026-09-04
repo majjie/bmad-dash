@@ -60,7 +60,10 @@ development_status:
   # as a pending story, which would make Epic 2's retrospective read as unfinished
   # forever. The decision and its measurements live in `epics.md` (Story 2.1c) and
   # `deferred-work.md`; AD-3's cache clause was withdrawn to match.
-  2-2-know-when-what-you-are-reading-has-moved: backlog
+  # 2-2-know-when-what-you-are-reading-has-moved: CANCELLED 2026-09-04 by user decision,
+  # and AD-11 withdrawn with it. Key removed rather than restatused, for the same reason as
+  # 2-1c: anything not `done` counts as a pending story. Decision and measurements in
+  # `epics.md` (Story 2.2), the spine's Amendment log, and `deferred-work.md`.
   2-3-get-from-the-tool-to-your-editor: backlog
   2-4-read-a-memlog-as-a-decision-trail: backlog
   2-5-read-reviewer-output-as-findings: backlog

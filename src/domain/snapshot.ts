@@ -57,9 +57,11 @@
  * contains none of them today, and a throw is how the next one announces
  * itself rather than quietly falling out of the identity.
  *
- * **FNV-1a, not `node:crypto`.** This is a cache key and a currency marker,
- * not a security boundary, so there is no adversarial reason to reach for a
- * cryptographic hash — and doing so would add a Node built-in this pure layer
+ * **FNV-1a, not `node:crypto`.** This is a response-provenance marker — it is
+ * neither a cache key nor a currency signal any more, since Story 2.1c and
+ * Story 2.2 were both cancelled on 2026-09-04 — and it is not a security
+ * boundary, so there is no adversarial reason to reach for a cryptographic
+ * hash — and doing so would add a Node built-in this pure layer
  * does not otherwise need. `src/domain/` has zero outgoing imports (the frozen
  * purity constraint `test/architecture.test.ts` enforces), so the digest is
  * plain arithmetic. Collisions are negligible at this tool's scale: over 64

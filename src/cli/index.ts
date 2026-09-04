@@ -522,12 +522,16 @@ export type ViewContent = Omit<InventoryView, 'snapshotId'>;
  * heading and its frontmatter title each left this id unmoved while only adding
  * an artifact moved it.
  *
- * So this is **not** a currency signal and must never be used as one. Story 2.2
- * owns "has what I am reading changed", and it reads the filesystem at the
- * moment of open precisely because this id cannot answer it. An earlier version
- * of this comment claimed any change anywhere in the project changes the id;
- * that was wrong, and it was the reasoning that made a parse cache keyed here
- * look sound. Story 2.1c would have built that cache and was cancelled.
+ * So this is **not** a currency signal and must never be used as one. An
+ * earlier version of this comment claimed any change anywhere in the project
+ * changes the id; that was wrong, and it was the reasoning that made a parse
+ * cache keyed here look sound. Story 2.1c would have built that cache and was
+ * cancelled on 2026-09-04.
+ *
+ * Nothing owns "has what I am reading changed" any more either: AD-11 was
+ * withdrawn and Story 2.2 cancelled on the same day, because a snapshot rebuilt
+ * on every request cannot disagree with the file it just recorded. The header's
+ * currency line — FR-47, Story 3.6 — is a different mechanism and still stands.
  *
  * A thin wrapper over `digestOf` and deliberately so: it is the one place that
  * names *what* is digested, and it is exported so a test can build two pages

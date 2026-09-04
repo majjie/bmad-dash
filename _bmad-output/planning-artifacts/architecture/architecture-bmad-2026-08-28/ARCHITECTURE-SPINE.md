@@ -5,7 +5,7 @@ purpose: build-substrate
 altitude: feature
 paradigm: layered — a pure domain with adapters at the edges (see Amendment log, 2026-09-03)
 scope: 'bmad-dash v1 — CLI, local HTTP server, and web dashboard over a BMAD project''s artifacts (capability groups C1–C6)'
-status: final (amended six times — see Amendment log)
+status: final (amended seven times — see Amendment log)
 created: '2026-08-28'
 updated: '2026-09-04'
 binds: [C1, C2, C3, C4, C5, C6]
@@ -125,11 +125,15 @@ Arrows are the permitted direction of dependency. `src/domain/` has no outgoing 
 - **Rule:** every path segment derived from project content passes one sanitizer before use, and every resolved filesystem path is confinement-checked against the one permitted root (AD-9) before it is read. Both checks live in the filesystem adapter and run on every read, including reads whose paths were resolved during composition; no caller may opt out and no path bypasses them by arriving early.
 - **Rule (the one scoped exception, and it is narrow by construction):** AD-9 rule 2's suggestion scan enumerates directories *outside* every permitted root — the target's own ancestors are outside it by definition — so it is exempt from the confinement check, and from nothing else. The capability it is granted is one directory's child **directory names**: no file content, no recursion, no read of any kind. It lives in a single filesystem-adapter module, and that module is importable **only** by the suggestion scan, enforced by an importer test rather than by convention. Everything the scan learns becomes display text and is discarded (AD-9 rule 2), so nothing it names can reach a read. Confinement is therefore not weakened for reads: it is unchanged, and enumeration of names is scoped out of it explicitly instead of leaking out of it quietly.
 
-### AD-11 — Currency mismatch is surfaced on open
+### AD-11 — Currency mismatch is surfaced on open [WITHDRAWN 2026-09-04]
 
-- **Binds:** C3, C4, C5
-- **Prevents:** a document body newer than the index that listed it being read as if the index were current — a silent inconsistency in a tool whose job is catching inconsistency
-- **Rule:** on opening a document, the tool compares the file's current state against the snapshot's record of it. A mismatch is surfaced with an offer to refresh. It is never silently corrected and never silently ignored.
+**Withdrawn by user decision (Jamie, 2026-09-04), on the grounds that this tool is not heavyweight enough to need it: a reader who wants the current file reloads the page.** Story 2.2 owned it and is cancelled. Nothing replaces it, and no later story inherits it.
+
+- **Binds:** ~~C3, C4, C5~~ — none.
+- **Prevents:** ~~a document body newer than the index that listed it being read as if the index were current~~ — a divergence this architecture, as built, cannot produce. See the Rule.
+- **Rule (withdrawn):** ~~on opening a document, the tool compares the file's current state against the snapshot's record of it. A mismatch is surfaced with an offer to refresh.~~
+- **Why it was unbuildable, measured 2026-09-04 while planning Story 2.2.** The rule compares "the file's current state against the snapshot's record of it", and there is no divergence to find: `inventory()` runs **per request**, so the snapshot a response is produced from was built during that same request. Verified end to end against a running server — editing an artifact and reopening it returned 200 with the *new* text and no notice, correctly, because the snapshot already recorded the edit; deleting an artifact and reopening it returned **404**, because the re-scan removed the row along with the file. The record and the file are both "now" and cannot differ except within one request's own microseconds. The snapshot also records nothing to compare *with*: `ArtifactRow` carries no size, no mtime and no digest, and no code in `src/` reads a modification time at all.
+- **What this does not withdraw.** FR-47's currency *line* in the global header — "scanned N minutes ago" — is a different thing, belongs to UX-DR14 and Story 3.6, and stands. So does AD-3's guarantee that all content in one response comes from one snapshot. What is gone is only the per-document changed-since-scan comparison and its two strings.
 
 ### AD-12 — Ephemeral single-process envelope [ADOPTED]
 
@@ -164,8 +168,8 @@ Arrows are the permitted direction of dependency. `src/domain/` has no outgoing 
 ### AD-17 — A rendered page belongs to exactly one snapshot
 
 - **Binds:** C3, C4, C5
-- **Prevents:** a page straddling two snapshots when a refresh lands mid-render — the precise divergence AD-3 exists to stop — and a cached currency probe hiding a mismatch from the next reader
-- **Rule:** each snapshot carries an identity. Every response records the snapshot identity it was produced from, and all content within one response comes from that snapshot. The AD-11 currency probe is never cached: it is evaluated against the filesystem at the moment of open. A refresh during an open document does not mutate the snapshot in place; the next request observes the new identity.
+- **Prevents:** a page straddling two snapshots when a refresh lands mid-render — the precise divergence AD-3 exists to stop. (It no longer speaks to a cached currency probe: AD-11 is withdrawn — see the Amendment log, 2026-09-04.)
+- **Rule:** each snapshot carries an identity. Every response records the snapshot identity it was produced from, and all content within one response comes from that snapshot. A refresh during an open document does not mutate the snapshot in place; the next request observes the new identity. (The sentence exempting the AD-11 currency probe from caching is removed with AD-11 itself, 2026-09-04.)
 
 ### AD-18 — Document URLs are a fixed identity contract
 
@@ -258,8 +262,8 @@ bmad-dash/
 | C1 — Invocation and serving | `src/cli/`, `src/adapters/http/`; AD-9, AD-12 |
 | C2 — Project interpretation | `src/domain/` identification, `src/adapters/fs/`; AD-4, AD-7, AD-9, AD-10 |
 | C3 — Recent activity and core artifacts | `src/domain/` ordering, `src/adapters/git/`; AD-3, AD-5, AD-6, AD-8 |
-| C4 — Artifact viewers | `src/render/` per-type renderers; AD-2, AD-7, AD-11 |
-| C5 — Large-document navigation | `src/domain/` sectioning, `src/render/`; AD-2, AD-3, AD-11 |
+| C4 — Artifact viewers | `src/render/` per-type renderers; AD-2, AD-7 |
+| C5 — Large-document navigation | `src/domain/` sectioning, `src/render/`; AD-2, AD-3 |
 | C6 — Oversight surfacing | `src/domain/` over the snapshot; AD-8 |
 
 ## Deferred
@@ -295,6 +299,7 @@ auditable from this file alone.
 | 2026-09-03 | **Paradigm and layer table corrected to what was built:** the `src/ports/` ring was declared here and in the dependency diagram and was never created in any commit of Epic 1, so it is removed along with its three edges, and the paradigm line no longer claims ports and adapters. The pure-domain invariant it was meant to protect is unaffected and is mechanically enforced. | This log |
 | 2026-09-03 | **AD-9 rule 1 corrected:** it asserted that artifact roots are read from the project's own configuration, two rules above rule 3's note that FR-10 is deferred indefinitely — the AD contradicted itself. | This log |
 | 2026-09-03 | **`HTTP --> FS` granted, narrowly.** `src/adapters/http/server.ts` has imported `src/adapters/fs/paths.ts` since Story 1.5 while the table granted the HTTP adapter only "domain, render" and the diagram had no such edge — the epic's one unambiguous layering violation, and nothing constrained what this adapter imports. Granted rather than removed, because what crosses is a branded type and an unbrand with no I/O, and the alternative splits the path vocabulary from `canonical`, its only real operation. Now enforced as an exact pair. | This log |
+| 2026-09-04 | **AD-11 withdrawn entirely, and AD-17's clause about it removed.** AD-11 required a currency mismatch to be surfaced on open. Measured while planning Story 2.2, it had nothing to compare and no divergence to find: `inventory()` runs per request, so the snapshot a response comes from is built during that request. Verified end to end — an edited artifact reopens as 200 with the new text and no notice, and a deleted one reopens as 404 because the re-scan drops the row with the file. The snapshot also records no size, no mtime and no digest to compare against, and nothing in `src/` reads a modification time. Withdrawn by user decision (Jamie): the tool is not heavyweight enough to warrant it, and a reader who wants the current file reloads. Story 2.2 is cancelled, its two `EXPERIENCE.md` strings are withdrawn, and two capability rows stop binding AD-11. **Not withdrawn:** FR-47's header currency line, which is UX-DR14/Story 3.6 and a different mechanism. | This log |
 | 2026-09-04 | **AD-3's content cache withdrawn.** The rule required the rendering parse to be "cached for that snapshot's lifetime and discarded with it", and Story 2.1c existed to build it. Measured while planning that story: the snapshot identity is **not a valid key** — it is content-derived but bodies are deliberately kept off it, so editing a document does not move it and a cache keyed on it serves the previous render (verified end to end: body prose, first heading and frontmatter title all changed with the id unmoved; only a *structural* change moved it). The obvious repair, keying on a digest of the text, costs **as much as the parse itself** — measured at 0.8-1.1x across four real documents including the 8 MiB cap — so it buys nothing. What remains viable is a `stat`-identity key, which pre-empts the currency probe Story 2.2 owns. Retired by user decision (Jamie, 2026-09-04) on the grounds that this is a local developer tool where a brief load is acceptable: measured, the parse is 1.7 ms of an 11.2 ms request for a typical spec, and 31.6 ms of 41.1 ms for the largest document in this repository. Story 2.1c is cancelled, not deferred. `snapshotIdOf` keeps its other purpose -- AD-17's identity half, the `bmad-snapshot-id` header -- and is not orphaned by this. | This log |
 | 2026-09-03 | **AD-3's bounded-work rule downgraded from a claim to an intent.** It asserted that signal extraction does bounded work per file, "which is why a 24,000-word spec costs the same to scan as to skip". Measured while planning Story 2.1: identification levels 2 and 3 each read the whole file and split its full text, bounded only by `MAX_READ_BYTES`. Latent rather than visible — level 1 resolves most artifacts without opening them — so the fix is deferred by user decision and the rule now states the limit with the measurement instead of claiming the property. | This log |
 | 2026-09-03 | **Design Paradigm prose brought in line with the frontmatter:** the amendment earlier this day corrected the `paradigm:` field and the layer table but left this section declaring "Hexagonal (ports and adapters)" and "ports the domain defines" — so the document contradicted itself two ways in twenty lines, which is the defect that amendment existed to remove. The enforceability argument is kept and now names the two rules a test actually enforces. | This log |
