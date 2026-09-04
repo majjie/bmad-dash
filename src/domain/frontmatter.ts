@@ -395,3 +395,41 @@ export function readUnfenced(text: string): ScalarBlock {
   const from = opening !== undefined && opening.trimEnd() === '---' ? 1 : 0;
   return scan(lines, from);
 }
+
+/**
+ * `text` with its leading frontmatter block removed, or `text` unchanged.
+ *
+ * **Where a document's body starts, decided once.** Story 2.1b renders an
+ * artifact's markdown, and a rendered `---` fence produces an `<hr>` followed
+ * by the frontmatter's own keys as a setext heading — the block leaking into
+ * the reading surface as content. Finding the closing fence is the *same*
+ * question `readFrontmatter` already answers with `terminated`, so it is
+ * answered here, against this file's own `linesOf` and `FENCE`, rather than by
+ * a second line-splitter in the render layer that would be free to disagree
+ * about a BOM, about `\r\n`, or about whether `...` closes a block.
+ *
+ * The body it returns is rebuilt from `linesOf`, so `\r\n` comes back as `\n`.
+ * That is a normalization rather than a loss for the one consumer — a markdown
+ * parser treats the two identically — and it is stated because a caller that
+ * needed the original bytes would not get them from here.
+ *
+ * **This is not a third reader and not a step towards a YAML parser.** It
+ * interprets nothing: it reads `readFrontmatter`'s two flags and returns a
+ * slice of the text it was handed. A block that opened and never closed is
+ * returned whole, because a caller shown a truncated document would have no
+ * way to tell that from a document that simply began with `---`.
+ */
+export function bodyAfterFrontmatter(text: string): string {
+  const block = readFrontmatter(text);
+  if (!block.present || !block.terminated) return text;
+  const lines = linesOf(text);
+  // From 1, never from 0: line 0 is the opening fence, which `readFrontmatter`
+  // has already matched and which `FENCE` would match again.
+  for (let index = 1; index < lines.length; index += 1) {
+    if (FENCE.test((lines[index] ?? '').trimEnd())) return lines.slice(index + 1).join('\n');
+  }
+  // Unreachable: `terminated` is set by the same test over the same lines.
+  // Answered rather than asserted, because the honest answer to "the fence is
+  // not there" is the whole text, which is what an unterminated block gets.
+  return text;
+}

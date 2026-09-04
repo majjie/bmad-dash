@@ -318,7 +318,14 @@ function baseRules(): readonly string[] {
     ]),
 
     rule('h1', [typeRole('display'), declaration('margin', '0 0 var(--space-3)')]),
-    rule('h2, h3', [typeRole('title'), declaration('margin', '0 0 var(--space-2)')]),
+    // **Every heading below the surface's own takes `title`.** DESIGN.md gives
+    // eight roles and no more, so a fourth heading size would be a value
+    // invented here — and from Story 2.1b a rendered document reaches `h6`,
+    // because its own headings are demoted by one to leave the surface its
+    // single `h1`. The alternative was letting `h4` to `h6` fall to the
+    // browser's defaults, which are *smaller than body text* and would put a
+    // document's deepest headings below DESIGN.md's own content floor.
+    rule('h2, h3, h4, h5, h6', [typeRole('title'), declaration('margin', '0 0 var(--space-2)')]),
     rule('p', [typeRole('body'), declaration('margin', '0 0 var(--space-2)')]),
     rule('code, kbd, samp, pre', [typeRole('mono')]),
     // Underlined, not merely coloured. `primary` against `on-surface` is
@@ -550,6 +557,124 @@ function componentRules(): readonly string[] {
     // and which sits 0.04 above its contrast floor.
     rule('.artifact-note', [
       typeRole('body-dense'),
+      declaration('color', 'var(--color-on-surface-variant)'),
+      declaration('margin', '0'),
+    ]),
+
+    // -----------------------------------------------------------------------
+    // Story 2.1b: the reading surface
+    // -----------------------------------------------------------------------
+    //
+    // `DESIGN.md:255` — "reading surfaces break the dashboard grid: a rendered
+    // document uses a single column at `{spacing.reading-measure}`" — so this
+    // is a column beside the tile grid rather than a tile inside it, and it is
+    // the **one** place `{typography.prose}` is applied: DESIGN.md:233 says
+    // IBM Plex Serif "appears in exactly one place … the body of a rendered
+    // BMAD document". The contents rail that paragraph also names is Story
+    // 2.10's and is deliberately absent rather than approximated.
+    //
+    // Headings stay in the interface family. There is no serif heading role in
+    // the eight, and inventing one is exactly what this file may not do — so a
+    // document's headings take `title` from the base rule above, and the shift
+    // in family marks its *body*, which is what DESIGN.md's sentence says.
+    rule('.artifact-content', [
+      typeRole('prose'),
+      declaration('max-width', 'var(--space-reading-measure)'),
+      declaration('margin', 'var(--space-6) 0 0'),
+    ]),
+    // `p` needs its own rule and the rest do not: the base `p` rule declares a
+    // family, so inheritance from the container above loses to it. `li`,
+    // `blockquote`, `td` and `th` have no base rule and inherit as intended.
+    rule('.artifact-content p', [typeRole('prose'), declaration('margin', '0 0 var(--space-4)')]),
+    // Space *above* a heading and less below it, so a heading groups with what
+    // follows it rather than floating between two sections.
+    rule(
+      [
+        '.artifact-content h2',
+        '.artifact-content h3',
+        '.artifact-content h4',
+        '.artifact-content h5',
+        '.artifact-content h6',
+      ].join(',\n'),
+      [declaration('margin', 'var(--space-6) 0 var(--space-2)')],
+    ),
+    rule(['.artifact-content ul', '.artifact-content ol'].join(',\n'), [
+      declaration('margin', '0 0 var(--space-4)'),
+      declaration('padding-inline-start', 'var(--space-6)'),
+    ]),
+    // A code block and a non-markdown artifact get the same treatment, because
+    // they are the same thing to a reader: text to be read exactly as it is.
+    // Tonal, with no border — a tile's tone is its edge, and so is this one's.
+    //
+    // **It wraps rather than scrolling, and that pair is load-bearing.**
+    // Preformatted text does not wrap by default, so a long line makes the
+    // *page* scroll sideways — the WCAG 1.4.10 reflow failure `.project-path`
+    // and the grid's `minmax(0, …)` floor already guard against elsewhere. The
+    // obvious fix, `overflow-x: auto`, trades one conformance failure for
+    // another: a scroll container clips a focus ring drawn on a child at its
+    // edge, which is WCAG 2.4.11, and `test/render/components.test.ts` refuses
+    // every way of clipping for exactly that reason. `pre-wrap` keeps the
+    // newlines that make it preformatted while letting long lines fold, and
+    // `anywhere` handles the unbreakable token — a 200-character path or a
+    // minified line — that folding alone cannot.
+    rule(['.artifact-content pre', '.artifact-source'].join(',\n'), [
+      declaration('background', 'var(--color-surface-container-low)'),
+      declaration('border-radius', 'var(--radius-md)'),
+      declaration('padding', 'var(--space-3)'),
+      declaration('margin', '0 0 var(--space-4)'),
+      declaration('white-space', 'pre-wrap'),
+      declaration('overflow-wrap', 'anywhere'),
+    ]),
+    rule('.artifact-content blockquote', [
+      declaration('background', 'var(--color-surface-container-low)'),
+      declaration('border-radius', 'var(--radius-md)'),
+      declaration('padding', 'var(--space-3)'),
+      declaration('margin', '0 0 var(--space-4)'),
+    ]),
+    // A table folds into the column rather than scrolling out of it, on `pre`'s
+    // own reasoning one rule up: a wide table is the one thing in a BMAD
+    // document guaranteed to exceed the reading measure — every spec in this
+    // repository opens its I/O matrix as one — and a table cell is where a
+    // *link* most plausibly sits, so a scroll container here is the case WCAG
+    // 2.4.11 is actually about rather than a theoretical one.
+    //
+    // `overflow-wrap: anywhere` on the cells is what makes `width: 100%` hold:
+    // it drops each cell's min-content width to one character, so the auto
+    // layout can shrink the table to the column instead of being forced wider
+    // by the longest unbreakable string in it. `body-dense` rather than `prose`
+    // because a table is scanned, not read — the distinction DESIGN.md's own
+    // three floors are built on.
+    rule('.artifact-content table', [
+      declaration('width', '100%'),
+      declaration('border-collapse', 'collapse'),
+      declaration('margin', '0 0 var(--space-4)'),
+    ]),
+    rule(['.artifact-content th', '.artifact-content td'].join(',\n'), [
+      typeRole('body-dense'),
+      declaration('padding', 'var(--space-2) var(--space-3)'),
+      declaration('text-align', 'start'),
+      declaration('vertical-align', 'baseline'),
+      declaration('overflow-wrap', 'anywhere'),
+    ]),
+    // Tone, not rules between cells. A header row and alternating body rows are
+    // the two separations a table needs, and both are one elevation step —
+    // which is the whole vocabulary this system has for separation.
+    rule(
+      ['.artifact-content thead th', '.artifact-content tbody tr:nth-child(even)'].join(',\n'),
+      [declaration('background', 'var(--color-surface-container-low)')],
+    ),
+    // An image in a project's document is not fetched — `default-src 'none'`
+    // refuses it — so what this bounds is the alt text's box and any image a
+    // future story does serve. Relative, because a fixed width would be a
+    // literal and would break reflow at 320px.
+    rule('.artifact-content img', [declaration('max-width', '100%')]),
+    // `Empty file.` and the in-place failure. Both are the tool speaking rather
+    // than the document, so both leave the serif behind and take the interface
+    // body role, and both are secondary: they qualify the absent content rather
+    // than being it. Never `on-surface-faint`, which DESIGN.md reserves for an
+    // absent core artifact and which sits 0.04 above its contrast floor.
+    rule(['.artifact-empty', '.artifact-failure'].join(',\n'), [
+      typeRole('body'),
       declaration('color', 'var(--color-on-surface-variant)'),
       declaration('margin', '0'),
     ]),

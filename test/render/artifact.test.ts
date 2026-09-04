@@ -16,6 +16,12 @@
  *      and is not a row is not found, and a row whose file has vanished still
  *      is. That is the property `test/server.test.ts` then exercises end to
  *      end.
+ *   4. **It shows the artifact.** Story 2.1b's addition, and the fourth
+ *      contract: the body arrives as an argument and each of the matrix's five
+ *      outcomes — content, empty, unreadable, over-large and directory — has a
+ *      rendering that says which it is. `test/render/markdown.test.ts` owns
+ *      what a parser does with markdown; this file owns the dispatch and the
+ *      shell it lands in.
  */
 
 import test from 'node:test';
@@ -26,9 +32,14 @@ import { fileURLToPath } from 'node:url';
 
 import {
   ARTIFACT_SURFACE_TITLE,
+  EMPTY_BODY_SENTENCE,
   findArtifact,
   renderArtifact,
+  type ArtifactBody,
 } from '../../src/render/artifact.ts';
+import { RENDER_EMBEDDED_HTML } from '../../src/render/markdown.ts';
+import { MAX_READ_BYTES } from '../../src/adapters/fs/read.ts';
+import { SIGNAL_LABELS } from '../../src/domain/signal.ts';
 import { UNPLACED_TILE_LABEL, type InventoryView } from '../../src/render/inventory.ts';
 import { FAMILY_LABELS } from '../../src/domain/identity.ts';
 import { PAGE_TITLE, renderPage } from '../../src/render/page.ts';
@@ -53,8 +64,11 @@ import {
   HOSTILE_NAME,
   HOSTILE_PATH,
   HOSTILE_ROW,
+  NOT_FOUND_ROW,
+  READABLE_BODY,
   UNIDENTIFIED_ROW,
   UNINTERPRETED_ROW,
+  UNREADABLE_ROW,
 } from '../support/inventory.ts';
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
@@ -74,11 +88,18 @@ const EXPERIENCE_PATH = join(
  */
 const PROJECT_ROOT = canonical('/tmp/bmad-dash-test-project');
 
-/** The page for one path in one view, or a failure naming what was missing. */
-function pageFor(view: InventoryView, path: string): string {
+/**
+ * The page for one path in one view, or a failure naming what was missing.
+ *
+ * The body defaults to `READABLE_BODY`, so a test about the shell states the
+ * shell and nothing else — and the shared fixture is what keeps a `<script>` or
+ * an `https://` URL out of the bodies the "serves no script and fetches
+ * nothing" assertions run over. A test about content passes its own.
+ */
+function pageFor(view: InventoryView, path: string, body: ArtifactBody = READABLE_BODY): string {
   const found = findArtifact(view, path);
   assert.ok(found !== undefined, `${path} is not a row in this view`);
-  return renderArtifact(PROJECT_ROOT, found);
+  return renderArtifact(PROJECT_ROOT, found, body);
 }
 
 // ---------------------------------------------------------------------------
@@ -298,13 +319,29 @@ test('the surface serves no script and fetches nothing', () => {
   assert.doesNotMatch(page, /\sstyle=/);
 });
 
-test('no artifact content is rendered: this story serves the shell only', () => {
-  // Story 2.1b's boundary, asserted rather than promised. The one artifact this
-  // view records as readable carries no bytes on the view at all, so the page
-  // cannot show any — and a later story that starts rendering content will fail
-  // here and have to say so.
-  const page = pageFor(FULL_INVENTORY_VIEW, CERTAIN_ROW.path);
-  assert.doesNotMatch(page, /<pre\b|<article\b|<blockquote\b/i);
+test('the shell writes only the elements it owns, and the content region is one of them', () => {
+  // **This test said the opposite until Story 2.1b, and it said so on purpose.**
+  // Its previous form was `no artifact content is rendered: this story serves
+  // the shell only`, with a tag allowlist that rejected `<pre>`, `<article>` and
+  // `<blockquote>` and a comment predicting that "a later story that starts
+  // rendering content will fail here and have to say so". This is that story and
+  // this is it saying so: the old claim was that the surface *cannot* show
+  // content because no bytes reach it, and bytes now reach it as
+  // `renderArtifact`'s third argument, so the claim is not weakened — it is
+  // false.
+  //
+  // What survives is the half that is still worth enforcing, and it is why the
+  // allowlist is kept rather than deleted. The shell must not grow elements of
+  // its own without a decision: the surface's markup outside the content region
+  // is a fixed set, and `<article class="artifact-content">` is the *one*
+  // addition, which is what makes "the shell writes no element a document
+  // viewer would need" still true of everything but the document itself.
+  //
+  // The parser's own vocabulary is deliberately not listed here — it is not the
+  // shell's, it is the document's, and pinning it would make this test fail
+  // whenever a fixture used a new markdown construct. `test/render/markdown.test.ts`
+  // is where what the parser emits is asserted.
+  const page = pageFor(FULL_INVENTORY_VIEW, CERTAIN_ROW.path, { ok: true, text: 'plain text' });
   const tags = new Set(
     [...page.matchAll(/<\/?([a-zA-Z][a-zA-Z0-9-]*)/g)].map((match) => match[1] ?? ''),
   );
@@ -314,17 +351,34 @@ test('no artifact content is rendered: this story serves the shell only', () => 
         ![
           'html', 'head', 'meta', 'title', 'style', 'body', 'header', 'p', 'code', 'a',
           'main', 'h1', 'div', 'section', 'h2', 'span',
+          // Story 2.1b: the reading surface, and the only element the shell
+          // gained. `DESIGN.md:255` puts a rendered document in its own column
+          // rather than in a tile, so it is a sibling of the tile grid.
+          'article',
         ].includes(tag),
     ),
     [],
     'the shell writes no element a document viewer would need',
   );
+  // And the region is there, with the class the stylesheet's measure hangs on.
+  assert.ok(page.includes('<article class="artifact-content">'));
 });
 
-test('the page is a function of the view, so two snapshots do not share one page', () => {
-  // The identity a response carries is the *view's*, and the view is what this
-  // page is rendered from — asserted here so the adapter's header cannot be
-  // reporting a snapshot the page did not come from.
+test('the page is a function of the view and the body, and of nothing else', () => {
+  // **Widened by Story 2.1b, deliberately.** This test was `the page is a
+  // function of the view`, and that claim is no longer the whole truth: the
+  // body is a second input, so two pages from one view can differ. The reason
+  // the old claim cannot simply be kept is on this story's own record — text on
+  // `ArtifactRow` would have fed every artifact's bytes into `snapshotIdOf`,
+  // which digests the whole view, and would have made a page load read every
+  // file in the project instead of one.
+  //
+  // What the old test was *for* is preserved below and is still exact: with the
+  // body held fixed, the page is a function of the view's rows, so the identity
+  // the adapter reports cannot be a snapshot the page did not come from. The
+  // second half is new and is the other direction — with the view held fixed,
+  // the body changes the page, which is what makes the argument load-bearing
+  // rather than accepted and ignored.
   const other: InventoryView = {
     ...FULL_INVENTORY_VIEW,
     snapshotId: snapshotIdOf(PROJECT_ROOT, {
@@ -340,4 +394,182 @@ test('the page is a function of the view, so two snapshots do not share one page
   // scan, not the representation, which is why this server carries it as a
   // header rather than as an `ETag`.
   assert.equal(pageFor(other, CERTAIN_ROW.path), pageFor(FULL_INVENTORY_VIEW, CERTAIN_ROW.path));
+  // And the body is the second input, not a decoration: the same view and the
+  // same row with a different body is a different page.
+  assert.notEqual(
+    pageFor(FULL_INVENTORY_VIEW, CERTAIN_ROW.path, { ok: true, text: '# Something else\n' }),
+    pageFor(FULL_INVENTORY_VIEW, CERTAIN_ROW.path),
+  );
+});
+
+// ---------------------------------------------------------------------------
+// The content: Story 2.1b's five outcomes, one per matrix row
+// ---------------------------------------------------------------------------
+
+/** The content region alone, so an assertion cannot pass on the shell's markup. */
+function contentOf(page: string): string {
+  const region = /<article class="artifact-content">([\s\S]*?)<\/article>/.exec(page);
+  assert.ok(region !== null, 'the page has no content region');
+  return region[1] ?? '';
+}
+
+test('a readable markdown artifact is in the page as server-rendered HTML', () => {
+  const page = pageFor(FULL_INVENTORY_VIEW, CERTAIN_ROW.path, {
+    ok: true,
+    text: '# Title\n\nA paragraph with *emphasis*.\n\n- one\n- two\n',
+  });
+  const content = contentOf(page);
+  assert.match(content, /<p>A paragraph with <em>emphasis<\/em>\.<\/p>/);
+  assert.match(content, /<li>one<\/li>/);
+  // The document's own heading is **not** a second `h1`: `EXPERIENCE.md:224`
+  // gives the surface one and it names the surface, so the document's levels
+  // are demoted by one. Asserted over the whole page, because the failure this
+  // catches is two `h1`s rather than a wrong tag in the region.
+  assert.equal((page.match(/<h1>/g) ?? []).length, 1, 'one h1 per surface, still');
+  assert.match(content, /<h2>Title<\/h2>/);
+  // No script and no fetch on the way in either: this is the same rule the
+  // shell is held to, asked again now that the region carries project bytes.
+  assert.doesNotMatch(page, /<script\b/i);
+  assert.doesNotMatch(page, /\sstyle=/);
+});
+
+test('an artifact of zero bytes says so, and nothing stands in for it', () => {
+  for (const text of ['', '   ', '\n\n\t\n']) {
+    const content = contentOf(pageFor(FULL_INVENTORY_VIEW, CERTAIN_ROW.path, { ok: true, text }));
+    assert.equal(
+      content.trim(),
+      `<p class="artifact-empty">${EMPTY_BODY_SENTENCE}</p>`,
+      `${JSON.stringify(text)} must read exactly "${EMPTY_BODY_SENTENCE}"`,
+    );
+  }
+  // Verbatim, and pinned: the sentence is the fact the reader acts on, so a
+  // reworded constant is a change to state rather than a rename.
+  assert.equal(EMPTY_BODY_SENTENCE, 'Empty file.');
+});
+
+test('bytes that are not text render in place, naming the state and the decode stage', () => {
+  const page = pageFor(FULL_INVENTORY_VIEW, UNREADABLE_ROW.path, {
+    ok: false,
+    state: 'unreadable',
+    stage: 'decode',
+    reason: 'not valid UTF-8 text',
+  });
+  const content = contentOf(page);
+  assert.match(content, /class="artifact-failure"/);
+  assert.ok(content.includes(SIGNAL_LABELS.unreadable), 'the state word, from the one table');
+  assert.ok(content.includes('<code class="artifact-stage">decode</code>'), 'and the stage');
+  assert.ok(content.includes('not valid UTF-8 text'), 'and what the reader can act on');
+  // **In place, never fatal to the page.** The shell, the path and the row's own
+  // facts all still render — AD-7's whole point.
+  assert.ok(page.startsWith('<!doctype html>'));
+  assert.ok(page.includes(`<h1>${ARTIFACT_SURFACE_TITLE}</h1>`));
+  assert.ok(page.includes(`<code class="artifact-path">${UNREADABLE_ROW.path}</code>`));
+  assert.ok(page.includes('Content: Unreadable'), "the inventory row's own signal is untouched");
+});
+
+test('an over-large artifact names the size and the limit, at the examine stage', () => {
+  const size = MAX_READ_BYTES + 1;
+  const content = contentOf(
+    pageFor(FULL_INVENTORY_VIEW, CERTAIN_ROW.path, {
+      ok: false,
+      state: 'unreadable',
+      stage: 'examine',
+      reason: `file is ${String(size)} bytes, over the ${String(MAX_READ_BYTES)}-byte read limit`,
+    }),
+  );
+  assert.ok(content.includes('<code class="artifact-stage">examine</code>'));
+  assert.ok(content.includes(String(size)), 'the size it actually is');
+  assert.ok(content.includes(String(MAX_READ_BYTES)), 'and the limit it is over');
+});
+
+test('a row whose file is gone since the scan renders as absent, at the resolve stage', () => {
+  const content = contentOf(
+    pageFor(FULL_INVENTORY_VIEW, NOT_FOUND_ROW.path, {
+      ok: false,
+      state: 'absent',
+      stage: 'resolve',
+      reason: "ENOENT: no such file or directory, stat '/tmp/x/gone.md'",
+    }),
+  );
+  // `Not found`, not `Unreadable`: one physical fact with one answer, and the
+  // same word the walk itself would have reported.
+  assert.ok(content.includes(SIGNAL_LABELS.absent));
+  assert.ok(!content.includes(SIGNAL_LABELS.unreadable));
+  assert.ok(content.includes('<code class="artifact-stage">resolve</code>'));
+});
+
+test('a directory artifact has no body, and the shell says so rather than failing', () => {
+  // A run folder and a sharded-document row are both directories, and
+  // `ConfinedReader.readText` refuses anything that is not a regular file
+  // *before* opening it — so this is the value it actually returns, not an
+  // invented shape. The fixture is the real one: `DELIBERATE_RUN_ROW`.
+  const page = pageFor(FULL_INVENTORY_VIEW, DELIBERATE_RUN_ROW.path, {
+    ok: false,
+    state: 'unreadable',
+    stage: 'examine',
+    reason: 'not a regular file (directory)',
+  });
+  const content = contentOf(page);
+  assert.ok(content.includes('not a regular file (directory)'));
+  assert.ok(content.includes('<code class="artifact-stage">examine</code>'));
+  // And the run facts a reader opens a run folder for are still there.
+  assert.ok(page.includes(RUN_MAY_HOLD_SEVERAL), "FR-71's disclosure survives the empty body");
+});
+
+test('a readable non-markdown artifact is preformatted text, not parsed', () => {
+  // A `.yaml` through a markdown parser is not rendered, it is mangled: `#` is a
+  // comment there and a heading here, and two-space indentation is structure
+  // there and a continuation here.
+  const yaml = '# a comment\nkey: value\nnested:\n  - one\n  - two\n';
+  const content = contentOf(
+    pageFor(FULL_INVENTORY_VIEW, UNINTERPRETED_ROW.path, {
+      ok: true,
+      text: yaml,
+    }),
+  );
+  assert.match(content, /^\s*<pre class="artifact-source">/);
+  assert.ok(content.includes('key: value'), 'the text is there as it was written');
+  assert.doesNotMatch(content, /<h[1-6]>/, 'and no heading was invented from a comment');
+  assert.doesNotMatch(content, /<li>/, 'and no list was invented from an indented sequence');
+});
+
+test('a non-markdown artifact carrying markup creates no element', () => {
+  // The preformatted path escapes rather than trusting: it is the branch the
+  // parser never sees, so `./markdown.ts`'s switch has no bearing on it and the
+  // escaping has to be its own.
+  const content = contentOf(
+    pageFor(FULL_INVENTORY_VIEW, UNINTERPRETED_ROW.path, {
+      ok: true,
+      text: '<script>alert(1)</script>',
+    }),
+  );
+  assert.ok(content.includes('&lt;script&gt;'), 'shown as the text it is');
+  assert.doesNotMatch(content, /<script\b/i, 'and no element is created by it');
+});
+
+test('embedded markup in a document follows the constant, on this surface too', () => {
+  // The dispatch honours `./markdown.ts`'s default rather than deciding for
+  // itself: the surface has no second copy of the switch, which is what makes
+  // the constant the one place it lives.
+  const content = contentOf(
+    pageFor(FULL_INVENTORY_VIEW, CERTAIN_ROW.path, { ok: true, text: 'a <b>bold</b> word\n' }),
+  );
+  if (RENDER_EMBEDDED_HTML) {
+    assert.ok(content.includes('<b>bold</b>'), 'the constant is on, so the element is created');
+  } else {
+    assert.ok(content.includes('&lt;b&gt;bold&lt;/b&gt;'), 'the constant is off, so it is text');
+    assert.doesNotMatch(content, /<b>/);
+  }
+});
+
+test('a document that cannot be parsed renders in place, at the parse stage', () => {
+  // AD-7 over the parser as well as over the reader: a document with one
+  // pathological corner costs the reader that corner, not the page. The input
+  // exhausts the parser's own recursion, which is the only way to reach the
+  // failure without stubbing the parser out and testing the stub.
+  const content = contentOf(
+    pageFor(FULL_INVENTORY_VIEW, CERTAIN_ROW.path, { ok: true, text: '> '.repeat(20_000) + 'x' }),
+  );
+  assert.match(content, /class="artifact-failure"/);
+  assert.ok(content.includes('<code class="artifact-stage">parse</code>'));
 });

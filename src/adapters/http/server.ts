@@ -38,6 +38,15 @@
  * decided, the status and the headers. Every route inherits the `Host` check
  * and the 405-with-`Allow` gate, because both happen before any path is looked
  * at.
+ *
+ * **Story 2.1b adds a second supplier and the hardening headers, and no third
+ * job.** The body supplier is held and called exactly as the inventory supplier
+ * is — once, for the row that actually resolved — and its result is handed to
+ * `renderArtifact` unchanged: this adapter opens no file and does not decide
+ * what an unreadable one looks like. `HARDENING_HEADERS` goes on **every**
+ * response, refusals included, because a 403, a 404 and a 405 are all responses
+ * a browser acts on and a Content-Security-Policy that covers only the happy
+ * path is a policy with a hole the shape of an error page.
  */
 
 import {
@@ -49,7 +58,7 @@ import {
 import type { AddressInfo } from 'node:net';
 
 import { renderPage } from '../../render/page.ts';
-import { findArtifact, renderArtifact } from '../../render/artifact.ts';
+import { findArtifact, renderArtifact, type ArtifactBody } from '../../render/artifact.ts';
 import { assertProjectRoot } from '../../render/chrome.ts';
 import type { InventoryView } from '../../render/inventory.ts';
 import { errorCode } from '../../domain/thrown.ts';
@@ -120,6 +129,48 @@ const SCHEME_DEFAULT_PORT = 80;
 const NOT_FOUND_BODY = 'Not found.\n';
 
 /**
+ * The headers every response carries, whatever it is answering.
+ *
+ * **Why they are in this story and not the next one.** Until now the page was
+ * safe *structurally*: `src/render/html.ts`'s `markup` escapes every
+ * interpolated value and `TileContent.html` refuses a raw string, so no
+ * project byte could become an element. Rendering a document ends that
+ * guarantee by design (see `src/render/markdown.ts`), and shipping the markup
+ * in one story with the defence in the next opens exactly the window a defence
+ * exists to close.
+ *
+ * **What the policy permits, and why each clause is spelled out.**
+ * `default-src 'none'` denies everything that falls back to it — script, image,
+ * font, frame, connect, media — so an `<img src>` or a `<script src>` that
+ * arrived out of a project's own markdown fetches nothing, and a
+ * `javascript:` href from a markdown link is refused as a script source. The
+ * page's one need is its inlined `<style>`, which is why `style-src` is the
+ * single allowance; there is no `'unsafe-inline'` for script and no `script-src`
+ * at all, so the `default-src` denial stands for it. `base-uri`, `form-action`
+ * and `frame-ancestors` are listed because **none of them falls back to
+ * `default-src`**: without them an injected `<base href>` could re-point every
+ * relative URL on the page, a `<form>` could post anywhere, and the page could
+ * be framed by anything the browser is also showing.
+ *
+ * `nosniff` stops a browser second-guessing `content-type` — the plain-text
+ * refusals matter here as much as the HTML — and `no-referrer` keeps a local
+ * absolute path out of a `Referer` on any navigation off the page.
+ *
+ * **What this is and is not worth.** The suite has no browser, so it can assert
+ * that the header is present and exactly right and it can never assert that a
+ * browser honours it. This is therefore defence-in-depth of unverifiable
+ * efficacy, and it must not be allowed to stand in for a test of behaviour —
+ * which is why `RENDER_EMBEDDED_HTML` exists and is the control that *is*
+ * tested, in both positions.
+ */
+export const HARDENING_HEADERS: Readonly<Record<string, string>> = Object.freeze({
+  'content-security-policy':
+    "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
+  'x-content-type-options': 'nosniff',
+  'referrer-policy': 'no-referrer',
+});
+
+/**
  * The headers on any response carrying a rendered page from one snapshot.
  *
  * Stated once, on `NOT_FOUND_BODY`'s own reasoning one constant up: from Story
@@ -138,6 +189,7 @@ const NOT_FOUND_BODY = 'Not found.\n';
  */
 function pageHeaders(view: InventoryView): Readonly<Record<string, string>> {
   return {
+    ...HARDENING_HEADERS,
     'content-type': 'text/html; charset=utf-8',
     'cache-control': 'no-store',
     [SNAPSHOT_ID_HEADER]: view.snapshotId,
@@ -202,6 +254,27 @@ export interface StartServerOptions {
    * `CanonicalPath` and `WalkEntry`. The projection is the composition root's.
    */
   readonly inventory: () => InventoryView;
+  /**
+   * One artifact's content, read on demand by the composition root.
+   *
+   * **Required**, on `inventory`'s own reasoning one field up: from Story 2.1b
+   * the artifact surface *is* the artifact's content, so a server without a way
+   * to get one cannot render that surface — and making it optional would mean
+   * this adapter deciding what an absent body looks like, which is composing.
+   *
+   * **Called once per artifact page, for the row that actually resolved.** Not
+   * for `/`, not for a 404, and never for a path a request spelled: the argument
+   * is `found.row.path`, a key out of the snapshot's own rows, so the confined
+   * reader is only ever pointed at something the walk already reported. That is
+   * what keeps "exactly one file is read per artifact page" true, and it is why
+   * the call sits *after* `findArtifact` rather than before it.
+   *
+   * It answers with a value rather than throwing — AD-7 — so an unreadable, an
+   * over-large, a vanished and a directory artifact all render in place. A throw
+   * would still be caught by the surrounding `try` and answered as a 500, on the
+   * same terms as a throw from `inventory`.
+   */
+  readonly body: (path: string) => ArtifactBody;
   /**
    * Preferred port. `0` — the default — asks the OS for a free one. A preferred
    * port that cannot be bound falls back to `0`, so the port reported is always
@@ -290,6 +363,10 @@ export async function startServer(options: StartServerOptions): Promise<ServerHa
   // and does not know how one is built. AD-3 puts one immutable snapshot behind
   // each page load, so this is invoked per request rather than captured here.
   const inventory = options.inventory;
+  // Held and called, never inspected, exactly as `inventory` is. This adapter
+  // does not know that a body comes off a filesystem, only that asking for one
+  // yields a value it hands on.
+  const body = options.body;
 
   // Before the bind, not at request time. A root that cannot be rendered must
   // stop the command, not throw inside a request handler where the rejection
@@ -334,7 +411,7 @@ export async function startServer(options: StartServerOptions): Promise<ServerHa
     // A client that disappears mid-exchange must not take the process with it.
     request.on('error', () => {});
     response.on('error', () => {});
-    handleRequest(request, response, bound, projectRoot, inventory, onError);
+    handleRequest(request, response, bound, projectRoot, inventory, body, onError);
   });
 
   const adopt = (info: BoundAddress): void => {
@@ -458,6 +535,7 @@ function handleRequest(
   bound: BoundAddress | null,
   projectRoot: CanonicalPath,
   inventory: () => InventoryView,
+  body: (path: string) => ArtifactBody,
   onError: ((error: Error) => void) | undefined,
 ): void {
   if (bound === null) {
@@ -571,7 +649,10 @@ function handleRequest(
         respondText(response, 404, NOT_FOUND_BODY);
         return;
       }
-      document = renderArtifact(toPlatform(projectRoot), found);
+      // Inside the same `try`, and after the lookup: the supplier is called
+      // for a key the snapshot produced, once, and a throw from it is the same
+      // failure to a reader as a throw from the render — the page did not come.
+      document = renderArtifact(toPlatform(projectRoot), found, body(found.row.path));
       response.writeHead(200, pageHeaders(view));
     } catch (error: unknown) {
       onError?.(error instanceof Error ? error : new Error(String(error)));
@@ -585,8 +666,19 @@ function handleRequest(
   respondText(response, 404, NOT_FOUND_BODY);
 }
 
+/**
+ * A plain-text answer: the 403, the 404, the 405, the 500 and the 503.
+ *
+ * It carries `HARDENING_HEADERS` too, and that is the point of the constant
+ * rather than an inline block per branch. A refusal is a response a browser
+ * renders, so a policy that covered only the 200 would leave every error page
+ * outside it — and `nosniff` is arguably more load-bearing here than on the
+ * page, since this is where a browser is most tempted to sniff a `text/plain`
+ * body into something it can display.
+ */
 function respondText(response: ServerResponse, status: number, body: string): void {
   response.writeHead(status, {
+    ...HARDENING_HEADERS,
     'content-type': 'text/plain; charset=utf-8',
     'cache-control': 'no-store',
   });

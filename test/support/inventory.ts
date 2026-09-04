@@ -14,6 +14,7 @@
  */
 
 import { digestOf } from '../../src/domain/snapshot.ts';
+import type { ArtifactBody } from '../../src/render/artifact.ts';
 import type { ArtifactRow, FamilyGroup, InventoryView } from '../../src/render/inventory.ts';
 
 /** A filename a repository can legally contain, and which is markup if unescaped. */
@@ -221,3 +222,28 @@ export const FULL_INVENTORY_VIEW: InventoryView = {
     },
   ] satisfies readonly FamilyGroup[],
 };
+
+// ---------------------------------------------------------------------------
+// Bodies: Story 2.1b's third argument
+// ---------------------------------------------------------------------------
+
+/**
+ * The body a test that is not about content hands to the artifact surface.
+ *
+ * Shared for the reason the view above is: `renderArtifact` and
+ * `StartServerOptions` both require one from this story on, so a dozen files
+ * would otherwise each invent a literal, and the one that happened to carry a
+ * `<script>` or an `https://` URL would quietly break the surface's own
+ * "serves no script and fetches nothing" assertions.
+ *
+ * Deliberately short, deliberately markdown, and deliberately carrying no URL,
+ * no embedded markup and no second `h1`: what it exercises is that a body
+ * *arrives*, not what a parser does with one. `test/render/markdown.test.ts`
+ * and `test/render/artifact.test.ts` own the shapes.
+ */
+export const FIXTURE_BODY_TEXT = '# Fixture\n\nOne short paragraph.\n';
+
+export const READABLE_BODY: ArtifactBody = { ok: true, text: FIXTURE_BODY_TEXT };
+
+/** A supplier answering with `READABLE_BODY` for every path it is asked about. */
+export const readableBody = (): ArtifactBody => READABLE_BODY;

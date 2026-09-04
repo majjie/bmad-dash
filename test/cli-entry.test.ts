@@ -42,6 +42,7 @@ interface Manifest {
   readonly bin?: Record<string, string>;
   readonly files?: readonly string[];
   readonly dependencies?: Record<string, string>;
+  readonly devDependencies?: Record<string, string>;
   readonly scripts?: Record<string, string>;
 }
 
@@ -592,4 +593,125 @@ test('a symlinked target is served as its real path, not as the link', async (t)
     `the Target line does not name the real root: ${JSON.stringify(served.stderr)}`,
   );
   assert.ok(!served.stderr.includes(link), `the Target line shows the link path ${link}`);
+});
+
+// ---------------------------------------------------------------------------
+// Story 2.1b: the bundled parser
+// ---------------------------------------------------------------------------
+
+/**
+ * The one third-party package this tool's source imports.
+ *
+ * Named once, because three assertions below are about the same package and a
+ * literal in each of them is three copies of one belief.
+ */
+const BUNDLED_PARSER = 'marked';
+
+/** Where its licence ships, and the entry `files` must carry for it to. */
+const THIRD_PARTY_LICENCE = 'LICENSE-THIRD-PARTY';
+
+test('the markdown parser is a devDependency and never a runtime dependency', async () => {
+  // The distinction is the whole architecture of the decision: the parser is
+  // *compiled into* `dist/` by the build, so an install of this tool installs
+  // nothing and `npm ls` on a consumer's machine shows no tree. A runtime
+  // dependency would be third-party code the read-only gate has never scanned
+  // arriving on a user's machine on its own terms — and `production
+  // dependencies are empty` above is what refuses that, of which this is the
+  // positive half.
+  assert.ok(
+    Object.hasOwn(MANIFEST.devDependencies ?? {}, BUNDLED_PARSER),
+    `${BUNDLED_PARSER} must be declared as a devDependency`,
+  );
+  assert.ok(
+    !Object.hasOwn(MANIFEST.dependencies ?? {}, BUNDLED_PARSER),
+    `${BUNDLED_PARSER} must not be a runtime dependency`,
+  );
+
+  // And it really is in the shipped bundle, which is what makes the licence
+  // obligation below real rather than paperwork. Asserted by a string out of
+  // the parser's own *code* and not by its name or its licence header: the name
+  // appears in this repository's own comments, and esbuild strips comments — so
+  // both would pass over a build that had stopped inlining it. This one is the
+  // sentence the parser appends to every error it raises, which survives
+  // bundling because it is a string literal.
+  const bundle = await readFile(join(REPO_ROOT, BIN_RELATIVE), 'utf8');
+  assert.ok(
+    bundle.includes('github.com/markedjs/marked'),
+    'the parser is a devDependency but is not in the bundle; the build stopped inlining it',
+  );
+});
+
+test('the third-party licence exists, ships, and names the version that is bundled', async () => {
+  // `files` is a whitelist: a licence in the repository that is not listed is a
+  // licence the published tarball does not carry, which is the obligation
+  // unmet in the only place it counts. The existence half is already enforced
+  // for every literal entry by `the files whitelist publishes the directory
+  // holding the bin`; what is here is that this *particular* entry is listed at
+  // all, and that its text is about the package actually bundled.
+  assert.ok(
+    (MANIFEST.files ?? []).includes(THIRD_PARTY_LICENCE),
+    `files must publish ${THIRD_PARTY_LICENCE}, or the bundle ships without its licence`,
+  );
+  const licence = await readFile(join(REPO_ROOT, THIRD_PARTY_LICENCE), 'utf8');
+
+  // **The version bundled, not the version asked for.** A range is not a
+  // version: `^18.0.11` is satisfied by 18.1.0, and it is the *installed* tree
+  // that esbuild inlines, so deriving the expected string from `package.json`
+  // would let the licence name a release the bundle does not contain. The
+  // manifest is still checked -- against the same installed version -- so a
+  // lockfile that drifted out of its own declared range is also a failure.
+  const installed = JSON.parse(
+    await readFile(join(REPO_ROOT, 'node_modules', BUNDLED_PARSER, 'package.json'), 'utf8'),
+  ) as { readonly version?: string };
+  const version = installed.version ?? '';
+  assert.ok(version !== '', `could not read a version out of the installed ${BUNDLED_PARSER}`);
+  assert.ok(
+    licence.includes(`${BUNDLED_PARSER} ${version}`),
+    `${THIRD_PARTY_LICENCE} does not name ${BUNDLED_PARSER} ${version}; it has drifted from what is installed`,
+  );
+  const declared = (MANIFEST.devDependencies ?? {})[BUNDLED_PARSER] ?? '';
+  assert.ok(
+    declared.replace(/^[^0-9]*/, '') !== '' && version.startsWith(declared.replace(/^[^0-9]*/, '').split('.')[0] ?? ''),
+    `package.json asks for ${JSON.stringify(declared)} but ${version} is installed`,
+  );
+  // The MIT grant itself, not merely a heading: a licence file that named the
+  // package and carried no terms would satisfy every check above.
+  assert.ok(licence.includes('Permission is hereby granted'), 'the licence text is not there');
+  assert.ok(licence.includes('WITHOUT WARRANTY OF ANY KIND'), 'nor is its disclaimer');
+});
+
+test('bundling the parser did not put build metadata in the shipped output', async () => {
+  // The same four strings as `the published bundle carries no build metadata`,
+  // asked again of the *dependency* rather than of our own manifest. A parser
+  // whose own source mentioned `devDependencies`, `esbuild`, `prepublishOnly`
+  // or `typescript` would leak them into `dist/` through no fault of ours —
+  // which is why the four were checked against the candidate before it was
+  // chosen rather than after it was shipped.
+  const parser = await readFile(
+    join(REPO_ROOT, 'node_modules', BUNDLED_PARSER, 'lib', 'marked.esm.js'),
+    'utf8',
+  );
+  for (const leaked of ['devDependencies', 'esbuild', 'prepublishOnly', 'typescript']) {
+    assert.ok(!parser.includes(leaked), `the parser's own source carries ${leaked}`);
+  }
+  // And it opens no socket and reads no file, which is NFR-11's code-discipline
+  // half done by measurement. Advisory rather than a gate — see
+  // `deferred-work.md` — but the parser is the first third-party code in the
+  // bundle, so the measurement is worth having as a standing check rather than
+  // as a note about one afternoon.
+  for (const reach of ['node:http', 'node:https', 'node:net', 'node:fs', 'node:child_process']) {
+    assert.ok(!parser.includes(reach), `the parser reaches ${reach}`);
+  }
+  // **Every `node:` specifier, not only the five above.** The five name the
+  // reaches NFR-11 is about; this catches the sixth nobody thought of, and it
+  // is what makes "carries no `node:` specifier" -- claimed in `deferred-work.md`
+  // and in this story's spec -- a checked statement rather than a description
+  // of one afternoon's grep. Measured absent 2026-09-04.
+  assert.doesNotMatch(parser, /\bnode:/, 'the parser carries a node: specifier');
+  // And the two reaches a pure-ESM parser has no business having: a CommonJS
+  // `require` (whose absence is why no `--banner:js` shim was needed) and any
+  // read of the host process. Both are asserted because both are claimed.
+  assert.doesNotMatch(parser, /\brequire\s*\(/, 'the parser calls require(');
+  assert.doesNotMatch(parser, /\bprocess\b/, 'the parser reads the host process');
+  assert.doesNotMatch(parser, /\bfetch\s*\(/, 'the parser makes an outbound request');
 });

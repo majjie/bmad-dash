@@ -15,7 +15,7 @@ import { request as httpRequest, createServer, Agent } from 'node:http';
 import { connect } from 'node:net';
 import type { AddressInfo } from 'node:net';
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, writeFile, symlink } from 'node:fs/promises';
 import { tmpdir, networkInterfaces } from 'node:os';
 import { join, dirname, resolve as resolvePath, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -23,6 +23,7 @@ import { fileURLToPath } from 'node:url';
 import {
   startServer,
   isExpectedHost,
+  HARDENING_HEADERS,
   LOOPBACK_ADDRESS,
   MAX_PORT,
   SNAPSHOT_ID_HEADER,
@@ -38,7 +39,7 @@ import { ConfinedReader } from '../src/adapters/fs/read.ts';
 import { EMPTY_INVENTORY, emptyInventory } from './support/cli.ts';
 import type { InventoryView } from '../src/render/inventory.ts';
 import { artifactUrl, sectionUrl } from '../src/domain/url.ts';
-import { ARTIFACT_SURFACE_TITLE } from '../src/render/artifact.ts';
+import { ARTIFACT_SURFACE_TITLE, type ArtifactBody } from '../src/render/artifact.ts';
 import {
   CERTAIN_ROW,
   DELIBERATE_RUN_ROW,
@@ -46,6 +47,8 @@ import {
   HOSTILE_PATH,
   SECTION_NAMED_ROW,
   UNIDENTIFIED_ROW,
+  UNREADABLE_ROW,
+  readableBody,
 } from './support/inventory.ts';
 
 /**
@@ -426,7 +429,7 @@ function deadline(ms: number, message: string): { promise: Promise<never>; cance
 }
 
 test('the server serves a page on the address it reports', async (t) => {
-  const server = await startServer({ projectRoot: PROJECT_ROOT, inventory: emptyInventory });
+  const server = await startServer({ projectRoot: PROJECT_ROOT, body: readableBody, inventory: emptyInventory });
   t.after(() => server.close());
 
   assert.match(server.url, URL_PATTERN);
@@ -437,7 +440,7 @@ test('the server serves a page on the address it reports', async (t) => {
 });
 
 test('the served page declares itself HTML and forbids caching', async (t) => {
-  const server = await startServer({ projectRoot: PROJECT_ROOT, inventory: emptyInventory });
+  const server = await startServer({ projectRoot: PROJECT_ROOT, body: readableBody, inventory: emptyInventory });
   t.after(() => server.close());
 
   // Serving this exact HTML as text/plain passed every earlier test.
@@ -448,7 +451,7 @@ test('the served page declares itself HTML and forbids caching', async (t) => {
 });
 
 test('error responses are plain text and uncached', async (t) => {
-  const server = await startServer({ projectRoot: PROJECT_ROOT, inventory: emptyInventory });
+  const server = await startServer({ projectRoot: PROJECT_ROOT, body: readableBody, inventory: emptyInventory });
   t.after(() => server.close());
 
   // **Both 500s are in this loop, and neither was.** The loop covered 404, 403
@@ -459,6 +462,7 @@ test('error responses are plain text and uncached', async (t) => {
   // snapshot the supplier produced successfully.
   const supplierThrows = await startServer({
     projectRoot: PROJECT_ROOT,
+    body: readableBody,
     inventory: () => {
       throw new Error('the project went away');
     },
@@ -467,6 +471,7 @@ test('error responses are plain text and uncached', async (t) => {
   t.after(() => supplierThrows.close());
   const renderThrows = await startServer({
     projectRoot: PROJECT_ROOT,
+    body: readableBody,
     inventory: () => refusedView(),
     onError: () => {},
   });
@@ -534,6 +539,7 @@ test('over a real project, two loads carry one identity and identical bodies', a
   const reader = new ConfinedReader(canonicalRoot);
   const server = await startServer({
     projectRoot: canonicalRoot,
+    body: readableBody,
     // The real supplier, not a fixture: a full pass per request, exactly as
     // the composition root wires it.
     inventory: () => projectInventory(takeInventory(reader)),
@@ -589,7 +595,7 @@ test('the identity header is on 200 and HEAD, and absent on 403, 404, 405 and 50
   // its own importer-set rule.
   assert.equal(SNAPSHOT_ID_HEADER, 'bmad-snapshot-id', 'the header name is an external contract');
 
-  const server = await startServer({ projectRoot: PROJECT_ROOT, inventory: emptyInventory });
+  const server = await startServer({ projectRoot: PROJECT_ROOT, body: readableBody, inventory: emptyInventory });
   t.after(() => server.close());
 
   const page = await get({ port: server.port });
@@ -636,6 +642,7 @@ test('the identity header is on 200 and HEAD, and absent on 403, 404, 405 and 50
   // nothing here checked.
   const supplierThrew = await startServer({
     projectRoot: PROJECT_ROOT,
+    body: readableBody,
     inventory: () => {
       throw new Error('the project went away');
     },
@@ -644,6 +651,7 @@ test('the identity header is on 200 and HEAD, and absent on 403, 404, 405 and 50
   t.after(() => supplierThrew.close());
   const renderThrew = await startServer({
     projectRoot: PROJECT_ROOT,
+    body: readableBody,
     inventory: () => refusedView(),
     onError: () => {},
   });
@@ -686,6 +694,7 @@ test('a view whose identity cannot be a header value is a 500, not a hung reques
     const reported: Error[] = [];
     const server = await startServer({
       projectRoot: PROJECT_ROOT,
+      body: readableBody,
       inventory: () => view,
       onError: (error) => reported.push(error),
     });
@@ -700,7 +709,7 @@ test('a view whose identity cannot be a header value is a 500, not a hung reques
   // And the identity is the only thing wrong with that view, so the same routes
   // over a well-formed one are 200s — otherwise the loop above would pass for a
   // view that could not render at all.
-  const healthy = await startServer({ projectRoot: PROJECT_ROOT, inventory: () => FULL_INVENTORY_VIEW });
+  const healthy = await startServer({ projectRoot: PROJECT_ROOT, body: readableBody, inventory: () => FULL_INVENTORY_VIEW });
   t.after(() => healthy.close());
   for (const path of ['/', artifactUrl(CERTAIN_ROW.path)]) {
     assert.equal((await get({ port: healthy.port, path })).status, 200, path);
@@ -708,7 +717,7 @@ test('a view whose identity cannot be a header value is a 500, not a hung reques
 });
 
 test('the listening socket itself reports the loopback literal on IPv4', async (t) => {
-  const server = await startServer({ projectRoot: PROJECT_ROOT, inventory: emptyInventory });
+  const server = await startServer({ projectRoot: PROJECT_ROOT, body: readableBody, inventory: emptyInventory });
   t.after(() => server.close());
 
   // `addressInfo` is the `net` layer's account of the bound socket, not a
@@ -727,7 +736,7 @@ test('the listening socket itself reports the loopback literal on IPv4', async (
 });
 
 test('the socket keeps an error listener after binding', async (t) => {
-  const server = await startServer({ projectRoot: PROJECT_ROOT, inventory: emptyInventory });
+  const server = await startServer({ projectRoot: PROJECT_ROOT, body: readableBody, inventory: emptyInventory });
   t.after(() => server.close());
 
   // `listen` removes its own one-shot listener on success. With none left, a
@@ -743,6 +752,7 @@ test('a socket error after binding is delivered to onError', async (t) => {
   const delivered: Error[] = [];
   const server = await startServer({
     projectRoot: PROJECT_ROOT,
+    body: readableBody,
     inventory: emptyInventory,
     onError: (error) => {
       delivered.push(error);
@@ -763,7 +773,7 @@ test('a socket error after binding is delivered to onError', async (t) => {
 });
 
 test('the socket is unreachable on every non-loopback interface', async (t) => {
-  const server = await startServer({ projectRoot: PROJECT_ROOT, inventory: emptyInventory });
+  const server = await startServer({ projectRoot: PROJECT_ROOT, body: readableBody, inventory: emptyInventory });
   t.after(() => server.close());
 
   const expectedHost = `${server.address}:${server.port}`;
@@ -802,6 +812,7 @@ test('a preferred port already bound falls back to another free port', async (t)
 
   const server = await startServer({
     projectRoot: PROJECT_ROOT,
+    body: readableBody,
     port: squatter.port,
     inventory: emptyInventory,
   });
@@ -819,7 +830,7 @@ test('a port outside the valid range is rejected before binding', async () => {
   // only evidence the rejection happened here rather than inside `listen`.
   for (const port of [-1, 65536, 1.5, Number.NaN]) {
     await assert.rejects(
-      () => startServer({ projectRoot: PROJECT_ROOT, port, inventory: emptyInventory }),
+      () => startServer({ projectRoot: PROJECT_ROOT, port, body: readableBody, inventory: emptyInventory }),
       (error: unknown) => {
         assert.ok(error instanceof RangeError, `port ${String(port)}: expected a RangeError`);
         assert.match(
@@ -835,7 +846,7 @@ test('a port outside the valid range is rejected before binding', async () => {
 });
 
 test('a foreign Host header is rejected with 403 and no content', async (t) => {
-  const server = await startServer({ projectRoot: PROJECT_ROOT, inventory: emptyInventory });
+  const server = await startServer({ projectRoot: PROJECT_ROOT, body: readableBody, inventory: emptyInventory });
   t.after(() => server.close());
 
   const foreign = [
@@ -856,7 +867,7 @@ test('a foreign Host header is rejected with 403 and no content', async (t) => {
 });
 
 test('a write-shaped method is refused, and HEAD carries no body', async (t) => {
-  const server = await startServer({ projectRoot: PROJECT_ROOT, inventory: emptyInventory });
+  const server = await startServer({ projectRoot: PROJECT_ROOT, body: readableBody, inventory: emptyInventory });
   t.after(() => server.close());
 
   for (const method of ['POST', 'PUT', 'PATCH', 'DELETE']) {
@@ -879,7 +890,7 @@ test('the Host check is on the literal bound address and port', () => {
 });
 
 test('a foreign Host is rejected before routing, on unknown paths too', async (t) => {
-  const server = await startServer({ projectRoot: PROJECT_ROOT, inventory: emptyInventory });
+  const server = await startServer({ projectRoot: PROJECT_ROOT, body: readableBody, inventory: emptyInventory });
   t.after(() => server.close());
 
   assert.equal((await get({ port: server.port, path: '/nope', host: 'evil.example' })).status, 403);
@@ -887,7 +898,7 @@ test('a foreign Host is rejected before routing, on unknown paths too', async (t
 });
 
 test('a query string does not change which page is served', async (t) => {
-  const server = await startServer({ projectRoot: PROJECT_ROOT, inventory: emptyInventory });
+  const server = await startServer({ projectRoot: PROJECT_ROOT, body: readableBody, inventory: emptyInventory });
   t.after(() => server.close());
 
   // Removing the query strip passed every earlier test, while `/?x=1` 404'd.
@@ -901,7 +912,7 @@ test('a query string does not change which page is served', async (t) => {
 });
 
 test('a client that aborts mid-exchange does not take the server down', async (t) => {
-  const server = await startServer({ projectRoot: PROJECT_ROOT, inventory: emptyInventory });
+  const server = await startServer({ projectRoot: PROJECT_ROOT, body: readableBody, inventory: emptyInventory });
   t.after(() => server.close());
 
   for (let i = 0; i < 3; i += 1) {
@@ -949,7 +960,7 @@ async function holdConnection(port: number, payload = ''): Promise<() => void> {
 }
 
 test('close resolves promptly while a client holds a bare open connection', async (t) => {
-  const server = await startServer({ projectRoot: PROJECT_ROOT, inventory: emptyInventory });
+  const server = await startServer({ projectRoot: PROJECT_ROOT, body: readableBody, inventory: emptyInventory });
   const release = await holdConnection(server.port);
   // Registered before the assertion: when `close()` does hang, the socket and
   // the listening handle must still be torn down or the whole run never exits
@@ -975,7 +986,7 @@ test('close resolves promptly while a client holds a bare open connection', asyn
 });
 
 test('close resolves promptly with a half-sent request in flight', async (t) => {
-  const server = await startServer({ projectRoot: PROJECT_ROOT, inventory: emptyInventory });
+  const server = await startServer({ projectRoot: PROJECT_ROOT, body: readableBody, inventory: emptyInventory });
   const release = await holdConnection(
     server.port,
     `GET / HTTP/1.1\r\nHost: 127.0.0.1:${server.port}\r\n`,
@@ -1003,7 +1014,7 @@ test('a completed keep-alive request does not by itself block close', async (t) 
   // Documents the boundary: since Node 19 `close()` closes *idle* connections,
   // so this scenario passes with or without `closeAllConnections()`. Kept so
   // nobody mistakes it for the guard — the two tests above are the guard.
-  const server = await startServer({ projectRoot: PROJECT_ROOT, inventory: emptyInventory });
+  const server = await startServer({ projectRoot: PROJECT_ROOT, body: readableBody, inventory: emptyInventory });
   const agent = new Agent({ keepAlive: true, maxSockets: 1 });
   t.after(() => {
     agent.destroy();
@@ -1218,7 +1229,7 @@ test('the durable error listener is attached before the first listen', async () 
 });
 
 test('close is idempotent: a second call resolves rather than rejecting', async () => {
-  const server = await startServer({ projectRoot: PROJECT_ROOT, inventory: emptyInventory });
+  const server = await startServer({ projectRoot: PROJECT_ROOT, body: readableBody, inventory: emptyInventory });
 
   await server.close();
   // `server.close()` rejects with ERR_SERVER_NOT_RUNNING the second time.
@@ -1240,7 +1251,7 @@ test('a bare Host is accepted only when the bound port is the scheme default', (
 });
 
 test('the error listener count is live, not a snapshot taken at bind time', async (t) => {
-  const server = await startServer({ projectRoot: PROJECT_ROOT, inventory: emptyInventory });
+  const server = await startServer({ projectRoot: PROJECT_ROOT, body: readableBody, inventory: emptyInventory });
   t.after(() => server.close());
 
   const before = server.socketErrorListeners;
@@ -1354,20 +1365,20 @@ test('a server given no usable project root refuses to bind at all', async () =>
   type Unchecked = Parameters<typeof startServer>[0]['projectRoot'];
   for (const bad of ['', '   ']) {
     await assert.rejects(
-      () => startServer({ projectRoot: bad as unknown as Unchecked, inventory: emptyInventory }),
+      () => startServer({ projectRoot: bad as unknown as Unchecked, body: readableBody, inventory: emptyInventory }),
       /needs the resolved project root/,
     );
   }
   for (const bad of ['.', 'relative/path', '../sibling']) {
     await assert.rejects(
-      () => startServer({ projectRoot: bad as unknown as Unchecked, inventory: emptyInventory }),
+      () => startServer({ projectRoot: bad as unknown as Unchecked, body: readableBody, inventory: emptyInventory }),
       /must be absolute/,
     );
   }
 });
 
 test('the handle reports the root it was given, so a caller can check it', async (t) => {
-  const handle = await startServer({ projectRoot: PROJECT_ROOT, inventory: emptyInventory });
+  const handle = await startServer({ projectRoot: PROJECT_ROOT, body: readableBody, inventory: emptyInventory });
   t.after(() => handle.close());
   assert.equal(handle.projectRoot, PROJECT_ROOT);
 });
@@ -1452,21 +1463,39 @@ function getRawTarget(port: number, target: string): Promise<Response> {
   });
 }
 
-/** A server serving one fixed view, and a count of how often it was asked. */
+/**
+ * A server serving one fixed view, and a count of how often each supplier was
+ * asked.
+ *
+ * `reads` is Story 2.1b's addition and it records the *paths*, not a count:
+ * "exactly one file is read per artifact page, and it is the one asked for" is
+ * a claim about which path reached the reader, and a bare tally could not tell
+ * one read of the right file from one read of the wrong one.
+ */
 async function servingFixture(
   t: { after: (fn: () => unknown) => void },
   view: InventoryView = FULL_INVENTORY_VIEW,
-): Promise<{ readonly port: number; readonly scans: () => number }> {
+  body: (path: string) => ArtifactBody = readableBody,
+): Promise<{
+  readonly port: number;
+  readonly scans: () => number;
+  readonly reads: () => readonly string[];
+}> {
   let scans = 0;
+  const reads: string[] = [];
   const server = await startServer({
     projectRoot: PROJECT_ROOT,
+    body: (path) => {
+      reads.push(path);
+      return body(path);
+    },
     inventory: () => {
       scans += 1;
       return view;
     },
   });
   t.after(() => server.close());
-  return { port: server.port, scans: () => scans };
+  return { port: server.port, scans: () => scans, reads: () => reads };
 }
 
 test('an artifact URL naming a row serves the shell, with the snapshot identity', async (t) => {
@@ -1584,6 +1613,7 @@ test('a row path the grammar cannot address is a 500 on its own page, and costs 
   const errors: Error[] = [];
   const server = await startServer({
     projectRoot: PROJECT_ROOT,
+    body: readableBody,
     inventory: () => ({
       ...FULL_INVENTORY_VIEW,
       groups: [{ family: 'prd', rows: [{ ...CERTAIN_ROW, path: bad }, CERTAIN_ROW], notes: [] }],
@@ -1607,6 +1637,7 @@ test('a row path the grammar cannot address is a 500 on its own page, and costs 
   // grammar refuses to build a URL for, keyed by a URL that does parse.
   const dotted = await startServer({
     projectRoot: PROJECT_ROOT,
+    body: readableBody,
     inventory: () => ({
       ...FULL_INVENTORY_VIEW,
       groups: [{ family: 'prd', rows: [{ ...CERTAIN_ROW, path: '/absolute/prd.md' }], notes: [] }],
@@ -1738,6 +1769,7 @@ test('a snapshot that fails at request time is a 500 on the artifact route too',
   const errors: Error[] = [];
   const server = await startServer({
     projectRoot: PROJECT_ROOT,
+    body: readableBody,
     inventory: () => {
       throw new Error('the project went away');
     },
@@ -1778,6 +1810,7 @@ test('resolution is the row set and not the filesystem, in both directions', asy
   };
   const server = await startServer({
     projectRoot: canonical(root),
+    body: readableBody,
     inventory: () => view,
   });
   t.after(() => server.close());
@@ -1798,4 +1831,315 @@ test('resolution is the row set and not the filesystem, in both directions', asy
   ]) {
     assert.equal((await get({ port: server.port, path })).status, 404, path);
   }
+});
+
+// ---------------------------------------------------------------------------
+// Story 2.1b: content end to end, and the hardening headers
+// ---------------------------------------------------------------------------
+
+test("an artifact URL serves the artifact's own content, rendered on the server", async (t) => {
+  const fixture = await servingFixture(t, FULL_INVENTORY_VIEW, () => ({
+    ok: true,
+    text: '# The title\n\nA paragraph.\n',
+  }));
+
+  const response = await get({ port: fixture.port, path: artifactUrl(CERTAIN_ROW.path) });
+  assert.equal(response.status, 200);
+  assert.ok(response.body.includes('<article class="artifact-content">'));
+  assert.ok(response.body.includes('<h2>The title</h2>'), 'rendered, not echoed');
+  assert.ok(response.body.includes('<p>A paragraph.</p>'));
+  // Server-rendered, so there is nothing on the page that would need to run to
+  // produce it. `web/` is still the one empty scanned root.
+  assert.doesNotMatch(response.body, /<script\b/i);
+
+  // **Exactly one file was read, and it is the one asked for.** The Dashboard
+  // reads none, a 404 reads none, and the artifact page reads its own row's
+  // path — never a path a request spelled.
+  assert.deepEqual(fixture.reads(), [CERTAIN_ROW.path]);
+  await get({ port: fixture.port, path: '/' });
+  await get({ port: fixture.port, path: '/artifact/not-a-row.md' });
+  assert.deepEqual(fixture.reads(), [CERTAIN_ROW.path], 'neither / nor a 404 reads anything');
+});
+
+test('no body reaches the snapshot identity, so text is not in a per-request digest', async (t) => {
+  // `snapshotIdOf` digests the whole `InventoryView`, which is exactly why the
+  // body is an argument to `renderArtifact` rather than a field on
+  // `ArtifactRow`. Asserted through the header, over two servers whose views
+  // are the same object and whose bodies differ: the identity names the *scan*,
+  // and a body that had reached it would make these two differ.
+  const first = await servingFixture(t, FULL_INVENTORY_VIEW, () => ({ ok: true, text: '# One\n' }));
+  const second = await servingFixture(t, FULL_INVENTORY_VIEW, () => ({
+    ok: true,
+    text: '# Something entirely different\n',
+  }));
+  const target = artifactUrl(CERTAIN_ROW.path);
+  const a = await get({ port: first.port, path: target });
+  const b = await get({ port: second.port, path: target });
+
+  // The bodies really did differ, so this cannot pass by both serving the same
+  // page — which would make the identity assertion below trivial.
+  assert.notEqual(a.body, b.body);
+  assert.equal(a.headers[SNAPSHOT_ID_HEADER], FULL_INVENTORY_VIEW.snapshotId);
+  assert.equal(b.headers[SNAPSHOT_ID_HEADER], a.headers[SNAPSHOT_ID_HEADER]);
+});
+
+test('a read failure on an artifact is still a 200 page, with the failure in it', async (t) => {
+  // AD-7 end to end: the page came, and it says what did not. A 500 here would
+  // be the tool refusing to show a document because one part of it is broken.
+  const fixture = await servingFixture(t, FULL_INVENTORY_VIEW, () => ({
+    ok: false,
+    state: 'unreadable',
+    stage: 'decode',
+    reason: 'not valid UTF-8 text',
+  }));
+  const response = await get({ port: fixture.port, path: artifactUrl(UNREADABLE_ROW.path) });
+  assert.equal(response.status, 200);
+  assert.equal(response.headers[SNAPSHOT_ID_HEADER], FULL_INVENTORY_VIEW.snapshotId);
+  assert.ok(response.body.includes('class="artifact-failure"'));
+  assert.ok(response.body.includes('<code class="artifact-stage">decode</code>'));
+});
+
+test('a body supplier that throws is a 500 the reader can report, not a hung tab', async (t) => {
+  // The supplier is built to answer rather than throw, so this is a defect
+  // path — and it is the same answer a throwing `inventory` gets, because to a
+  // reader they are one failure: the page did not come.
+  const errors: Error[] = [];
+  const server = await startServer({
+    projectRoot: PROJECT_ROOT,
+    body: () => {
+      throw new Error('the reader gave up');
+    },
+    inventory: () => FULL_INVENTORY_VIEW,
+    onError: (error) => errors.push(error),
+  });
+  t.after(() => server.close());
+
+  const response = await get({ port: server.port, path: artifactUrl(CERTAIN_ROW.path) });
+  assert.equal(response.status, 500);
+  assert.equal(response.headers['content-type'], 'text/plain; charset=utf-8');
+  assert.equal(errors.length, 1, 'and it is reported rather than swallowed');
+  // The Dashboard is unaffected: it never asks for a body.
+  assert.equal((await get({ port: server.port, path: '/' })).status, 200);
+});
+
+/** The three headers, and their exact values, as one place to change them. */
+const EXPECTED_HARDENING: readonly (readonly [string, string])[] = [
+  [
+    'content-security-policy',
+    "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
+  ],
+  ['x-content-type-options', 'nosniff'],
+  ['referrer-policy', 'no-referrer'],
+];
+
+test('the hardening headers are exactly what the module exports, spelled out here once', () => {
+  // Pinned as literals against the constant, on `SNAPSHOT_ID_HEADER`'s own
+  // terms: these are an external contract a browser acts on, so a value that
+  // merely came from the source it is being checked against would assert
+  // nothing. The policy is what makes rendering a project's own HTML
+  // defensible, so *which* directives it carries is the decision, not a detail.
+  assert.deepEqual(Object.entries(HARDENING_HEADERS).sort(), [...EXPECTED_HARDENING].sort());
+  // And the two clauses that do not fall back to `default-src` are present, so
+  // a future edit cannot drop them believing `'none'` already covers them.
+  for (const directive of ['base-uri', 'form-action', 'frame-ancestors']) {
+    assert.ok(
+      (HARDENING_HEADERS['content-security-policy'] ?? '').includes(`${directive} 'none'`),
+      `${directive} does not inherit default-src and must be stated`,
+    );
+  }
+  // Script is denied by the `default-src` fallback and never allowed back in.
+  assert.doesNotMatch(HARDENING_HEADERS['content-security-policy'] ?? '', /script-src/);
+});
+
+test('every response carries the hardening headers — the 200 and every refusal', async (t) => {
+  const fixture = await servingFixture(t);
+  const target = artifactUrl(CERTAIN_ROW.path);
+
+  /** Every response shape this server can produce, with how it is provoked. */
+  const responses: readonly (readonly [string, Response])[] = [
+    ['the Dashboard', await get({ port: fixture.port, path: '/' })],
+    ['an artifact page', await get({ port: fixture.port, path: target })],
+    ['a HEAD', await get({ port: fixture.port, path: target, method: 'HEAD' })],
+    ['a 404', await get({ port: fixture.port, path: '/artifact/nope.md' })],
+    ['an unknown path', await get({ port: fixture.port, path: '/nowhere' })],
+    ['a 403', await get({ port: fixture.port, path: target, host: 'evil.example' })],
+    ['a 405', await get({ port: fixture.port, path: target, method: 'POST' })],
+  ];
+
+  // Not vacuous: the four refusals are actually refusals, so this cannot pass
+  // by every request having been answered 200.
+  assert.deepEqual(
+    responses.map(([, response]) => response.status),
+    [200, 200, 200, 404, 404, 403, 405],
+  );
+
+  for (const [what, response] of responses) {
+    for (const [header, value] of EXPECTED_HARDENING) {
+      assert.equal(response.headers[header], value, `${what} is missing ${header}`);
+    }
+  }
+});
+
+test('a 500 carries the hardening headers too, which is where they matter most', async (t) => {
+  // A 500 is the response a reader reaches for when something is already wrong,
+  // and it is the one most likely to be reached by a page that half-rendered.
+  const errors: Error[] = [];
+  const server = await startServer({
+    projectRoot: PROJECT_ROOT,
+    body: readableBody,
+    inventory: () => {
+      throw new Error('the project went away');
+    },
+    onError: (error) => errors.push(error),
+  });
+  t.after(() => server.close());
+
+  for (const path of ['/', artifactUrl(CERTAIN_ROW.path)]) {
+    const response = await get({ port: server.port, path });
+    assert.equal(response.status, 500, path);
+    for (const [header, value] of EXPECTED_HARDENING) {
+      assert.equal(response.headers[header], value, `the 500 for ${path} is missing ${header}`);
+    }
+  }
+  assert.equal(errors.length, 2);
+});
+
+test('the policy permits the one thing the page needs and nothing else', async (t) => {
+  // The page's single need is its inlined `<style>`; everything else the
+  // document could ask for is denied by the `default-src` fallback. Asserted
+  // against the *served page* rather than against the constant, because "the
+  // policy matches what the page needs" is a claim about the pair.
+  const fixture = await servingFixture(t);
+  const response = await get({ port: fixture.port, path: artifactUrl(CERTAIN_ROW.path) });
+  assert.ok(response.body.includes('<style>'), 'the page does inline a stylesheet');
+  assert.ok(!response.body.includes('<link'), 'and fetches no stylesheet');
+  assert.doesNotMatch(response.body, /<script\b/i, 'and serves no script');
+  const policy = response.headers['content-security-policy'] ?? '';
+  assert.ok(policy.includes("style-src 'unsafe-inline'"), 'so inline style is the one allowance');
+  assert.ok(policy.startsWith("default-src 'none'"), 'and everything else falls back to none');
+});
+
+test('the composition root wires the real confined reader, end to end', async (t) => {
+  // **The wiring seam, and the only test that can see it.** Every other test in
+  // this file hands the server a body supplier of its own, so all of them would
+  // pass over a composition root that passed a stub, an empty string, or a
+  // supplier pointed at the wrong path. This one runs the real `run` with the
+  // real `startServer` and the real `ConfinedReader` over a real file on disk,
+  // and asserts the file's own bytes came back through the URL.
+  //
+  // It is the same class of check as `a real invocation actually reaches a
+  // platform launcher`: substituting an inert implementation for a correct one
+  // is invisible to the type system.
+  const root = await makeProjectDir(t, 'bmad-dash-real-read-');
+  const relative = '_bmad-output/planning-artifacts/prds/prd-real-2026-09-04/prd.md';
+  await mkdir(join(root, dirname(relative)), { recursive: true });
+  await writeFile(
+    join(root, relative),
+    "---\ntitle: 'A real document'\ntype: 'prd'\n---\n\n# On disk\n\nRead through the reader.\n",
+  );
+
+  let url = '';
+  let shutdown: () => void = () => {};
+  const code = await run([root], {
+    launch: () => Promise.resolve({ opened: false as const, command: 'stub', reason: 'stubbed' }),
+    stdout: (text) => {
+      url += text;
+    },
+    stderr: () => {},
+    onSignal: (handler) => {
+      shutdown = handler;
+    },
+    exit: () => {},
+  });
+  t.after(() => shutdown());
+  assert.equal(code, 0, `the run did not start: ${JSON.stringify(url)}`);
+
+  const port = Number(URL_PATTERN.exec(url.trim())?.[1]);
+  assert.ok(Number.isInteger(port), `no port in ${JSON.stringify(url)}`);
+
+  const response = await get({ port, path: artifactUrl(relative) });
+  assert.equal(response.status, 200);
+  // The file's own words, through the real read and the real parse.
+  assert.ok(response.body.includes('<h2>On disk</h2>'), 'the document heading, rendered');
+  assert.ok(response.body.includes('Read through the reader.'), 'and its body');
+  // The frontmatter is metadata and does not reach the reading surface.
+  assert.ok(!response.body.includes('A real document'), 'the frontmatter is not content');
+  // And the hardening headers are on a real invocation's response, not only on
+  // a server this file constructed.
+  for (const [header, value] of EXPECTED_HARDENING) {
+    assert.equal(response.headers[header], value, `a real invocation is missing ${header}`);
+  }
+});
+
+test('a confinement refusal on the body read is a page, not a 500', async (t) => {
+  // **The scenario the composition root's docblock names, tested through it.**
+  // `src/cli/index.ts` turns `resolveWithin`'s throw into a typed value "here,
+  // and only here", and says why: the reader is right to throw, but on this
+  // path a throw costs the reader the whole page for a fact the page can state
+  // -- and the way it arrives is "a symlink that changed under the tool between
+  // the scan and the page load".
+  //
+  // Nothing else reaches that branch. Every other test in this file supplies
+  // its own body function, and the one end-to-end test above reads an ordinary
+  // in-root file, so **deleting the catch leaves the whole suite green** -- 995
+  // of 995, measured before this test existed. Removing it now turns this
+  // artifact's page into a 500.
+  //
+  // The escaping symlink is the row *and* the refusal at once: the walk lists
+  // it, so the snapshot has a row to find, and the read resolves it outside the
+  // root, so the reader refuses. That is one artifact failing, in place, on a
+  // page whose shell, path and inventory facts all still render.
+  // Narrower than `deniableDirectories()` on purpose: that helper also excludes
+  // root, and root creates symlinks perfectly well. Only Windows, where an
+  // unprivileged process cannot make one at all, has to opt out.
+  if (process.platform === 'win32') {
+    t.skip('creating a symlink needs privileges this platform does not grant');
+    return;
+  }
+  const root = await makeProjectDir(t, 'bmad-dash-escape-');
+  const outside = await makeProjectDir(t, 'bmad-dash-outside-');
+  await writeFile(join(outside, 'elsewhere.md'), '# A heading from outside the project\n');
+
+  const relative = '_bmad-output/planning-artifacts/prds/prd-escape-2026-09-04/prd.md';
+  await mkdir(join(root, dirname(relative)), { recursive: true });
+  await symlink(join(outside, 'elsewhere.md'), join(root, relative), 'file');
+
+  let url = '';
+  let shutdown: () => void = () => {};
+  const code = await run([root], {
+    launch: () => Promise.resolve({ opened: false as const, command: 'stub', reason: 'stubbed' }),
+    stdout: (text) => {
+      url += text;
+    },
+    stderr: () => {},
+    onSignal: (handler) => {
+      shutdown = handler;
+    },
+    exit: () => {},
+  });
+  t.after(() => shutdown());
+  assert.equal(code, 0, `the run did not start: ${JSON.stringify(url)}`);
+  const port = Number(URL_PATTERN.exec(url.trim())?.[1]);
+  assert.ok(Number.isInteger(port), `no port in ${JSON.stringify(url)}`);
+
+  const response = await get({ port, path: artifactUrl(relative) });
+  // The status is the whole point: a throw from the supplier lands in the same
+  // `try` as a render failure and would answer 500 for the entire page.
+  assert.equal(response.status, 200, 'a refused read must not cost the reader the page');
+  // AD-7 and AD-8: the state word and the stage, named in place.
+  assert.match(response.body, /Unreadable at the/, 'the failure names its state');
+  assert.ok(
+    response.body.includes('>confinement<'),
+    'the failure names the confinement stage, which is the fact worth reporting',
+  );
+  // And the refusal is a refusal: the file outside the root is not served
+  // through the symlink that pointed at it.
+  assert.ok(
+    !response.body.includes('A heading from outside the project'),
+    'content from outside the root reached the page',
+  );
+  // The page is still a page -- the shell and the artifact's own path render,
+  // which is what "never fatal to its neighbours" means on a one-artifact
+  // surface.
+  assert.ok(response.body.includes('prd.md'), 'the shell still names the artifact');
 });

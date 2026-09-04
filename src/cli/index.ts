@@ -11,7 +11,12 @@ import { parseArgs } from 'node:util';
 import { resolve, isAbsolute, relative as relativePath, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { MAX_PORT, startServer, type ServerHandle } from '../adapters/http/server.ts';
+import {
+  MAX_PORT,
+  startServer,
+  type ServerHandle,
+  type StartServerOptions,
+} from '../adapters/http/server.ts';
 import { resolveRealPath } from '../adapters/fs/realpath.ts';
 import { ConfinedReader } from '../adapters/fs/read.ts';
 import { errorCode } from '../domain/thrown.ts';
@@ -861,6 +866,49 @@ export async function run(
    */
   const reader = new ConfinedReader(location.root);
   const snapshot = (): InventoryView => projectInventory(pass(reader));
+
+  /**
+   * One artifact's content, read on demand — the other half of what the server
+   * needs, and the only read that happens per *page* rather than per scan.
+   *
+   * **`readText` is the supplier, not a wrapper around it.** AD-7 already makes
+   * every read failure a typed value carrying a state, a stage and a reason, in
+   * exactly the shape the artifact surface renders, so translating it here would
+   * add a step whose only possible contribution is losing something —
+   * `absent` flattened into `unreadable`, or the stage dropped. The reader was
+   * measured sufficient for this story and deliberately not widened: it refuses
+   * anything that is not a regular file *before* opening it (so a run folder,
+   * a sharded-document directory and a FIFO are all answers rather than hangs),
+   * refuses over `MAX_READ_BYTES` on the `stat` so nothing large is read at all,
+   * and decodes with `fatal: true` so bytes that are not UTF-8 are a `decode`
+   * failure rather than a page full of U+FFFD.
+   *
+   * **The confinement throw is turned into a value here, and only here.**
+   * `resolveWithin` throws for a path outside the permitted root, which is right
+   * for a reader — but on this path it would cost the reader the whole page for
+   * a fact the page can state. Nothing should be able to reach it: the argument
+   * is a key out of the snapshot's own rows and the walk only produces paths
+   * inside the root. It is answered rather than asserted because "unreachable,
+   * so throw" is how a 500 arrives for a symlink that changed under the tool
+   * between the scan and the page load.
+   *
+   * **Bodies stay off the snapshot.** This closure is not called by
+   * `projectInventory` and its result never reaches `snapshotIdOf`, which
+   * digests the whole view — so a project's text is not in any per-request
+   * identity, and a page load reads one file rather than every file.
+   */
+  const body: StartServerOptions['body'] = (path) => {
+    try {
+      return reader.readText(path);
+    } catch (error: unknown) {
+      return {
+        ok: false,
+        state: 'unreadable',
+        stage: 'confinement',
+        reason: error instanceof Error ? error.message : String(error),
+      };
+    }
+  };
   try {
     snapshot();
   } catch (error: unknown) {
@@ -873,6 +921,7 @@ export async function run(
     handle = await start({
       projectRoot: location.root,
       inventory: snapshot,
+      body,
       port: invocation.port,
       onError: (error) => {
         stderr(`Socket error after bind: ${error.message}\n`);

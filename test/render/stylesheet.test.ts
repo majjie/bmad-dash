@@ -357,8 +357,18 @@ test('the type roles reach the elements that carry them', () => {
   for (const [selector, role] of [
     ['html', 'body'],
     ['h1', 'display'],
-    ['h2, h3', 'title'],
+    // From Story 2.1b this is `h2, h3, h4, h5, h6`: a rendered document's own
+    // headings are demoted by one so the surface keeps its single `h1`, so the
+    // surface reaches `h6` — and DESIGN.md gives eight roles and no fourth
+    // heading size, so every level takes `title` rather than the browser's
+    // defaults, which are smaller than body text below `h4`.
+    ['h2, h3, h4, h5, h6', 'title'],
     ['p', 'body'],
+    // Story 2.1b's reading surface. `{typography.prose}` is IBM Plex Serif and
+    // DESIGN.md:233 puts it in exactly one place — "the body of a rendered BMAD
+    // document" — which is this and nothing else.
+    ['.artifact-content', 'prose'],
+    ['.artifact-content p', 'prose'],
     ['code, kbd, samp, pre', 'mono'],
     // The four use sites this story added. Deleting every `typeRole()` call
     // from `componentRules()` passed all 263 tests before these four lines:
@@ -548,7 +558,7 @@ const REQUIRED_RULES: readonly (readonly [string, readonly string[]])[] = [
   ['html', ['background: var(--color-surface)', 'color: var(--color-on-surface)']],
   ['body', ['margin: 0', 'padding: var(--space-page-margin)']],
   ['h1', ['font-size: var(--type-display-font-size)']],
-  ['h2, h3', ['font-size: var(--type-title-font-size)']],
+  ['h2, h3, h4, h5, h6', ['font-size: var(--type-title-font-size)']],
   ['p', ['font-size: var(--type-body-font-size)']],
   ['code, kbd, samp, pre', ['font-family: var(--type-mono-font-family)']],
   // The containers this story adds. Listed here for the same reason as the
@@ -578,6 +588,21 @@ const REQUIRED_RULES: readonly (readonly [string, readonly string[]])[] = [
     ],
   ],
   ['.artifact-link .artifact-path', ['text-decoration-line: underline']],
+  // Story 2.1b's reading surface. `DESIGN.md:255` — "a rendered document uses a
+  // single column at `{spacing.reading-measure}`" — so the measure is the one
+  // declaration this rule exists for, and a column without it is the dashboard
+  // grid the sentence says a reading surface breaks.
+  ['.artifact-content', ['max-width: var(--space-reading-measure)']],
+  // Both fold rather than scroll, and both are required because either one
+  // missing is a WCAG 1.4.10 reflow failure: preformatted text and a wide table
+  // are the two things in a BMAD document that exceed the reading measure, and
+  // every spec in this repository would trip the second on its I/O matrix. The
+  // obvious fix — a scroll container — is refused by
+  // `test/render/components.test.ts`, because one clips a focus ring drawn on a
+  // child at its edge (WCAG 2.4.11). Folding satisfies both.
+  ['.artifact-content pre,\n.artifact-source', ['white-space: pre-wrap', 'overflow-wrap: anywhere']],
+  ['.artifact-content table', ['width: 100%']],
+  ['.artifact-content th,\n.artifact-content td', ['overflow-wrap: anywhere']],
   // The one that a reviewer deleted whole while the suite stayed green.
   [
     ':focus-visible',
@@ -711,7 +736,13 @@ test('each type role is pinned to its floor class, so relabelling one fails', ()
  * cannot be the accidental state it was for `prose` until someone looked.
  */
 const ROLES_NOT_YET_APPLIED: readonly (readonly [string, string])[] = [
-  ['prose', 'the serif reading role; the Document reader that uses it is a later epic'],
+  // **Empty from Story 2.1b, and that is the entry closing rather than being
+  // deleted.** `prose` was the one held-back role — "the Document reader that
+  // uses it is a later epic" — and the artifact surface now renders a document,
+  // so `.artifact-content` applies it. All eight roles reach a rule. A role
+  // added later with no rule belongs here with its reason; an empty list is not
+  // a loosening, because the loop below still refuses an unapplied role that is
+  // not named.
 ];
 
 test('every emitted type role is applied by a rule, or held back with a reason', () => {
@@ -751,9 +782,13 @@ test('every class rule is exercised by some render path, and vice versa', async 
   const { findArtifact, renderArtifact } = await import('../../src/render/artifact.ts');
   const { tile, tileGrid } = await import('../../src/render/components.ts');
   const { markup } = await import('../../src/render/html.ts');
-  const { CERTAIN_ROW, FULL_INVENTORY_VIEW } = await import('../support/inventory.ts');
+  const { CERTAIN_ROW, FULL_INVENTORY_VIEW, READABLE_BODY, UNINTERPRETED_ROW } = await import(
+    '../support/inventory.ts'
+  );
   const opened = findArtifact(FULL_INVENTORY_VIEW, CERTAIN_ROW.path);
   assert.ok(opened !== undefined, 'the fixture must hold the row the artifact view is rendered for');
+  const nonMarkdown = findArtifact(FULL_INVENTORY_VIEW, UNINTERPRETED_ROW.path);
+  assert.ok(nonMarkdown !== undefined, 'the fixture must hold a row the parser is not pointed at');
   const rendered = [
     // The full view rather than an empty one: from Story 1.12 the inventory's
     // own classes are only emitted when there is something to list, and a
@@ -763,7 +798,21 @@ test('every class rule is exercised by some render path, and vice versa', async 
     // Story 2.1a's second surface. Without it a class the artifact view emits
     // and nothing styles would pass, which is the direction this loop is weakest
     // in — it can only see markup it is handed.
-    renderArtifact('/tmp/bmad-dash-test-project', opened),
+    // **Once per content outcome, from Story 2.1b.** The artifact surface's
+    // content region has four renderings — a parsed document, `Empty file.`, a
+    // non-markdown artifact as preformatted text, and a failure in place — and
+    // each carries its own class. Rendering one of them would leave the other
+    // three's rules passing this loop's "styled but nothing renders it"
+    // direction, which is the direction it is weakest in.
+    renderArtifact('/tmp/bmad-dash-test-project', opened, READABLE_BODY),
+    renderArtifact('/tmp/bmad-dash-test-project', opened, { ok: true, text: '' }),
+    renderArtifact('/tmp/bmad-dash-test-project', nonMarkdown, { ok: true, text: 'plain' }),
+    renderArtifact('/tmp/bmad-dash-test-project', opened, {
+      ok: false,
+      state: 'unreadable',
+      stage: 'decode',
+      reason: 'not valid UTF-8 text',
+    }),
     tileGrid([
       { label: 'A', content: { html: markup`<p>x</p>` }, raised: true },
       { label: 'B', content: { empty: 'Nothing yet.' } },

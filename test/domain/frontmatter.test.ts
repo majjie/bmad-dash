@@ -23,7 +23,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { readFrontmatter, readUnfenced } from '../../src/domain/frontmatter.ts';
+import { bodyAfterFrontmatter, readFrontmatter, readUnfenced } from '../../src/domain/frontmatter.ts';
 
 /** Fields as pairs, so a whole block is comparable in one assertion. */
 function pairs(text: string): readonly (readonly [string, string])[] {
@@ -424,4 +424,58 @@ test('an unfenced scan says whether it stopped early, so truncation is observabl
   assert.equal(readUnfenced('project: bmad-dash\n---\nother: x\n').terminated, true);
   assert.equal(readFrontmatter('---\ntitle: x\n---\n').terminated, true);
   assert.equal(readFrontmatter('---\ntitle: x\n').terminated, false, 'an unterminated block');
+});
+
+// ---------------------------------------------------------------------------
+// Story 2.1b's third question of the same scan: where does the body start?
+// ---------------------------------------------------------------------------
+
+test('the body after a closed block is everything below the closing fence', () => {
+  assert.equal(
+    bodyAfterFrontmatter("---\ntitle: 'x'\ntype: 'feature'\n---\n\n# Heading\n\nBody.\n"),
+    '\n# Heading\n\nBody.\n',
+  );
+  // The fence's own line goes with the block, and nothing above it survives:
+  // left in a rendered document the keys become a setext heading under an
+  // `<hr>`, so the block arrives dressed as the document's own title.
+  assert.ok(!bodyAfterFrontmatter("---\ntitle: 'x'\n---\nBody.\n").includes('title'));
+  assert.ok(!bodyAfterFrontmatter("---\ntitle: 'x'\n---\nBody.\n").includes('---'));
+});
+
+test('a document with no leading block is returned exactly as it was handed over', () => {
+  for (const text of ['# Heading\n\nBody.\n', '', 'no fence anywhere\n', '  ---\nindented\n']) {
+    assert.equal(bodyAfterFrontmatter(text), text, JSON.stringify(text));
+  }
+});
+
+test('an unterminated block is a document, not a truncation', () => {
+  // The alternative would show the reader a fragment with nothing to say it was
+  // one. `terminated` is the flag that separates the two, and it is the same
+  // flag `readFrontmatter` reports — one scan, not a second reading of it.
+  const opened = '---\nlooks like frontmatter\n\n# But nothing closes it\n';
+  assert.equal(readFrontmatter(opened).terminated, false);
+  assert.equal(bodyAfterFrontmatter(opened), opened);
+});
+
+test('a document-end marker closes the block, exactly as the scan says it does', () => {
+  // `...` is a YAML document-end marker and `FENCE` matches it, so `terminated`
+  // is true for it — which means the body has to start after it too. A second
+  // reader in the render layer that only knew about `---` would disagree with
+  // this file about where the content begins, which is the whole reason this
+  // function is here rather than there.
+  assert.equal(readFrontmatter("---\ntitle: 'x'\n...\nBody.\n").terminated, true);
+  assert.equal(bodyAfterFrontmatter("---\ntitle: 'x'\n...\nBody.\n"), 'Body.\n');
+});
+
+test('a BOM and CRLF line endings are handled by the same rules as the scan', () => {
+  // The two things a second line-splitter would most plausibly get differently.
+  // `﻿---` still opens a block, so its body must still be found.
+  assert.equal(readFrontmatter("﻿---\ntitle: 'x'\n---\nBody.\n").present, true);
+  assert.equal(bodyAfterFrontmatter("﻿---\ntitle: 'x'\n---\nBody.\n"), 'Body.\n');
+  // And the body comes back with `\n` endings, because it is rebuilt from the
+  // same `linesOf` the scan uses. Stated rather than glossed: it is a
+  // normalization, and it is harmless for the one consumer — a markdown parser
+  // treats the two identically — but a caller that needed the bytes back
+  // unchanged would not get them from here.
+  assert.equal(bodyAfterFrontmatter("---\r\ntitle: 'x'\r\n---\r\nBody.\r\n"), 'Body.\n');
 });

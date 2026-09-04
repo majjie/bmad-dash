@@ -1196,14 +1196,24 @@ test('the artifact view has a stated importer set, and reaches no filesystem', a
   // entry here is a pure render or domain module; none of them can read a
   // directory, and `./page.ts` reaches `node:path` only for `basename` and
   // `isAbsolute` on a string it is handed.
+  //
+  // **Story 2.1b's two additions, and why neither weakens the claim.**
+  // `../domain/signal.ts` is the four states and the six read stages — a
+  // vocabulary, with no derivation in it — and the surface needs it because the
+  // body it now renders can arrive as a typed read failure. `./markdown.ts` is
+  // the parser boundary; it imports a *bundled* third-party parser, which is
+  // why the reach question is asked of it separately below rather than answered
+  // by this list. Neither can open a file: the body arrives as an argument.
   assert.deepEqual(
     await importSpecifiersIn(REPO_ROOT, 'src/render/artifact.ts'),
     [
       '../domain/identity.ts',
+      '../domain/signal.ts',
       '../domain/url.ts',
       './components.ts',
       './html.ts',
       './inventory.ts',
+      './markdown.ts',
       './page.ts',
     ],
     'a new import here is how a resolver would grow a filesystem reach',
@@ -1212,6 +1222,45 @@ test('the artifact view has a stated importer set, and reaches no filesystem', a
     scanSource(await readFile(join(REPO_ROOT, 'src', 'render', 'artifact.ts'), 'utf8')).code,
     /\bnode:|\brequire\b|getBuiltinModule/,
     'and the resolver names no Node built-in, not even through a global',
+  );
+});
+
+test('the markdown boundary is the one module that reaches a third-party parser', async () => {
+  // **Story 2.1b's new question.** Every claim in this file so far is about
+  // modules that import nothing but each other; this is the first module in
+  // `src/` to import a package. Three things are asserted about it, and each is
+  // load-bearing rather than tidy:
+  //
+  //   1. **Exactly one importer.** The parser must be reachable from the render
+  //      boundary and nowhere else — an adapter or the composition root taking
+  //      `renderMarkdown` would be a second place a project's bytes become
+  //      markup, and the whole argument for the escaping concession is that it
+  //      lives in one file.
+  //   2. **Exactly these three specifiers.** `marked` is the parser, and the
+  //      list is what makes a *second* dependency — a sanitiser, a highlighter —
+  //      a deliberate edit here rather than a quiet line in `package.json`.
+  //      Story 2.1b's spec puts both on its Ask-First list; this is the
+  //      enforcement.
+  //   3. **It names no Node built-in.** `node:fs` is gated and would be caught
+  //      anyway; `node:path`, `node:module` and `createRequire` are not. A
+  //      parser boundary reaching for `createRequire` is how a CommonJS
+  //      dependency's dynamic requires get shimmed into a bundle, which is the
+  //      shape `deferred-work.md`'s `yaml` measurement describes — so a module
+  //      that needs it is one whose bundling this repository has not measured.
+  assert.deepEqual(
+    await importersOf(REPO_ROOT, 'src/render/markdown.ts'),
+    ['src/render/artifact.ts'],
+    'only the artifact view may reach the parser; a second importer is a second concession',
+  );
+  assert.deepEqual(
+    await importSpecifiersIn(REPO_ROOT, 'src/render/markdown.ts'),
+    ['../domain/frontmatter.ts', './html.ts', 'marked'],
+    'a second dependency is Ask-First; this is where adding one becomes visible',
+  );
+  assert.doesNotMatch(
+    scanSource(await readFile(join(REPO_ROOT, 'src', 'render', 'markdown.ts'), 'utf8')).code,
+    /\bnode:|\brequire\b|getBuiltinModule/,
+    'the parser boundary names no Node built-in, not even through a global',
   );
 });
 
@@ -1458,10 +1507,30 @@ test('identity is derived in one place, and that place is the pure layer', async
   // The alternative was a second hand-rolled zero-indent scalar reader in the
   // pass, which is two readers free to drift from each other over one file
   // format — the trade this widening buys out of.
+  //
+  // **Story 2.1b is the third importer, and it is a render module — which the
+  // paragraph above named as "the failure it is for".** That sentence is kept
+  // rather than quietly dropped, because the widening has to answer it. The
+  // rule the set protects is that *no consumer derives a family from
+  // frontmatter except the authority*, and what `src/render/markdown.ts` takes
+  // is `bodyAfterFrontmatter` — where the block **ends**. It reads no field, so
+  // it cannot derive anything from one, which the named-import assertion below
+  // is what actually holds; the specifier set alone could not tell this from a
+  // render module reading `title`.
+  //
+  // The alternative was a second line-splitter in the render layer, free to
+  // disagree with this one about a BOM, about `\r\n`, and about whether `...`
+  // closes a block — two readers of one fact, over the boundary that decides
+  // what is content and what is metadata.
   assert.deepEqual(
     await importersOf(REPO_ROOT, 'src/domain/frontmatter.ts'),
-    ['src/cli/inventory.ts', 'src/domain/identity.ts'],
+    ['src/cli/inventory.ts', 'src/domain/identity.ts', 'src/render/markdown.ts'],
     'level 2 is part of the authority; the pass may read a configured location and nothing else',
+  );
+  assert.deepEqual(
+    await namedImportsIn(REPO_ROOT, 'src/render/markdown.ts', '../domain/frontmatter.ts'),
+    ['bodyAfterFrontmatter'],
+    'the render boundary may ask where the block ends, and may not read a field of it',
   );
 });
 
@@ -1522,15 +1591,29 @@ test('the signal vocabulary and the interpretation rule are pure, with exact imp
   // this entry was told to record in advance (`deferred-work.md`, Story 1.9's
   // unconsumed-exports finding) is answered: the labels are consumed, and the
   // definitions are not, because a requirement's own sentence is not page copy.
+  //
+  // **Story 2.1b is the fifth, and it is the second surface.** The artifact view
+  // renders one artifact's *body*, which can arrive as a typed read failure —
+  // so it names the state and the stage from this vocabulary and reads the state
+  // word out of `SIGNAL_LABELS`, rather than spelling `Unreadable` and
+  // `Not found` in a second page copy. That is the same basis the Dashboard was
+  // admitted on and it is what stops the two surfaces disagreeing about what a
+  // failure is called.
   assert.deepEqual(
     await importersOf(REPO_ROOT, 'src/domain/signal.ts'),
     [
       'src/adapters/fs/read.ts',
       'src/cli/inventory.ts',
       'src/domain/sprint.ts',
+      'src/render/artifact.ts',
       'src/render/inventory.ts',
     ],
-    'the reading adapter, the pass, the location rule and the surface that shows the four states',
+    'the reading adapter, the pass, the location rule and the two surfaces that show the four states',
+  );
+  assert.deepEqual(
+    await namedImportsIn(REPO_ROOT, 'src/render/artifact.ts', '../domain/signal.ts'),
+    ['ReadStage', 'SIGNAL_LABELS', 'SignalState'],
+    'the artifact view may read the labels and the two vocabularies, and nothing else',
   );
   // The interpretation rule's second importer, on the terms its own entry set:
   // the surface renders FR-12's state from `InterpretationState` rather than

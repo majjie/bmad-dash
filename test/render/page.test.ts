@@ -25,7 +25,7 @@ import {
 } from '../../src/render/inventory.ts';
 import { FAMILY_LABELS } from '../../src/domain/identity.ts';
 import { EMPTY_INVENTORY } from '../support/cli.ts';
-import { FULL_INVENTORY_VIEW, HOSTILE_NAME } from '../support/inventory.ts';
+import { FULL_INVENTORY_VIEW, HOSTILE_NAME, readableBody } from '../support/inventory.ts';
 
 /**
  * A synthetic absolute root. Fixed rather than `process.cwd()` so a test's
@@ -202,7 +202,7 @@ test('following the refresh link re-requests the surface and carries nothing acr
   // anything, which is what it was quietly asserting for one story. The test
   // below is its other half: with the supplier's answer changed, the second
   // response must differ.
-  const handle = await startServer({ projectRoot: CANONICAL_ROOT, inventory: () => FULL_INVENTORY_VIEW });
+  const handle = await startServer({ projectRoot: CANONICAL_ROOT, body: readableBody, inventory: () => FULL_INVENTORY_VIEW });
   t.after(() => handle.close());
 
   const fetchPage = async (): Promise<{ status: number; body: string }> =>
@@ -226,7 +226,7 @@ test('following the refresh link re-requests the surface and carries nothing acr
 });
 
 test('the adapter serves exactly what render produces, headers unchanged', async (t) => {
-  const handle = await startServer({ projectRoot: CANONICAL_ROOT, inventory: () => FULL_INVENTORY_VIEW });
+  const handle = await startServer({ projectRoot: CANONICAL_ROOT, body: readableBody, inventory: () => FULL_INVENTORY_VIEW });
   t.after(() => handle.close());
 
   const response = await fetchRoot(handle.url);
@@ -282,6 +282,7 @@ test('a page load builds a new snapshot, rather than replaying the one at bind t
   let calls = 0;
   const handle = await startServer({
     projectRoot: CANONICAL_ROOT,
+    body: readableBody,
     inventory: () => {
       calls += 1;
       return calls === 1 ? EMPTY_INVENTORY : FULL_INVENTORY_VIEW;
@@ -306,6 +307,7 @@ test('a snapshot that fails at request time is a 500, not a dead process', async
   const errors: Error[] = [];
   const handle = await startServer({
     projectRoot: CANONICAL_ROOT,
+    body: readableBody,
     inventory: () => {
       throw new Error('the project went away');
     },
